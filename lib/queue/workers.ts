@@ -104,7 +104,16 @@ export const aiFeedbackWorker = new Worker(
         const processingTime = Date.now() - startTime
         console.log(`[AI-QUEUE] Feedback generated for session=${sessionId} in ${processingTime}ms`)
 
-        // TODO: Emit SSE event — feedback:ready (Phase 5)
+        // Emit SSE event to the student
+        try {
+            const { emitToUser } = await import('@/lib/services/event-service')
+            await emitToUser(session.studentId, {
+                type: 'feedback:ready',
+                data: { sessionId, overallTag: feedback.overallTag },
+            })
+        } catch (err) {
+            console.warn('[AI-QUEUE] Could not emit SSE event:', err)
+        }
 
         return { overallTag: feedback.overallTag, processingTime }
     },

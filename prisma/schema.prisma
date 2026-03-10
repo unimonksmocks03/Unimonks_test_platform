@@ -133,6 +133,8 @@ model TestAssignment {
   test        Test      @relation(fields: [testId], references: [id], onDelete: Cascade)
   batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: Cascade)
   student     User?     @relation("StudentAssignments", fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([testId, batchId])
 }
 
 model TestSession {
@@ -152,6 +154,8 @@ model TestSession {
   test            Test          @relation(fields: [testId], references: [id], onDelete: Cascade)
   student         User          @relation(fields: [studentId], references: [id], onDelete: Cascade)
   aiFeedback      AIFeedback?
+
+  @@index([testId, studentId])
 }
 
 model AIFeedback {
@@ -176,4 +180,6 @@ model AuditLog {
   createdAt   DateTime  @default(now())
 
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }

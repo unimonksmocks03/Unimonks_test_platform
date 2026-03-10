@@ -7,6 +7,8 @@ interface JWTPayload extends JosePayload {
 }
 
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'fallback_secret')
+const ALLOWED_ORIGIN = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+const MAX_JSON_BODY = 100 * 1024 // 100KB
 
 async function verifyToken(token: string): Promise<JWTPayload | null> {
     try {
@@ -29,6 +31,28 @@ const ROLE_ROUTES: Record<string, 'ADMIN' | 'TEACHER' | 'STUDENT'> = {
 
 export async function middleware(req: NextRequest) {
     const { pathname } = req.nextUrl
+
+    // CORS enforcement for API routes
+    if (pathname.startsWith('/api/')) {
+        const origin = req.headers.get('origin')
+        // In production, strictly enforce origin
+        if (process.env.NODE_ENV === 'production' && origin && origin !== ALLOWED_ORIGIN) {
+            return NextResponse.json(
+                { error: true, code: 'CORS_DENIED', message: 'Origin not allowed' },
+                { status: 403 }
+            )
+        }
+
+        // Request body size limit for non-file-upload JSON endpoints
+        const contentType = req.headers.get('content-type') || ''
+        const contentLength = parseInt(req.headers.get('content-length') || '0')
+        if (contentType.includes('application/json') && contentLength > MAX_JSON_BODY) {
+            return NextResponse.json(
+                { error: true, code: 'PAYLOAD_TOO_LARGE', message: 'Request body exceeds 100KB limit' },
+                { status: 413 }
+            )
+        }
+    }
 
     // Allow auth API routes publicly
     if (pathname.startsWith('/api/auth/')) {

@@ -9,8 +9,8 @@ const TestSettingsSchema = z.object({
 
 // ── Create Test ──
 export const CreateTestSchema = z.object({
-    title: z.string().min(3, 'Title must be at least 3 characters').max(200, 'Title must be at most 200 characters'),
-    description: z.string().max(2000).optional(),
+    title: z.string().trim().min(3, 'Title must be at least 3 characters').max(200, 'Title must be at most 200 characters'),
+    description: z.string().trim().max(2000).optional(),
     durationMinutes: z.number().int().min(5, 'Duration must be at least 5 minutes').max(300, 'Duration must be at most 300 minutes'),
     settings: TestSettingsSchema.optional().default({ shuffleQuestions: false, showResult: true, passingScore: 40 }),
     scheduledAt: z.string().datetime().optional(),
@@ -18,8 +18,8 @@ export const CreateTestSchema = z.object({
 
 // ── Update Test ──
 export const UpdateTestSchema = z.object({
-    title: z.string().min(3).max(200).optional(),
-    description: z.string().max(2000).optional().nullable(),
+    title: z.string().trim().min(3).max(200).optional(),
+    description: z.string().trim().max(2000).optional().nullable(),
     durationMinutes: z.number().int().min(5).max(300).optional(),
     settings: TestSettingsSchema.partial().optional(),
     status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']).optional(),
@@ -37,7 +37,7 @@ const QuestionOptionSchema = z.object({
 
 // ── Create Question ──
 export const CreateQuestionSchema = z.object({
-    stem: z.string().min(3, 'Stem must be at least 3 characters'),
+    stem: z.string().trim().min(3, 'Stem must be at least 3 characters'),
     options: z.array(QuestionOptionSchema)
         .length(4, 'Exactly 4 options are required')
         .refine(

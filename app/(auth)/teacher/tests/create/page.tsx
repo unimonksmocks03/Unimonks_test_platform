@@ -334,41 +334,57 @@ function TestBuilderForm() {
         }
     };
 
-    const handleAIGenerate = () => {
+    const handleAIGenerate = async () => {
         if (!file) {
-            toast.error("File Required", { description: "Please upload a .docx or .pdf file first." });
+            toast.error("File Required", { description: "Please upload a .docx file first." });
+            return;
+        }
+        if (!file.name.toLowerCase().endsWith('.docx')) {
+            toast.error("Invalid file type", { description: "Only .docx files are supported." });
             return;
         }
         setOpenAIModal(false);
         setIsGenerating(true);
         toast.info("Analyzing Document...", { description: "AI is extracting insights and generating questions. This may take a minute." });
 
-        setTimeout(() => {
-            setIsGenerating(false);
-            toast.success("Magical generation complete!", { description: "15 questions generated successfully." });
-            setTestName("AI Generated Test");
-            setDescription(`Test automatically extracted from ${file.name}`);
-            setTestDuration(aiDuration);
-            setTestDate(aiDate);
-            setTestTime(aiStartTime);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('count', '10');
+            formData.append('title', `AI Test — ${file.name.replace('.docx', '')}`);
 
-            setQuestions([
-                {
-                    stem: "What is the mitochondria?",
-                    options: [
-                        { id: "A", text: "Powerhouse of the cell", isCorrect: true },
-                        { id: "B", text: "Water storage", isCorrect: false },
-                        { id: "C", text: "Food producer", isCorrect: false },
-                        { id: "D", text: "Waste recycler", isCorrect: false }
-                    ],
-                    difficulty: "EASY",
-                    topic: "Biology",
-                    explanation: "It produces ATP for the cell.",
-                    saved: false
+            const res = await fetch('/api/teacher/tests/generate-from-doc', {
+                method: 'POST',
+                body: formData,
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                if (res.status === 429) {
+                    toast.error("Rate Limit Reached", { description: data.message || `Try again in ${data.retryAfter}s.` });
+                } else {
+                    toast.error("Generation Failed", { description: data.message || 'Something went wrong.' });
                 }
-            ]);
-            setActiveQIndex(0);
-        }, 3000);
+                setIsGenerating(false);
+                return;
+            }
+
+            const { test, questionsGenerated, failedCount } = data;
+            setIsGenerating(false);
+
+            if (failedCount > 0) {
+                toast.warning(`Generated with warnings`, { description: `${questionsGenerated} questions created, ${failedCount} failed validation.` });
+            } else {
+                toast.success("AI generation complete!", { description: `${questionsGenerated} questions generated successfully.` });
+            }
+
+            // Redirect to the editor for the newly created test
+            router.push(`/teacher/tests/create?edit=${test.id}`);
+        } catch (err) {
+            console.error('[AI] Document upload failed:', err);
+            toast.error("Upload Failed", { description: "Could not process the document. Please try again." });
+            setIsGenerating(false);
+        }
     };
 
     if (isPageLoading) return <BuilderSkeleton />;
@@ -620,8 +636,8 @@ function TestBuilderForm() {
                         <div className="border-2 border-dashed border-indigo-200 rounded-2xl p-8 text-center bg-indigo-50/50 hover:bg-indigo-50 transition-colors cursor-pointer group hover:border-indigo-400">
                             <UploadCloud className="h-10 w-10 text-indigo-400 mx-auto mb-3 group-hover:-translate-y-1 transition-transform" />
                             <p className="text-sm font-bold text-slate-700">Click to upload or drag and drop</p>
-                            <p className="text-xs font-medium text-slate-500 mt-1">.pdf, .docx, or .txt (Max 5MB)</p>
-                            <input type="file" className="hidden" id="file-upload" accept=".pdf,.doc,.docx,.txt" onChange={handleFileChange} />
+                            <p className="text-xs font-medium text-slate-500 mt-1">.docx only (Max 5MB)</p>
+                            <input type="file" className="hidden" id="file-upload" accept=".docx" onChange={handleFileChange} />
                             <label htmlFor="file-upload" className="absolute inset-0 cursor-pointer"></label>
                         </div>
                         {file && (

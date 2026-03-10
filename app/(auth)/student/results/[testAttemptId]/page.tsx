@@ -289,6 +289,7 @@ export default function ResultsPage() {
                         const selectedOpt = opts.find(o => o.id === answer?.optionId);
                         const isCorrect = selectedOpt?.id === correct?.id;
                         const wasAnswered = !!answer?.optionId;
+                        const aiExplanation = feedback?.questionExplanations?.[String(index)] || feedback?.questionExplanations?.[question.id];
 
                         return (
                             <AccordionItem value={`item-${index}`} key={question.id} className="border-0 bg-white rounded-3xl shadow-sm overflow-hidden" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
@@ -305,6 +306,16 @@ export default function ResultsPage() {
                                                 <div className="bg-rose-100 text-rose-600 p-2 rounded-xl shrink-0"><XCircle className="h-6 w-6" /></div>
                                             )}
                                             <div className="font-serif font-semibold text-lg text-slate-900">Q{index + 1}. {question.stem}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            {question.difficulty && (
+                                                <Badge variant="outline" className={`text-[10px] uppercase ${question.difficulty === 'HARD' ? 'border-rose-300 text-rose-600' : question.difficulty === 'EASY' ? 'border-emerald-300 text-emerald-600' : 'border-amber-300 text-amber-600'}`}>
+                                                    {question.difficulty}
+                                                </Badge>
+                                            )}
+                                            {question.topic && (
+                                                <Badge variant="secondary" className="text-[10px]">{question.topic}</Badge>
+                                            )}
                                         </div>
                                     </div>
                                 </AccordionTrigger>
@@ -334,13 +345,13 @@ export default function ResultsPage() {
                                             )}
                                         </div>
 
-                                        {question.explanation && (
+                                        {(aiExplanation || question.explanation) && (
                                             <div className="lg:w-[45%] bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col">
                                                 <h5 className="font-bold font-serif text-slate-800 mb-2 flex items-center gap-2">
-                                                    <Lightbulb className="h-5 w-5 text-amber-500" /> Explanation
+                                                    <Lightbulb className="h-5 w-5 text-amber-500" /> {aiExplanation ? "AI Explanation" : "Explanation"}
                                                 </h5>
                                                 <p className="text-sm text-slate-600 leading-relaxed font-medium">
-                                                    {question.explanation}
+                                                    {aiExplanation || question.explanation}
                                                 </p>
                                             </div>
                                         )}

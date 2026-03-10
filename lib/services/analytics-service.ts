@@ -112,14 +112,26 @@ export async function getTestAnalytics(testId: string) {
         let total = 0
         const optionCounts: Record<string, number> = {}
 
+        const opts = q.options as Array<{ id: string; text: string; isCorrect: boolean }>
+        const correctOpt = opts.find((o) => o.isCorrect)
+        // Initialize all option counts to 0
+        opts.forEach((o) => { optionCounts[o.id] = 0 })
+
         sessions.forEach((s) => {
             const answers = s.answers as Record<string, string> | null
             if (answers && answers[q.id]) {
                 total++
-                const opts = q.options as Array<{ id: string; isCorrect: boolean }>
-                const correctOpt = opts.find((o) => o.isCorrect)
                 if (correctOpt && answers[q.id] === correctOpt.id) correct++
                 optionCounts[answers[q.id]] = (optionCounts[answers[q.id]] || 0) + 1
+            }
+        })
+
+        // Find the most-selected wrong option
+        let mostSelectedWrong: { id: string; text: string; count: number } | null = null
+        opts.filter(o => !o.isCorrect).forEach(o => {
+            const count = optionCounts[o.id] || 0
+            if (count > 0 && (!mostSelectedWrong || count > mostSelectedWrong.count)) {
+                mostSelectedWrong = { id: o.id, text: o.text, count }
             }
         })
 
@@ -131,6 +143,8 @@ export async function getTestAnalytics(testId: string) {
             topic: q.topic,
             correctRate: total > 0 ? Math.round((correct / total) * 100) : 0,
             totalAttempts: total,
+            optionBreakdown: opts.map(o => ({ id: o.id, text: o.text.substring(0, 40), count: optionCounts[o.id] || 0, isCorrect: o.isCorrect })),
+            mostSelectedWrongOption: mostSelectedWrong,
         }
     })
 
