@@ -2,15 +2,14 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Lightbulb, CheckCircle2, XCircle, TrendingUp, Target, ShieldAlert, Loader2, ArrowLeft } from "lucide-react";
+import { Lightbulb, CheckCircle2, XCircle, TrendingUp, Target, ShieldAlert, Loader2, ArrowLeft, AlertTriangle, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
-import { useEvents } from "@/lib/hooks/use-events";
 
 // ── Types ──
 interface AnswerEntry {
@@ -76,6 +75,107 @@ function getCorrectOption(opts: QuestionOption[]): QuestionOption | undefined {
     return opts.find(o => o.isCorrect);
 }
 
+// ── Progressive AI Feedback Loading ──
+const LOADING_STEPS = [
+    "Scanning your answers...",
+    "Identifying strong topics...",
+    "Analyzing weak areas...",
+    "Crafting personalized tips...",
+    "Generating your action plan...",
+];
+
+const POLL_INTERVAL = 8000; // 8 seconds
+const POLL_TIMEOUT = 60000; // 1 minute
+
+function FeedbackLoadingCard({ sessionId, onFeedbackReady }: { sessionId: string; onFeedbackReady: (data: ResultResponse) => void }) {
+    const [stepIndex, setStepIndex] = useState(0);
+    const [timedOut, setTimedOut] = useState(false);
+    const [polling, setPolling] = useState(true);
+    const pollRef = useRef<NodeJS.Timeout | null>(null);
+    const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Cycle through progressive messages (only while polling)
+    useEffect(() => {
+        if (!polling) return;
+        const interval = setInterval(() => {
+            setStepIndex(prev => (prev + 1) % LOADING_STEPS.length);
+        }, 3000);
+        return () => clearInterval(interval);
+    }, [polling]);
+
+    // Start polling + auto-stop after 1 minute
+    const startPolling = useCallback(() => {
+        setTimedOut(false);
+        setPolling(true);
+        setStepIndex(0);
+
+        // Clear any existing timers
+        if (pollRef.current) clearInterval(pollRef.current);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+        // Poll every 8s
+        pollRef.current = setInterval(async () => {
+            const res = await apiClient.get<ResultResponse>(`/api/student/results/${sessionId}`);
+            if (res.ok && res.data.feedback) {
+                onFeedbackReady(res.data);
+                if (pollRef.current) clearInterval(pollRef.current);
+                if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                setPolling(false);
+            }
+        }, POLL_INTERVAL);
+
+        // Stop after 1 minute
+        timeoutRef.current = setTimeout(() => {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setPolling(false);
+            setTimedOut(true);
+        }, POLL_TIMEOUT);
+    }, [sessionId, onFeedbackReady]);
+
+    // Auto-start on mount
+    useEffect(() => {
+        startPolling();
+        return () => {
+            if (pollRef.current) clearInterval(pollRef.current);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        };
+    }, [startPolling]);
+
+    // Timed out state — show retry button
+    if (timedOut) {
+        return (
+            <div className="col-span-3 bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-3xl p-10 text-center">
+                <AlertTriangle className="h-10 w-10 text-amber-500 mx-auto mb-4" />
+                <p className="text-amber-900 font-serif font-bold text-lg">AI feedback is taking longer than expected</p>
+                <p className="text-amber-600 text-sm mt-2 font-medium">The analysis might still be processing. You can retry or check back later.</p>
+                <Button onClick={startPolling} className="mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl px-8 h-11 shadow-sm">
+                    <RefreshCw className="h-4 w-4 mr-2" /> Retry Analysis
+                </Button>
+            </div>
+        );
+    }
+
+    return (
+        <div className="col-span-3 bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-3xl p-10 text-center relative overflow-hidden">
+            <div className="absolute inset-0 opacity-5 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-400 to-transparent"></div>
+            <div className="relative z-10">
+                <Loader2 className="h-10 w-10 text-indigo-500 animate-spin mx-auto mb-4" />
+                <p className="text-indigo-900 font-serif font-bold text-lg transition-all duration-500">{LOADING_STEPS[stepIndex]}</p>
+                <p className="text-indigo-500 text-sm mt-2 font-medium">Personalized feedback will appear here shortly.</p>
+                {/* Progress dots */}
+                <div className="flex items-center justify-center gap-2 mt-5">
+                    {LOADING_STEPS.map((_, i) => (
+                        <div
+                            key={i}
+                            className={`h-2 rounded-full transition-all duration-500 ${i === stepIndex ? "w-6 bg-indigo-500" : i < stepIndex ? "w-2 bg-indigo-300" : "w-2 bg-indigo-200"}`}
+                        />
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export default function ResultsPage() {
     const params = useParams();
     const sessionId = params?.testAttemptId as string;
@@ -95,20 +195,6 @@ export default function ResultsPage() {
             setIsLoading(false);
         })();
     }, [sessionId]);
-
-    // Listen for SSE feedback:ready event
-    useEvents((event) => {
-        if (event.type === "feedback:ready") {
-            // Re-fetch results to get the AI feedback
-            (async () => {
-                const res = await apiClient.get<ResultResponse>(`/api/student/results/${sessionId}`);
-                if (res.ok) {
-                    setData(res.data);
-                    setFeedbackLoading(false);
-                }
-            })();
-        }
-    }, { enabled: feedbackLoading });
 
     // Loading skeleton
     if (isLoading) {
@@ -204,11 +290,7 @@ export default function ResultsPage() {
             <h2 className="text-2xl font-serif font-bold text-slate-900 tracking-tight mt-4">Performance Insights</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {feedbackLoading || !feedback ? (
-                    <div className="col-span-3 bg-indigo-50 border border-indigo-100 rounded-3xl p-8 text-center">
-                        <Loader2 className="h-8 w-8 text-indigo-500 animate-spin mx-auto mb-3" />
-                        <p className="text-indigo-800 font-serif font-bold">AI is analyzing your performance...</p>
-                        <p className="text-indigo-600 text-sm mt-1">Personalized feedback will appear here shortly.</p>
-                    </div>
+                    <FeedbackLoadingCard sessionId={sessionId} onFeedbackReady={(updated) => { setData(updated); setFeedbackLoading(false); }} />
                 ) : (
                     <>
                         <Card className="bg-emerald-50 rounded-3xl border shadow-sm border-emerald-100 flex flex-col h-full">

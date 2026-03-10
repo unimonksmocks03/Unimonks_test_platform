@@ -64,9 +64,14 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
     const [submitted, setSubmitted] = useState(false);
     const [submitting, setSubmitting] = useState(false);
 
-    // Refs for debounced save
-    const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    // Refs for batch sync
     const deadlineRef = useRef<number>(0);
+    const dirtyRef = useRef(false); // tracks if answers changed since last sync
+    const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const sessionIdRef = useRef<string | null>(null);
+
+    // localStorage key for this session
+    const storageKey = useCallback((sid: string) => `arena:answers:${sid}`, []);
 
     // ── Start / Resume Session ──
     useEffect(() => {
@@ -79,9 +84,25 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                 return;
             }
 
-            setSessionId(res.data.sessionId);
+            const sid = res.data.sessionId;
+            setSessionId(sid);
+            sessionIdRef.current = sid;
             setQuestions(res.data.questions);
-            setAnswers(res.data.answers || []);
+
+            // Restore answers: prefer localStorage (most recent), fall back to server
+            const localRaw = localStorage.getItem(storageKey(sid));
+            const localAnswers: AnswerEntry[] = localRaw ? JSON.parse(localRaw) : null;
+            const serverAnswers = res.data.answers || [];
+
+            if (localAnswers && localAnswers.length >= serverAnswers.length) {
+                setAnswers(localAnswers);
+                dirtyRef.current = true; // schedule a sync to push local state to server
+            } else {
+                setAnswers(serverAnswers);
+                if (serverAnswers.length > 0) {
+                    localStorage.setItem(storageKey(sid), JSON.stringify(serverAnswers));
+                }
+            }
 
             // Calculate time left from server deadline
             const deadline = new Date(res.data.serverDeadline).getTime();
@@ -118,11 +139,32 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loading, submitted, sessionId]);
 
-    // ── Sync with server every 60s ──
+    // ── Batch Sync: push dirty answers to server every 15s ──
+    const syncAnswersToServer = useCallback(async () => {
+        const sid = sessionIdRef.current;
+        if (!sid || !dirtyRef.current) return;
+
+        const localRaw = localStorage.getItem(storageKey(sid));
+        if (!localRaw) return;
+
+        const localAnswers: AnswerEntry[] = JSON.parse(localRaw);
+        dirtyRef.current = false; // reset before async call
+
+        try {
+            await apiClient.post(`/api/arena/${sid}/batch-answer`, { answers: localAnswers });
+        } catch {
+            dirtyRef.current = true; // retry on next interval
+        }
+    }, [storageKey]);
+
     useEffect(() => {
         if (!sessionId || submitted) return;
 
-        const syncInterval = setInterval(async () => {
+        // Periodic batch sync every 15 seconds
+        syncIntervalRef.current = setInterval(syncAnswersToServer, 15000);
+
+        // Also sync server time every 60s
+        const timeSync = setInterval(async () => {
             const res = await apiClient.get(`/api/arena/${sessionId}/status`);
             if (res.ok) {
                 const data = res.data as { timeRemaining: number };
@@ -130,8 +172,11 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
             }
         }, 60000);
 
-        return () => clearInterval(syncInterval);
-    }, [sessionId, submitted]);
+        return () => {
+            if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+            clearInterval(timeSync);
+        };
+    }, [sessionId, submitted, syncAnswersToServer]);
 
     // ── Anti-cheat: Tab Switch Detection ──
     useEffect(() => {
@@ -146,6 +191,9 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
         const handleBlur = async () => {
             if (isInitialMount || !sessionId) return;
+
+            // Immediately sync answers on tab switch (crash protection)
+            syncAnswersToServer();
 
             setWarnings(prev => {
                 const newCount = prev + 1;
@@ -170,7 +218,7 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
             window.removeEventListener("blur", handleBlur);
             window.removeEventListener("contextmenu", handleContextMenu);
         };
-    }, [sessionId, submitted]);
+    }, [sessionId, submitted, syncAnswersToServer]);
 
     // Check if auto-submitted from flag response
     useEffect(() => {
@@ -180,17 +228,14 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [warnings]);
 
-    // ── Debounced Answer Save ──
-    const saveAnswer = useCallback(async (questionId: string, optionId: string | null) => {
-        if (!sessionId) return;
-
-        // Clear previous debounce
-        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-
-        saveTimeoutRef.current = setTimeout(async () => {
-            await apiClient.post(`/api/arena/${sessionId}/answer`, { questionId, optionId });
-        }, 500); // 500ms debounce
-    }, [sessionId]);
+    // ── Helper: persist answers to localStorage ──
+    const persistToLocal = useCallback((updatedAnswers: AnswerEntry[]) => {
+        const sid = sessionIdRef.current;
+        if (sid) {
+            localStorage.setItem(storageKey(sid), JSON.stringify(updatedAnswers));
+            dirtyRef.current = true;
+        }
+    }, [storageKey]);
 
     // ── Answer Selection ──
     const handleSelectAnswer = (optionId: string) => {
@@ -204,15 +249,16 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                 optionId,
                 answeredAt: new Date().toISOString(),
             };
+            let updated: AnswerEntry[];
             if (existing >= 0) {
-                const updated = [...prev];
+                updated = [...prev];
                 updated[existing] = { ...updated[existing], ...entry };
-                return updated;
+            } else {
+                updated = [...prev, entry];
             }
-            return [...prev, entry];
+            persistToLocal(updated);
+            return updated;
         });
-
-        saveAnswer(question.id, optionId);
     };
 
     // ── Clear Answer ──
@@ -220,8 +266,11 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
         const question = questions[currentIndex];
         if (!question || submitted) return;
 
-        setAnswers(prev => prev.filter(a => a.questionId !== question.id));
-        saveAnswer(question.id, null);
+        setAnswers(prev => {
+            const updated = prev.filter(a => a.questionId !== question.id);
+            persistToLocal(updated);
+            return updated;
+        });
     };
 
     // ── Mark for Review ──
@@ -258,11 +307,16 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
         setSubmitting(true);
 
+        // Final sync: push all answers to server before submitting
+        await syncAnswersToServer();
+
         const res = await apiClient.post(`/api/arena/${sessionId}/submit`);
 
         if (res.ok) {
             const data = res.data as { score: number; totalMarks: number; percentage: number };
             setSubmitted(true);
+            // Clean up localStorage for this session
+            localStorage.removeItem(storageKey(sessionId));
             toast.success(`Test Submitted! Score: ${data.score}/${data.totalMarks} (${data.percentage}%)`, {
                 description: "Redirecting to results...",
                 duration: 3000,

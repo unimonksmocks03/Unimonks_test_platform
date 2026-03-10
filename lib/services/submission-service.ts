@@ -165,6 +165,50 @@ export async function saveAnswer(
     return { saved: true, answeredCount }
 }
 
+// ── Save Batch Answers (periodic bulk sync from client localStorage) ──
+export async function saveBatchAnswers(
+    studentId: string,
+    sessionId: string,
+    incoming: { questionId: string; optionId: string | null; answeredAt?: string }[]
+) {
+    const session = await prisma.testSession.findUnique({ where: { id: sessionId } })
+
+    if (!session) return { error: true, code: 'NOT_FOUND', message: 'Session not found' }
+    if (session.studentId !== studentId) return { error: true, code: 'FORBIDDEN', message: 'Access denied' }
+    if (session.status !== 'IN_PROGRESS') return { error: true, code: 'SESSION_ENDED', message: 'Test session has ended' }
+
+    // Check server deadline
+    if (session.serverDeadline.getTime() < Date.now()) {
+        return { error: true, code: 'DEADLINE_PASSED', message: 'Test time has expired' }
+    }
+
+    // Merge incoming answers into existing
+    const answers = (session.answers as unknown as AnswerEntry[] | null) || []
+
+    for (const item of incoming) {
+        const entry: AnswerEntry = {
+            questionId: item.questionId,
+            optionId: item.optionId,
+            answeredAt: item.answeredAt || new Date().toISOString(),
+        }
+        const existingIdx = answers.findIndex(a => a.questionId === item.questionId)
+        if (existingIdx >= 0) {
+            answers[existingIdx] = { ...answers[existingIdx], ...entry }
+        } else {
+            answers.push(entry)
+        }
+    }
+
+    await prisma.testSession.update({
+        where: { id: sessionId },
+        data: { answers: answers as unknown as Prisma.InputJsonValue },
+    })
+
+    const answeredCount = answers.filter(a => a.optionId !== null).length
+
+    return { saved: true, answeredCount, syncedCount: incoming.length }
+}
+
 // ── Submit Test & Instant Grading ──
 export async function submitTest(studentId: string, sessionId: string, force?: boolean) {
     const session = await prisma.testSession.findUnique({

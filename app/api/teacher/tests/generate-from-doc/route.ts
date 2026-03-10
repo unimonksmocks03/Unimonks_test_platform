@@ -98,7 +98,7 @@ async function postHandler(
     }
 
     // 7. Generate MCQs via AI
-    const result = await generateQuestionsFromText(text, Math.min(count, 30), ctx.userId)
+    const result = await generateQuestionsFromText(text, count, ctx.userId)
     if (result.error || !result.questions || result.questions.length === 0) {
         return NextResponse.json(
             { error: true, code: 'GENERATION_FAILED', message: result.message || 'Failed to generate questions.' },

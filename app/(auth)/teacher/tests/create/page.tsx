@@ -223,7 +223,9 @@ function TestBuilderForm() {
                     durationMinutes: parseInt(testDuration) || 60,
                     scheduledAt,
                 });
-                if (!res.ok || !res.data.test?.id) throw new Error("Failed to create test");
+                if (!res.ok || !res.data?.test?.id) {
+                    throw new Error(res.ok === false ? res.message : "Failed to create test");
+                }
                 currentTestId = res.data.test.id;
                 setTestId(currentTestId);
             } else {
@@ -282,14 +284,15 @@ function TestBuilderForm() {
             }
 
             if (failedCount > 0) {
-                toast.warning(`Saved with errors`, { description: `${savedCount} saved, ${failedCount} failed to save (Check length & options constraints).` });
+                toast.warning(`Draft Saved Partially`, { description: `Test settings saved. ${savedCount} questions saved, ${failedCount} questions failed to save (Check all options are filled).` });
             } else {
-                toast.success("Test saved!", { description: `${savedCount} question(s) saved.` });
+                toast.success("Draft saved successfully!", { description: savedCount > 0 ? `${savedCount} question(s) updated.` : "All questions were already up to date." });
             }
             setIsSaving(false);
             return currentTestId;
-        } catch {
-            toast.error("Something went wrong while saving");
+        } catch (err: any) {
+            console.error("Save Test Error:", err.message);
+            toast.error("Save Error", { description: err.message || "Something went wrong while saving" });
             setIsSaving(false);
             return null;
         }
@@ -350,7 +353,7 @@ function TestBuilderForm() {
         try {
             const formData = new FormData();
             formData.append('file', file);
-            formData.append('count', '10');
+            formData.append('count', '100'); // Extract virtually all questions in the document
             formData.append('title', `AI Test — ${file.name.replace('.docx', '')}`);
 
             const res = await fetch('/api/teacher/tests/generate-from-doc', {
@@ -633,7 +636,7 @@ function TestBuilderForm() {
                         </DialogDescription>
                     </div>
                     <div className="p-8 pb-10 space-y-6 bg-surface">
-                        <div className="border-2 border-dashed border-indigo-200 rounded-2xl p-8 text-center bg-indigo-50/50 hover:bg-indigo-50 transition-colors cursor-pointer group hover:border-indigo-400">
+                        <div className="relative border-2 border-dashed border-indigo-200 rounded-2xl p-8 text-center bg-indigo-50/50 hover:bg-indigo-50 transition-colors cursor-pointer group hover:border-indigo-400">
                             <UploadCloud className="h-10 w-10 text-indigo-400 mx-auto mb-3 group-hover:-translate-y-1 transition-transform" />
                             <p className="text-sm font-bold text-slate-700">Click to upload or drag and drop</p>
                             <p className="text-xs font-medium text-slate-500 mt-1">.docx only (Max 5MB)</p>
