@@ -40,24 +40,6 @@ export default function LoginPage() {
                 return;
             }
 
-            if (res.status === 404) {
-                toast.error("Not Registered", {
-                    description: data.message || "This email is not registered. Please contact your administrator.",
-                    duration: 6000,
-                });
-                setIsLoading(false);
-                return;
-            }
-
-            if (res.status === 403) {
-                toast.error("Account Disabled", {
-                    description: data.message || "Your account has been deactivated. Contact your administrator.",
-                    duration: 6000,
-                });
-                setIsLoading(false);
-                return;
-            }
-
             if (!res.ok) {
                 toast.error("Error", { description: data.message || "Something went wrong." });
                 setIsLoading(false);
@@ -65,7 +47,7 @@ export default function LoginPage() {
             }
 
             setStep("otp");
-            toast.success("OTP Sent!", { description: "Check your email for the 6-digit code." });
+            toast.success("Check Your Email", { description: data.message || "If your account is active, a 6-digit code has been sent." });
         } catch {
             toast.error("Error", { description: "Something went wrong. Please try again." });
         }
@@ -130,14 +112,10 @@ export default function LoginPage() {
                 return;
             }
 
-            // Normalize role to lowercase (API returns 'ADMIN', AuthContext expects 'admin')
             const normalizedUser = {
                 ...data.user,
                 role: data.user.role.toLowerCase(),
             };
-
-            // Persist user to localStorage so AuthProvider picks it up
-            localStorage.setItem("unimonk_user", JSON.stringify(normalizedUser));
 
             const roleName = normalizedUser.role.charAt(0).toUpperCase() + normalizedUser.role.slice(1);
             toast.success(`Welcome ${roleName}!`, { description: "Redirecting to your dashboard..." });
@@ -148,7 +126,7 @@ export default function LoginPage() {
                 teacher: "/teacher/dashboard",
                 student: "/student/dashboard",
             };
-            router.push(dashboardMap[normalizedUser.role] || "/login");
+            router.replace(dashboardMap[normalizedUser.role] || "/login");
         } catch {
             toast.error("Error", { description: "Something went wrong. Please try again." });
         }
@@ -167,8 +145,10 @@ export default function LoginPage() {
 
             if (res.status === 429) {
                 toast.error("Too Many Requests", { description: data.message });
+            } else if (!res.ok) {
+                toast.error("Error", { description: data.message || "Failed to resend OTP." });
             } else {
-                toast.success("OTP Resent!", { description: "A new code has been sent to your email." });
+                toast.success("Check Your Email", { description: data.message || "If your account is active, a new code has been sent." });
             }
         } catch {
             toast.error("Error", { description: "Failed to resend OTP." });

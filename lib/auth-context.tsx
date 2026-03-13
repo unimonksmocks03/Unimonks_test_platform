@@ -24,8 +24,8 @@ interface AuthContextType {
     isLoading: boolean;
     impersonation: ImpersonationState;
     setImpersonation: (state: ImpersonationState) => void;
-    setUser: (user: User) => void;
-    logout: () => void;
+    setUser: (user: User | null) => void;
+    logout: () => Promise<void>;
 }
 
 const STORAGE_KEY = "unimonk_user";
@@ -40,30 +40,70 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     const router = useRouter();
 
-    // On mount, read user from localStorage
     useEffect(() => {
-        try {
-            const stored = localStorage.getItem(STORAGE_KEY);
-            if (stored) {
-                // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional hydration from localStorage
-                setUserState(JSON.parse(stored));
+        let isMounted = true;
+
+        const bootstrapSession = async () => {
+            try {
+                const response = await fetch("/api/auth/session", {
+                    method: "GET",
+                    cache: "no-store",
+                    credentials: "same-origin",
+                });
+
+                if (!isMounted) return;
+
+                if (!response.ok) {
+                    setUserState(null);
+                    localStorage.removeItem(STORAGE_KEY);
+                    return;
+                }
+
+                const data = await response.json();
+                setUserState(data.user ?? null);
+            } catch {
+                if (isMounted) {
+                    setUserState(null);
+                    localStorage.removeItem(STORAGE_KEY);
+                }
+            } finally {
+                if (isMounted) {
+                    setIsLoading(false);
+                }
             }
-        } catch {
-            // ignore parse errors
-        }
-        setIsLoading(false);
+        };
+
+        void bootstrapSession();
+
+        return () => {
+            isMounted = false;
+        };
     }, []);
 
-    const setUser = (newUser: User) => {
+    const setUser = (newUser: User | null) => {
         setUserState(newUser);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newUser));
+        if (!newUser) {
+            localStorage.removeItem(STORAGE_KEY);
+        }
     };
 
-    const logout = () => {
+    const logout = async () => {
+        const response = await fetch("/api/auth/logout", {
+            method: "POST",
+            credentials: "same-origin",
+        });
+
+        if (!response.ok) {
+            const data = await response.json().catch(() => null);
+            throw new Error(data?.message || "Logout failed");
+        }
+
         setUserState(null);
+        setImpersonation({ isActive: false });
         localStorage.removeItem(STORAGE_KEY);
         sessionStorage.clear();
-        router.push("/login");
+        router.replace("/login");
+        router.refresh();
     };
 
     return (
