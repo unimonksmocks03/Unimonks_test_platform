@@ -66,6 +66,7 @@ export function useEvents(
 
     useEffect(() => {
         if (!enabled) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setConnected(false)
             return
         }
