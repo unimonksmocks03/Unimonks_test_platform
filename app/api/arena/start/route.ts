@@ -20,6 +20,7 @@ export const POST = withAuth(async (req: NextRequest, { userId }) => {
         const statusMap: Record<string, number> = {
             NOT_FOUND: 404,
             NOT_PUBLISHED: 400,
+            NOT_STARTED: 409,
             FORBIDDEN: 403,
             ALREADY_COMPLETED: 409,
             TIMED_OUT: 410,

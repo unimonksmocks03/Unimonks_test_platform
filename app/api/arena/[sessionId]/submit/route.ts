@@ -10,7 +10,21 @@ export const POST = withAuth(async (req: NextRequest, { userId, params }) => {
         return NextResponse.json({ error: true, code: 'VALIDATION_ERROR', message: 'sessionId is required' }, { status: 400 })
     }
 
-    const result = await submitTest(userId, sessionId)
+    const body = await req.json().catch(() => ({}))
+    const answers = Array.isArray(body?.answers) ? body.answers : undefined
+
+    if (answers) {
+        for (const answer of answers) {
+            if (!answer.questionId || typeof answer.questionId !== 'string') {
+                return NextResponse.json({ error: true, code: 'VALIDATION_ERROR', message: 'Each answer must have a questionId string' }, { status: 400 })
+            }
+            if (answer.optionId !== null && answer.optionId !== undefined && typeof answer.optionId !== 'string') {
+                return NextResponse.json({ error: true, code: 'VALIDATION_ERROR', message: 'optionId must be a string or null' }, { status: 400 })
+            }
+        }
+    }
+
+    const result = await submitTest(userId, sessionId, false, answers)
 
     if ('error' in result && result.error) {
         const statusMap: Record<string, number> = {
@@ -31,4 +45,3 @@ export const POST = withAuth(async (req: NextRequest, { userId, params }) => {
 
     return NextResponse.json(result)
 }, ['STUDENT'])
-

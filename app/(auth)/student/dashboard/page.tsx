@@ -70,6 +70,7 @@ function DashboardSkeleton() {
 export default function StudentDashboard() {
     const [data, setData] = useState<DashboardData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [currentTime, setCurrentTime] = useState(() => Date.now());
 
     useEffect(() => {
         (async () => {
@@ -79,9 +80,17 @@ export default function StudentDashboard() {
         })();
     }, []);
 
+    useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(Date.now()), 60000);
+        return () => clearInterval(timer);
+    }, []);
+
     if (isLoading || !data) return <DashboardSkeleton />;
 
     const nextTest = data.upcoming[0];
+    const isNextTestAvailable = nextTest
+        ? !nextTest.scheduledAt || new Date(nextTest.scheduledAt).getTime() <= currentTime
+        : false;
 
     return (
         <div className="flex flex-col gap-8 w-full max-w-6xl mx-auto pb-10">
@@ -120,10 +129,18 @@ export default function StudentDashboard() {
                             )}
                         </div>
                         <div className="flex flex-col items-start md:items-end gap-4 shrink-0">
-                            <Button asChild className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-lg px-8 py-6 rounded-2xl shadow-clay-inner transition-transform hover:scale-105">
-                                <Link href={`/arena/${nextTest.id}`}>
-                                    Enter Test Arena <MoveRight className="ml-2 h-5 w-5" />
-                                </Link>
+                            <Button
+                                asChild={isNextTestAvailable}
+                                disabled={!isNextTestAvailable}
+                                className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-lg px-8 py-6 rounded-2xl shadow-clay-inner transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:bg-white/20 disabled:text-white"
+                            >
+                                {isNextTestAvailable ? (
+                                    <Link href={`/arena/${nextTest.id}`}>
+                                        Enter Test Arena <MoveRight className="ml-2 h-5 w-5" />
+                                    </Link>
+                                ) : (
+                                    <span>Available At Scheduled Time</span>
+                                )}
                             </Button>
                         </div>
                     </div>

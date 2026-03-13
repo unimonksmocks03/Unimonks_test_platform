@@ -69,6 +69,7 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
     const dirtyRef = useRef(false); // tracks if answers changed since last sync
     const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const sessionIdRef = useRef<string | null>(null);
+    const syncPromiseRef = useRef<Promise<boolean> | null>(null);
 
     // localStorage key for this session
     const storageKey = useCallback((sid: string) => `arena:answers:${sid}`, []);
@@ -140,21 +141,35 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
     }, [loading, submitted, sessionId]);
 
     // ── Batch Sync: push dirty answers to server every 15s ──
-    const syncAnswersToServer = useCallback(async () => {
+    const syncAnswersToServer = useCallback(async (force = false) => {
         const sid = sessionIdRef.current;
-        if (!sid || !dirtyRef.current) return;
+        if (!sid) return true;
+        if (syncPromiseRef.current) return syncPromiseRef.current;
+        if (!dirtyRef.current && !force) return true;
 
         const localRaw = localStorage.getItem(storageKey(sid));
-        if (!localRaw) return;
+        const localAnswers: AnswerEntry[] = localRaw ? JSON.parse(localRaw) : [];
 
-        const localAnswers: AnswerEntry[] = JSON.parse(localRaw);
-        dirtyRef.current = false; // reset before async call
+        const syncPromise = (async () => {
+            try {
+                const res = await apiClient.post<{ saved: boolean }>(`/api/arena/${sid}/batch-answer`, { answers: localAnswers });
+                if (!res.ok) {
+                    dirtyRef.current = true;
+                    return false;
+                }
 
-        try {
-            await apiClient.post(`/api/arena/${sid}/batch-answer`, { answers: localAnswers });
-        } catch {
-            dirtyRef.current = true; // retry on next interval
-        }
+                dirtyRef.current = false;
+                return true;
+            } catch {
+                dirtyRef.current = true;
+                return false;
+            } finally {
+                syncPromiseRef.current = null;
+            }
+        })();
+
+        syncPromiseRef.current = syncPromise;
+        return syncPromise;
     }, [storageKey]);
 
     useEffect(() => {
@@ -193,7 +208,7 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
             if (isInitialMount || !sessionId) return;
 
             // Immediately sync answers on tab switch (crash protection)
-            syncAnswersToServer();
+            void syncAnswersToServer(true);
 
             setWarnings(prev => {
                 const newCount = prev + 1;
@@ -307,10 +322,16 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
         setSubmitting(true);
 
-        // Final sync: push all answers to server before submitting
-        await syncAnswersToServer();
+        const synced = await syncAnswersToServer(true);
+        if (!synced) {
+            toast.error("Could not sync your latest answers. Please try again.");
+            setSubmitting(false);
+            return;
+        }
 
-        const res = await apiClient.post(`/api/arena/${sessionId}/submit`);
+        const localRaw = localStorage.getItem(storageKey(sessionId));
+        const latestAnswers: AnswerEntry[] = localRaw ? JSON.parse(localRaw) : answers;
+        const res = await apiClient.post(`/api/arena/${sessionId}/submit`, { answers: latestAnswers });
 
         if (res.ok) {
             const data = res.data as { score: number; totalMarks: number; percentage: number };

@@ -54,12 +54,13 @@ export async function enqueueAIFeedback(sessionId: string) {
  * - Dedup ID prevents double force-submit for the same session
  * - Failure callback routes dead letters to DLQ endpoint
  */
-export async function enqueueForceSubmit(sessionId: string, studentId: string) {
+export async function enqueueForceSubmit(sessionId: string, studentId: string, notBefore?: number) {
     const baseUrl = getBaseUrl()
     return qstashClient.publishJSON({
         url: `${baseUrl}/api/webhooks/force-submit`,
         body: { sessionId, studentId },
         retries: 3,
+        ...(notBefore ? { notBefore } : {}),
         deduplicationId: `force-submit:${sessionId}`,
         failureCallback: `${baseUrl}/api/webhooks/qstash-dlq`,
     })
