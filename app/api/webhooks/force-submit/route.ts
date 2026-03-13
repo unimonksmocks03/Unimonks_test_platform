@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Receiver } from '@upstash/qstash'
 import { getQStashEnv } from '@/lib/env'
 import { submitTest } from '@/lib/services/submission-service'
+import { enqueueAIFeedback } from '@/lib/queue/qstash'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,6 +58,11 @@ export async function POST(req: NextRequest) {
         }
 
         console.log(`[FORCE-SUBMIT] msg=${messageId} session=${sessionId} force-submitted: ${result.score}/${result.totalMarks}`)
+        try {
+            await enqueueAIFeedback(sessionId)
+        } catch (err) {
+            console.warn(`[FORCE-SUBMIT] msg=${messageId} Could not enqueue AI feedback for session=${sessionId}:`, err)
+        }
         return NextResponse.json({ ok: true, score: result.score, totalMarks: result.totalMarks })
     } catch (err) {
         console.error(`[FORCE-SUBMIT] msg=${messageId} Error for session=${sessionId}:`, err)

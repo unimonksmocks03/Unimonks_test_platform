@@ -88,8 +88,6 @@ function TestBuilderForm() {
     const [isGenerating, setIsGenerating] = useState(false);
 
     // AI Imports
-    const [aiDate, setAiDate] = useState("");
-    const [aiStartTime, setAiStartTime] = useState("");
     const [file, setFile] = useState<File | null>(null);
 
     // Test metadata
@@ -338,22 +336,22 @@ function TestBuilderForm() {
 
     const handleAIGenerate = async () => {
         if (!file) {
-            toast.error("File Required", { description: "Please upload a .docx file first." });
+            toast.error("File Required", { description: "Please upload a .docx or .pdf file first." });
             return;
         }
-        if (!file.name.toLowerCase().endsWith('.docx')) {
-            toast.error("Invalid file type", { description: "Only .docx files are supported." });
+        const fileName = file.name.toLowerCase();
+        if (!fileName.endsWith('.docx') && !fileName.endsWith('.pdf')) {
+            toast.error("Invalid file type", { description: "Only .docx and .pdf files are supported." });
             return;
         }
         setOpenAIModal(false);
         setIsGenerating(true);
-        toast.info("Analyzing Document...", { description: "AI is extracting insights and generating questions. This may take a minute." });
+        toast.info("Analyzing Document...", { description: "We will extract existing MCQs first and fall back to AI generation for notes. This may take a minute." });
 
         try {
             const formData = new FormData();
             formData.append('file', file);
-            formData.append('count', '100'); // Extract virtually all questions in the document
-            formData.append('title', `AI Test — ${file.name.replace('.docx', '')}`);
+            formData.append('title', `AI Test — ${file.name.replace(/\.(docx|pdf)$/i, '')}`);
 
             const res = await fetch('/api/teacher/tests/generate-from-doc', {
                 method: 'POST',
@@ -371,11 +369,15 @@ function TestBuilderForm() {
                 return;
             }
 
-            const { test, questionsGenerated, failedCount } = data;
+            const { test, questionsGenerated, failedCount, strategy, generationTarget } = data;
             setIsGenerating(false);
 
             if (failedCount > 0) {
                 toast.warning(`Generated with warnings`, { description: `${questionsGenerated} questions created, ${failedCount} failed validation.` });
+            } else if (strategy === 'EXTRACTED') {
+                toast.success("Question paper imported!", { description: `${questionsGenerated} questions extracted directly from the document.` });
+            } else if (strategy === 'AI_GENERATED') {
+                toast.success("AI generation complete!", { description: `${questionsGenerated} questions generated from notes${generationTarget ? ` (target ${generationTarget})` : ''}.` });
             } else {
                 toast.success("AI generation complete!", { description: `${questionsGenerated} questions generated successfully.` });
             }
@@ -638,8 +640,8 @@ function TestBuilderForm() {
                         <div className="relative border-2 border-dashed border-indigo-200 rounded-2xl p-8 text-center bg-indigo-50/50 hover:bg-indigo-50 transition-colors cursor-pointer group hover:border-indigo-400">
                             <UploadCloud className="h-10 w-10 text-indigo-400 mx-auto mb-3 group-hover:-translate-y-1 transition-transform" />
                             <p className="text-sm font-bold text-slate-700">Click to upload or drag and drop</p>
-                            <p className="text-xs font-medium text-slate-500 mt-1">.docx only (Max 5MB)</p>
-                            <input type="file" className="hidden" id="file-upload" accept=".docx" onChange={handleFileChange} />
+                            <p className="text-xs font-medium text-slate-500 mt-1">.docx or .pdf (Max 5MB)</p>
+                            <input type="file" className="hidden" id="file-upload" accept=".docx,.pdf" onChange={handleFileChange} />
                             <label htmlFor="file-upload" className="absolute inset-0 cursor-pointer"></label>
                         </div>
                         {file && (
@@ -648,17 +650,8 @@ function TestBuilderForm() {
                                 {file.name}
                             </div>
                         )}
-                        <div className="space-y-4 pt-2 border-t border-slate-100">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label className="text-slate-600 font-bold text-xs uppercase tracking-wider">Date</Label>
-                                    <Input type="date" value={aiDate} onChange={e => setAiDate(e.target.value)} className="bg-white border-slate-200 h-11 rounded-xl" />
-                                </div>
-                                <div className="space-y-2">
-                                    <Label className="text-slate-600 font-bold text-xs uppercase tracking-wider">Start Time</Label>
-                                    <Input type="time" value={aiStartTime} onChange={e => setAiStartTime(e.target.value)} className="bg-white border-slate-200 h-11 rounded-xl" />
-                                </div>
-                            </div>
+                        <div className="rounded-2xl border border-indigo-100 bg-white px-4 py-3 text-sm font-medium text-slate-600 shadow-sm">
+                            Schedule, duration, and batch assignment stay on the main test builder after the questions are imported.
                         </div>
                         <Button onClick={handleAIGenerate} disabled={!file} className="w-full h-12 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-clay-inner">
                             Generate Questions <Wand2 className="w-4 h-4 ml-2" />

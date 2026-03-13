@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import { enqueueForceSubmit } from '@/lib/queue/qstash'
+import { getScheduledTestLifecycle } from '@/lib/services/test-lifecycle'
 
 /**
  * Submission Service — Core arena engine.
@@ -99,6 +100,16 @@ export async function startTestSession(studentId: string, testId: string) {
             }
 
             return { error: true, code: 'ALREADY_COMPLETED', message: 'You have already completed this test' } as const
+        }
+
+        const lifecycle = getScheduledTestLifecycle(test)
+        if (lifecycle.isFinished) {
+            return {
+                error: true,
+                code: 'WINDOW_CLOSED',
+                message: 'This test has already finished and is no longer available.',
+                scheduledEndAt: lifecycle.scheduledEndAt?.toISOString(),
+            } as const
         }
 
         const now = new Date()

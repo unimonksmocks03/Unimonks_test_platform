@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
 import { withAuth } from '@/lib/middleware/auth-guard'
-import { parseDocxToText, generateQuestionsFromText } from '@/lib/services/ai-service'
+import {
+    extractQuestionsFromDocumentText,
+    generateQuestionsFromText,
+    parseDocumentToText,
+} from '@/lib/services/ai-service'
 import { prisma } from '@/lib/prisma'
 import { redis } from '@/lib/redis'
 import { Role, Prisma } from '@prisma/client'
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+const MIN_GENERATED_QUESTIONS = 30
 const RATE_LIMIT_KEY = (userId: string) => `ai:docgen:${userId}`
 const RATE_LIMIT_MAX = 5
 const RATE_LIMIT_WINDOW = 3600 // 1 hour in seconds
@@ -43,7 +48,10 @@ async function postHandler(
     const file = formData.get('file') as File | null
     const countRaw = formData.get('count')
     const titleRaw = formData.get('title')
-    const count = countRaw ? parseInt(String(countRaw)) || 10 : 10
+    const requestedCount = countRaw ? Number.parseInt(String(countRaw), 10) : Number.NaN
+    const generationTarget = Number.isFinite(requestedCount)
+        ? Math.max(MIN_GENERATED_QUESTIONS, requestedCount)
+        : MIN_GENERATED_QUESTIONS
 
     if (!file) {
         return NextResponse.json(
@@ -54,9 +62,10 @@ async function postHandler(
 
     // 3. Validate file type
     const fileName = file.name.toLowerCase()
-    if (!fileName.endsWith('.docx')) {
+    const isSupportedDocument = fileName.endsWith('.docx') || fileName.endsWith('.pdf')
+    if (!isSupportedDocument) {
         return NextResponse.json(
-            { error: true, code: 'BAD_REQUEST', message: 'Only .docx files are supported' },
+            { error: true, code: 'BAD_REQUEST', message: 'Only .docx and .pdf files are supported' },
             { status: 400 }
         )
     }
@@ -78,16 +87,20 @@ async function postHandler(
         )
     }
 
-    // 6. Parse DOCX → Text
+    // 6. Parse uploaded document → Text
     let text: string
     try {
         const arrayBuffer = await file.arrayBuffer()
         const buffer = Buffer.from(arrayBuffer)
-        text = await parseDocxToText(buffer)
+        text = await parseDocumentToText(buffer, file.name)
     } catch (err) {
-        console.error('[AI-DOC] Failed to parse DOCX:', err)
+        console.error('[AI-DOC] Failed to parse uploaded document:', err)
         return NextResponse.json(
-            { error: true, code: 'PARSE_ERROR', message: 'Failed to parse document. Ensure it is a valid .docx file.' },
+            {
+                error: true,
+                code: 'PARSE_ERROR',
+                message: 'Failed to parse document. Ensure it is a valid .docx or text-based .pdf file.',
+            },
             { status: 400 }
         )
     }
@@ -99,8 +112,19 @@ async function postHandler(
         )
     }
 
-    // 7. Generate MCQs via AI
-    const result = await generateQuestionsFromText(text, count, ctx.userId)
+    // 7. Extract structured MCQs first, otherwise fall back to AI generation from notes.
+    const extracted = extractQuestionsFromDocumentText(text)
+    const usedStrategy = extracted.detectedAsMcqDocument ? 'EXTRACTED' : 'AI_GENERATED'
+    const result = extracted.detectedAsMcqDocument
+        ? {
+            error: false,
+            message: undefined,
+            questions: extracted.questions,
+            failedCount: Math.max(0, extracted.candidateBlockCount - extracted.questions.length),
+            cost: undefined,
+        }
+        : await generateQuestionsFromText(text, generationTarget, ctx.userId)
+
     if (result.error || !result.questions || result.questions.length === 0) {
         return NextResponse.json(
             { error: true, code: 'GENERATION_FAILED', message: result.message || 'Failed to generate questions.' },
@@ -109,7 +133,8 @@ async function postHandler(
     }
 
     // 8. Create DRAFT Test + Questions
-    const testTitle = String(titleRaw || `AI Generated Test — ${new Date().toLocaleDateString()}`)
+    const baseTitle = file.name.replace(/\.(docx|pdf)$/i, '')
+    const testTitle = String(titleRaw || `AI Generated Test — ${baseTitle || new Date().toLocaleDateString()}`)
     const test = await prisma.test.create({
         data: {
             teacherId: ctx.userId,
@@ -140,8 +165,12 @@ async function postHandler(
                 testId: test.id,
                 fileName: file.name,
                 fileSize: file.size,
+                strategy: usedStrategy,
+                extractedQuestionCandidates: extracted.candidateBlockCount,
+                extractedQuestions: extracted.questions.length,
                 questionsGenerated: result.questions.length,
                 failedCount: result.failedCount || 0,
+                generationTarget: usedStrategy === 'AI_GENERATED' ? generationTarget : null,
                 costUSD: result.cost?.costUSD || 0,
             } as unknown as Prisma.InputJsonValue,
         },
@@ -150,6 +179,9 @@ async function postHandler(
     // 10. Return response (file is NOT stored)
     return NextResponse.json({
         test: { id: test.id, title: testTitle },
+        strategy: usedStrategy,
+        extractedQuestions: extracted.questions.length,
+        generationTarget: usedStrategy === 'AI_GENERATED' ? generationTarget : null,
         questionsGenerated: result.questions.length,
         failedCount: result.failedCount || 0,
         cost: result.cost,

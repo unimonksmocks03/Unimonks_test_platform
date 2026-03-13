@@ -8,6 +8,11 @@ import type {
     TestQueryInput,
 } from '@/lib/validations/test.schema'
 import { TestStatus, Difficulty, Prisma } from '@prisma/client'
+import {
+    getScheduledTestLifecycle,
+    hardDeleteTestById,
+    purgeExpiredFinishedTests,
+} from '@/lib/services/test-lifecycle'
 
 /**
  * Teacher-scoped test management service.
@@ -18,6 +23,8 @@ import { TestStatus, Difficulty, Prisma } from '@prisma/client'
 export async function listTests(teacherId: string, query: TestQueryInput) {
     const { status, page, limit } = query
     const skip = (page - 1) * limit
+
+    await purgeExpiredFinishedTests({ teacherId })
 
     const where: Prisma.TestWhereInput = { teacherId }
     if (status) where.status = status as TestStatus
@@ -32,6 +39,11 @@ export async function listTests(teacherId: string, query: TestQueryInput) {
                         sessions: { where: { status: { in: ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] } } }
                     }
                 },
+                sessions: {
+                    where: { status: 'IN_PROGRESS' },
+                    select: { id: true },
+                    take: 1,
+                },
             },
             orderBy: { createdAt: 'desc' },
             skip,
@@ -42,6 +54,20 @@ export async function listTests(teacherId: string, query: TestQueryInput) {
 
     return {
         tests: tests.map((t) => ({
+            ...(() => {
+                const lifecycle = getScheduledTestLifecycle(t)
+                const hasActiveSessions = t.sessions.length > 0
+
+                return {
+                    isFinished: t.status === 'PUBLISHED' && lifecycle.isFinished,
+                    scheduledEndAt: lifecycle.scheduledEndAt,
+                    retentionExpiresAt: lifecycle.retentionExpiresAt,
+                    canDelete:
+                        t.status === 'DRAFT' ||
+                        (t.status === 'PUBLISHED' && lifecycle.isFinished && !hasActiveSessions),
+                    hasActiveSessions,
+                }
+            })(),
             id: t.id,
             title: t.title,
             description: t.description,
@@ -143,14 +169,38 @@ export async function updateTest(teacherId: string, testId: string, data: Update
     return { test }
 }
 
-// ── Delete Test (only DRAFT) ──
+// ── Delete Test (DRAFT or finished PUBLISHED) ──
 export async function deleteTest(teacherId: string, testId: string) {
     const existing = await prisma.test.findUnique({ where: { id: testId } })
     if (!existing) return { error: true, code: 'NOT_FOUND', message: 'Test not found' }
     if (existing.teacherId !== teacherId) return { error: true, code: 'FORBIDDEN', message: 'You do not own this test' }
-    if (existing.status !== 'DRAFT') return { error: true, code: 'NOT_DRAFT', message: 'Only draft tests can be deleted' }
 
-    await prisma.test.delete({ where: { id: testId } })
+    if (existing.status === 'DRAFT') {
+        await hardDeleteTestById(testId)
+        return { message: 'Test deleted successfully' }
+    }
+
+    if (existing.status !== 'PUBLISHED') {
+        return { error: true, code: 'NOT_DELETABLE', message: 'Only draft or finished published tests can be deleted' }
+    }
+
+    const lifecycle = getScheduledTestLifecycle(existing)
+    if (!lifecycle.isFinished) {
+        return { error: true, code: 'WINDOW_OPEN', message: 'Published tests can only be deleted after they have finished' }
+    }
+
+    const activeSessionCount = await prisma.testSession.count({
+        where: { testId, status: 'IN_PROGRESS' },
+    })
+    if (activeSessionCount > 0) {
+        return {
+            error: true,
+            code: 'ACTIVE_SESSIONS',
+            message: 'Cannot delete this test while student sessions are still in progress',
+        }
+    }
+
+    await hardDeleteTestById(testId)
     return { message: 'Test deleted successfully' }
 }
 

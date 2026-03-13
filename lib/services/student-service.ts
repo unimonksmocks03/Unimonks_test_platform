@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { getScheduledTestLifecycle } from '@/lib/services/test-lifecycle'
 
 /**
  * Student-scoped service.
@@ -42,7 +43,7 @@ export async function getDashboard(studentId: string) {
             _count: { select: { questions: true } },
         },
         orderBy: { scheduledAt: 'asc' },
-        take: 10,
+        take: 25,
     })
 
     // Recent results (last 5 completed)
@@ -79,6 +80,12 @@ export async function getDashboard(studentId: string) {
 
     return {
         upcoming: upcomingTests.map((t) => ({
+            ...(() => {
+                const lifecycle = getScheduledTestLifecycle(t)
+                return {
+                    isFinished: lifecycle.isFinished,
+                }
+            })(),
             id: t.id,
             title: t.title,
             description: t.description,
@@ -86,7 +93,7 @@ export async function getDashboard(studentId: string) {
             scheduledAt: t.scheduledAt,
             teacherName: t.teacher.name,
             questionCount: t._count.questions,
-        })),
+        })).filter((t) => !t.isFinished).slice(0, 10),
         recent: recentResults.map((r) => ({
             sessionId: r.id,
             testId: r.test.id,
@@ -149,6 +156,7 @@ export async function getAssignedTests(studentId: string) {
 
     return {
         tests: tests.map((t) => {
+            const lifecycle = getScheduledTestLifecycle(t)
             const session = t.sessions[0]
             return {
                 id: t.id,
@@ -159,6 +167,7 @@ export async function getAssignedTests(studentId: string) {
                 teacherName: t.teacher.name,
                 questionCount: t._count.questions,
                 attempted: !!session,
+                isFinished: lifecycle.isFinished,
                 session: session
                     ? {
                         id: session.id,
@@ -169,7 +178,7 @@ export async function getAssignedTests(studentId: string) {
                     }
                     : null,
             }
-        }),
+        }).filter((t) => !t.isFinished),
     }
 }
 
@@ -211,6 +220,43 @@ export async function getResult(studentId: string, sessionId: string) {
                 weaknesses: session.aiFeedback.weaknesses,
                 actionPlan: session.aiFeedback.actionPlan,
                 questionExplanations: session.aiFeedback.questionExplanations,
+                overallTag: session.aiFeedback.overallTag,
+                generatedAt: session.aiFeedback.generatedAt,
+            }
+            : null,
+    }
+}
+
+// ── Get Feedback Status (ownership-verified, lightweight) ──
+export async function getFeedbackStatus(studentId: string, sessionId: string) {
+    const session = await prisma.testSession.findUnique({
+        where: { id: sessionId },
+        select: {
+            id: true,
+            studentId: true,
+            status: true,
+            submittedAt: true,
+            aiFeedback: {
+                select: {
+                    id: true,
+                    overallTag: true,
+                    generatedAt: true,
+                },
+            },
+        },
+    })
+
+    if (!session) return { error: true, code: 'NOT_FOUND', message: 'Test session not found' }
+    if (session.studentId !== studentId) return { error: true, code: 'FORBIDDEN', message: 'Access denied' }
+
+    return {
+        sessionId: session.id,
+        sessionStatus: session.status,
+        submittedAt: session.submittedAt,
+        hasFeedback: !!session.aiFeedback,
+        feedback: session.aiFeedback
+            ? {
+                id: session.aiFeedback.id,
                 overallTag: session.aiFeedback.overallTag,
                 generatedAt: session.aiFeedback.generatedAt,
             }

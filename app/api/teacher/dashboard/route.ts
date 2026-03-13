@@ -3,9 +3,12 @@ export const dynamic = 'force-dynamic'
 import { withAuth } from '@/lib/middleware/auth-guard'
 import { Role } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { getScheduledTestLifecycle, purgeExpiredFinishedTests } from '@/lib/services/test-lifecycle'
 
 // GET /api/teacher/dashboard — get dashboard stats and allocated batches
 async function getHandler(req: NextRequest, ctx: { userId: string; role: Role }) {
+    await purgeExpiredFinishedTests({ teacherId: ctx.userId })
+
     // 1. Get teacher status
     const teacher = await prisma.user.findUnique({
         where: { id: ctx.userId },
@@ -34,6 +37,8 @@ async function getHandler(req: NextRequest, ctx: { userId: string; role: Role })
         where: { teacherId: ctx.userId },
         select: {
             status: true,
+            scheduledAt: true,
+            durationMinutes: true,
             _count: {
                 select: {
                     sessions: { where: { status: { in: ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] } } }
@@ -42,9 +47,14 @@ async function getHandler(req: NextRequest, ctx: { userId: string; role: Role })
         }
     })
 
+    const activePublishedTests = tests.filter((test) => {
+        if (test.status !== 'PUBLISHED') return false
+        return !getScheduledTestLifecycle(test).isFinished
+    })
+
     const testStats = {
         total: tests.length,
-        published: tests.filter(t => t.status === 'PUBLISHED').length,
+        published: activePublishedTests.length,
         drafts: tests.filter(t => t.status === 'DRAFT').length,
         totalAttempts: tests.reduce((sum, t) => sum + t._count.sessions, 0)
     }

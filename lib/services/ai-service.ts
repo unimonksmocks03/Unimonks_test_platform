@@ -57,7 +57,7 @@ interface FeedbackResult {
     overallTag: string
 }
 
-interface GeneratedQuestion {
+export interface GeneratedQuestion {
     stem: string
     options: { id: string; text: string; isCorrect: boolean }[]
     explanation: string
@@ -70,6 +70,15 @@ interface CostInfo {
     inputTokens: number
     outputTokens: number
     costUSD: number
+}
+
+export type DocumentQuestionStrategy = 'EXTRACTED' | 'AI_GENERATED'
+
+export interface ExtractedQuestionAnalysis {
+    detectedAsMcqDocument: boolean
+    answerHintCount: number
+    candidateBlockCount: number
+    questions: GeneratedQuestion[]
 }
 
 // ── Cost Tracking Helper ──
@@ -117,6 +126,221 @@ function chunkText(text: string, maxChars = 16000, overlap = 500): string[] {
         if (start >= text.length) break
     }
     return chunks
+}
+
+function normalizeDocumentText(text: string): string {
+    return text
+        .replace(/\r\n?/g, '\n')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+function normalizeStem(text: string): string {
+    return text
+        .replace(/\s+/g, ' ')
+        .replace(/^[.:)\]-]+\s*/, '')
+        .trim()
+}
+
+function normalizeOptionText(text: string): string {
+    return text
+        .replace(/\s+/g, ' ')
+        .replace(/\s*(?:\((?:correct)\)|\[(?:correct)\]|✓|✅)\s*$/i, '')
+        .trim()
+}
+
+function guessDifficulty(stem: string): string {
+    const wordCount = stem.split(/\s+/).filter(Boolean).length
+    if (wordCount >= 22) return 'HARD'
+    if (wordCount >= 12) return 'MEDIUM'
+    return 'EASY'
+}
+
+function detectTopic(stem: string): string {
+    const words = stem
+        .replace(/[^a-z0-9\s-]/gi, ' ')
+        .split(/\s+/)
+        .filter(word => word.length > 3)
+
+    if (words.length === 0) return 'General'
+    return words.slice(0, 3).join(' ')
+}
+
+function stripQuestionLabel(line: string): { questionNumber: number | null; stem: string } | null {
+    const questionStartMatch = line.match(
+        /^(?:question\s*|ques(?:tion)?\s*|q\s*)?(\d+)\s*(?:[.)\-:]|\b)\s*(.+)$/i
+    )
+
+    if (!questionStartMatch) return null
+
+    return {
+        questionNumber: Number.parseInt(questionStartMatch[1], 10),
+        stem: normalizeStem(questionStartMatch[2]),
+    }
+}
+
+function looksLikeQuestionStart(line: string): boolean {
+    return stripQuestionLabel(line) !== null
+}
+
+function extractAnswerKey(text: string): Map<number, string> {
+    const answerKey = new Map<number, string>()
+    const answerSectionMatch = text.match(
+        /(?:^|\n)(?:answer\s*key|answers?|correct\s*answers?)\s*[:\-]?\s*([\s\S]{0,4000})$/i
+    )
+
+    const searchArea = answerSectionMatch?.[1] ?? ''
+    if (!searchArea) return answerKey
+
+    const pairRegex = /(\d{1,4})\s*[\).:\-]?\s*(?:option\s*)?([A-D])\b/gi
+    let match: RegExpExecArray | null
+    while ((match = pairRegex.exec(searchArea)) !== null) {
+        answerKey.set(Number.parseInt(match[1], 10), match[2].toUpperCase())
+    }
+
+    return answerKey
+}
+
+function parseQuestionBlock(block: string, answerKey: Map<number, string>): {
+    answerHintUsed: boolean
+    candidate: boolean
+    question: GeneratedQuestion | null
+} {
+    const rawLines = block
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+
+    if (rawLines.length === 0) {
+        return { answerHintUsed: false, candidate: false, question: null }
+    }
+
+    const firstLine = stripQuestionLabel(rawLines[0])
+    if (!firstLine || !firstLine.stem) {
+        return { answerHintUsed: false, candidate: false, question: null }
+    }
+
+    const stemParts = [firstLine.stem]
+    const options = new Map<string, string>()
+    let activeOption: string | null = null
+    let correctOptionId: string | null = null
+    let explanation = ''
+    let answerHintUsed = false
+
+    for (const line of rawLines.slice(1)) {
+        if (looksLikeQuestionStart(line)) break
+
+        const answerMatch = line.match(
+            /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*[:\-]?\s*(?:option\s*)?([A-D])\b/i
+        )
+        if (answerMatch) {
+            correctOptionId = answerMatch[1].toUpperCase()
+            answerHintUsed = true
+            activeOption = null
+            continue
+        }
+
+        const explanationMatch = line.match(/^(?:explanation|reason)\s*[:\-]?\s*(.+)$/i)
+        if (explanationMatch) {
+            explanation = explanationMatch[1].trim()
+            activeOption = null
+            continue
+        }
+
+        const optionMatch = line.match(/^\(?([A-D])\)?\s*[.)\-:]?\s+(.+)$/i)
+        if (optionMatch) {
+            const optionId = optionMatch[1].toUpperCase()
+            const optionText = normalizeOptionText(optionMatch[2])
+
+            if (!optionText) continue
+
+            if (/\((?:correct)\)|\[(?:correct)\]|✓|✅/i.test(optionMatch[2])) {
+                correctOptionId = optionId
+                answerHintUsed = true
+            }
+
+            options.set(optionId, optionText)
+            activeOption = optionId
+            continue
+        }
+
+        if (activeOption && options.has(activeOption)) {
+            options.set(activeOption, `${options.get(activeOption)} ${normalizeOptionText(line)}`.trim())
+            continue
+        }
+
+        stemParts.push(line)
+    }
+
+    if (!correctOptionId && firstLine.questionNumber !== null) {
+        const keyedAnswer = answerKey.get(firstLine.questionNumber)
+        if (keyedAnswer) {
+            correctOptionId = keyedAnswer
+            answerHintUsed = true
+        }
+    }
+
+    const optionEntries = ['A', 'B', 'C', 'D']
+        .map(id => {
+            const text = options.get(id)
+            if (!text) return null
+            return { id, text, isCorrect: id === correctOptionId }
+        })
+        .filter((option): option is { id: string; text: string; isCorrect: boolean } => option !== null)
+
+    const question: GeneratedQuestion = {
+        stem: normalizeStem(stemParts.join(' ')),
+        options: optionEntries,
+        explanation: explanation || 'Imported from structured MCQ document.',
+        difficulty: guessDifficulty(stemParts.join(' ')),
+        topic: detectTopic(stemParts.join(' ')),
+    }
+
+    return {
+        answerHintUsed,
+        candidate: true,
+        question: validateQuestion(question) ? question : null,
+    }
+}
+
+export function extractQuestionsFromDocumentText(text: string): ExtractedQuestionAnalysis {
+    const structuredText = normalizeDocumentText(text)
+        .replace(/\n(?=\d+\s*[.)])/g, '\n')
+        .replace(/([^\n])\s+(?=(?:question\s*\d+|ques(?:tion)?\s*\d+|q\s*\d+|\d+\s*[.)-])\s)/gi, '$1\n')
+        .replace(/([^\n])\s+(?=(?:\(?[A-D]\)?\s*[.)\-:])\s+)/g, '$1\n')
+        .replace(/([^\n])\s+(?=(?:answer|ans(?:wer)?|correct\s*answer|explanation)\s*[:\-])/gi, '$1\n')
+
+    const answerKey = extractAnswerKey(structuredText)
+    const blocks = structuredText
+        .split(/\n(?=(?:question\s*|ques(?:tion)?\s*|q\s*)?\d+\s*(?:[.)\-:]|\b)\s+)/i)
+        .map(block => block.trim())
+        .filter(Boolean)
+
+    const questions: GeneratedQuestion[] = []
+    let candidateBlockCount = 0
+    let answerHintCount = 0
+
+    for (const block of blocks) {
+        const parsed = parseQuestionBlock(block, answerKey)
+        if (!parsed.candidate) continue
+
+        candidateBlockCount++
+        if (parsed.answerHintUsed) answerHintCount++
+        if (parsed.question) questions.push(parsed.question)
+    }
+
+    const detectedAsMcqDocument =
+        questions.length >= 5 || (questions.length >= 3 && answerHintCount >= Math.ceil(questions.length / 2))
+
+    return {
+        detectedAsMcqDocument,
+        answerHintCount,
+        candidateBlockCount,
+        questions: deduplicateQuestions(questions),
+    }
 }
 
 // ── Generate Personalized Feedback ──
@@ -384,7 +608,7 @@ async function generateFromChunk(
     count: number,
     model: string
 ): Promise<{ questions: GeneratedQuestion[]; failedCount: number; cost?: CostInfo }> {
-    const prompt = `You are an expert test creator. Generate ${count} multiple-choice questions from the following educational content. Each question MUST have:
+    const prompt = `You are an expert test creator. Generate ${count} multiple-choice questions from the following educational content. Cover as many major sections, subtopics, definitions, formulas, and examples from the source as possible. Do not produce random trivia or repetitive paraphrases. Each question MUST have:
 - A clear, unambiguous stem
 - Exactly 4 options labeled A-D
 - Exactly 1 correct answer
@@ -452,6 +676,30 @@ export async function parseDocxToText(buffer: Buffer): Promise<string> {
     // Dynamic import to avoid bundling issues
     const mammoth = await import('mammoth')
     const result = await mammoth.extractRawText({ buffer })
-    // Normalize whitespace
-    return result.value.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ').trim()
+    return normalizeDocumentText(result.value)
+}
+
+export async function parsePdfToText(buffer: Buffer): Promise<string> {
+    const { PDFParse } = await import('pdf-parse')
+    const parser = new PDFParse({ data: buffer })
+
+    try {
+        const result = await parser.getText()
+        return normalizeDocumentText(result.text)
+    } finally {
+        await parser.destroy()
+    }
+}
+
+export async function parseDocumentToText(buffer: Buffer, fileName: string): Promise<string> {
+    const lowerFileName = fileName.toLowerCase()
+    if (lowerFileName.endsWith('.docx')) {
+        return parseDocxToText(buffer)
+    }
+
+    if (lowerFileName.endsWith('.pdf')) {
+        return parsePdfToText(buffer)
+    }
+
+    throw new Error('Unsupported document format')
 }

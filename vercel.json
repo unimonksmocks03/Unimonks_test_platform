@@ -11,5 +11,15 @@
     "app/api/webhooks/ai-feedback/route.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/tests-retention",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/reconcile-jobs",
+      "schedule": "*/10 * * * *"
+    }
+  ]
 }

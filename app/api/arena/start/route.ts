@@ -21,6 +21,7 @@ export const POST = withAuth(async (req: NextRequest, { userId }) => {
             NOT_FOUND: 404,
             NOT_PUBLISHED: 400,
             NOT_STARTED: 409,
+            WINDOW_CLOSED: 410,
             FORBIDDEN: 403,
             ALREADY_COMPLETED: 409,
             TIMED_OUT: 410,

@@ -46,7 +46,7 @@ async function patchHandler(
     return NextResponse.json(result)
 }
 
-// DELETE /api/teacher/tests/[id] — delete draft test
+// DELETE /api/teacher/tests/[id] — delete draft or finished published test
 async function deleteHandler(
     req: NextRequest,
     ctx: { userId: string; role: Role; params?: Record<string, string> }
@@ -56,7 +56,14 @@ async function deleteHandler(
 
     const result = await deleteTest(ctx.userId, id)
     if ('error' in result) {
-        const statusCode = result.code === 'FORBIDDEN' ? 403 : result.code === 'NOT_FOUND' ? 404 : 400
+        const statusCode =
+            result.code === 'FORBIDDEN'
+                ? 403
+                : result.code === 'NOT_FOUND'
+                    ? 404
+                    : result.code === 'WINDOW_OPEN' || result.code === 'ACTIVE_SESSIONS'
+                        ? 409
+                        : 400
         return NextResponse.json(result, { status: statusCode })
     }
     return NextResponse.json(result)
