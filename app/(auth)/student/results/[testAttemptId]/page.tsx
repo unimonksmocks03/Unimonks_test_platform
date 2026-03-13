@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
+import { useEvents } from "@/lib/hooks/use-events";
 
 // ── Types ──
 interface AnswerEntry {
@@ -59,6 +60,18 @@ interface ResultResponse {
     feedback: FeedbackData | null;
 }
 
+interface FeedbackStatusResponse {
+    sessionId: string;
+    sessionStatus: string;
+    submittedAt: string | null;
+    hasFeedback: boolean;
+    feedback: {
+        id: string;
+        overallTag: string | null;
+        generatedAt: string;
+    } | null;
+}
+
 // ── Helpers ──
 function normalizeOptions(opts: unknown): QuestionOption[] {
     if (Array.isArray(opts)) return opts as QuestionOption[];
@@ -87,7 +100,7 @@ const LOADING_STEPS = [
 const POLL_INTERVAL = 8000; // 8 seconds
 const POLL_TIMEOUT = 60000; // 1 minute
 
-function FeedbackLoadingCard({ sessionId, onFeedbackReady }: { sessionId: string; onFeedbackReady: (data: ResultResponse) => void }) {
+function FeedbackLoadingCard({ sessionId, onFeedbackReady }: { sessionId: string; onFeedbackReady: () => Promise<void> | void }) {
     const [stepIndex, setStepIndex] = useState(0);
     const [timedOut, setTimedOut] = useState(false);
     const [polling, setPolling] = useState(true);
@@ -115,9 +128,9 @@ function FeedbackLoadingCard({ sessionId, onFeedbackReady }: { sessionId: string
 
         // Poll every 8s
         pollRef.current = setInterval(async () => {
-            const res = await apiClient.get<ResultResponse>(`/api/student/results/${sessionId}`);
-            if (res.ok && res.data.feedback) {
-                onFeedbackReady(res.data);
+            const res = await apiClient.get<FeedbackStatusResponse>(`/api/student/results/${sessionId}/feedback-status`);
+            if (res.ok && res.data.hasFeedback) {
+                await onFeedbackReady();
                 if (pollRef.current) clearInterval(pollRef.current);
                 if (timeoutRef.current) clearTimeout(timeoutRef.current);
                 setPolling(false);
@@ -185,17 +198,34 @@ export default function ResultsPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [feedbackLoading, setFeedbackLoading] = useState(false);
 
-    // Fetch results
-    useEffect(() => {
-        (async () => {
-            const res = await apiClient.get<ResultResponse>(`/api/student/results/${sessionId}`);
-            if (res.ok) {
-                setData(res.data);
-                if (!res.data.feedback) setFeedbackLoading(true);
-            }
-            setIsLoading(false);
-        })();
+    const fetchResults = useCallback(async () => {
+        const res = await apiClient.get<ResultResponse>(`/api/student/results/${sessionId}`);
+        if (res.ok) {
+            setData(res.data);
+            setFeedbackLoading(!res.data.feedback);
+        }
     }, [sessionId]);
+
+    // Fetch results once on page load.
+    useEffect(() => {
+        let isMounted = true;
+
+        (async () => {
+            await fetchResults();
+            if (isMounted) setIsLoading(false);
+        })();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [fetchResults]);
+
+    useEvents((event) => {
+        const eventSessionId = typeof event.data.sessionId === "string" ? event.data.sessionId : null;
+        if (event.type === "feedback:ready" && eventSessionId === sessionId) {
+            void fetchResults();
+        }
+    }, { enabled: feedbackLoading, interval: 5000 });
 
     // Loading skeleton
     if (isLoading) {
@@ -240,6 +270,11 @@ export default function ResultsPage() {
 
     const overallLabel = pct >= 90 ? "Outstanding" : pct >= 75 ? "Excellent Work" : pct >= 60 ? "Good Effort" : pct >= 40 ? "Needs Improvement" : "Keep Practicing";
     const overallColor = pct >= 75 ? "emerald" : pct >= 50 ? "amber" : "rose";
+    const overallBadgeClass = overallColor === "emerald"
+        ? "bg-emerald-100 text-emerald-800"
+        : overallColor === "amber"
+            ? "bg-amber-100 text-amber-800"
+            : "bg-rose-100 text-rose-800";
 
     return (
         <div className="flex flex-col gap-8 w-full max-w-5xl mx-auto pb-16">
@@ -262,7 +297,7 @@ export default function ResultsPage() {
                             {Math.round(pct)}<span className="text-4xl text-slate-400">%</span>
                         </span>
                         <div className="flex flex-col items-start gap-2">
-                            <Badge className={`bg-${overallColor}-100 text-${overallColor}-800 border-0 px-4 py-1 font-bold tracking-wider uppercase text-xs rounded-lg shadow-sm`}>
+                            <Badge className={`${overallBadgeClass} border-0 px-4 py-1 font-bold tracking-wider uppercase text-xs rounded-lg shadow-sm`}>
                                 <CheckCircle2 className="h-4 w-4 mr-1.5 inline-block" />
                                 {feedback?.overallTag || overallLabel}
                             </Badge>
@@ -291,7 +326,7 @@ export default function ResultsPage() {
             <h2 className="text-2xl font-serif font-bold text-slate-900 tracking-tight mt-4">Performance Insights</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {feedbackLoading || !feedback ? (
-                    <FeedbackLoadingCard sessionId={sessionId} onFeedbackReady={(updated) => { setData(updated); setFeedbackLoading(false); }} />
+                    <FeedbackLoadingCard sessionId={sessionId} onFeedbackReady={fetchResults} />
                 ) : (
                     <>
                         <Card className="bg-emerald-50 rounded-3xl border shadow-sm border-emerald-100 flex flex-col h-full">

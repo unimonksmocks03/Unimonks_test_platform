@@ -226,3 +226,40 @@ export async function getResult(studentId: string, sessionId: string) {
             : null,
     }
 }
+
+// ── Get Feedback Status (ownership-verified, lightweight) ──
+export async function getFeedbackStatus(studentId: string, sessionId: string) {
+    const session = await prisma.testSession.findUnique({
+        where: { id: sessionId },
+        select: {
+            id: true,
+            studentId: true,
+            status: true,
+            submittedAt: true,
+            aiFeedback: {
+                select: {
+                    id: true,
+                    overallTag: true,
+                    generatedAt: true,
+                },
+            },
+        },
+    })
+
+    if (!session) return { error: true, code: 'NOT_FOUND', message: 'Test session not found' }
+    if (session.studentId !== studentId) return { error: true, code: 'FORBIDDEN', message: 'Access denied' }
+
+    return {
+        sessionId: session.id,
+        sessionStatus: session.status,
+        submittedAt: session.submittedAt,
+        hasFeedback: !!session.aiFeedback,
+        feedback: session.aiFeedback
+            ? {
+                id: session.aiFeedback.id,
+                overallTag: session.aiFeedback.overallTag,
+                generatedAt: session.aiFeedback.generatedAt,
+            }
+            : null,
+    }
+}
