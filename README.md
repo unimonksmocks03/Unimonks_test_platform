@@ -92,6 +92,16 @@ Important variables:
 - `NEXT_PUBLIC_APP_URL`: public app URL
 - `CRON_SECRET`: optional manual authorization for cron endpoints outside Vercel Cron
 
+## Documentation Map
+
+Use these files first when regaining context:
+
+- [README.md](./README.md): current architecture and local setup
+- [DEPLOYMENT.md](./DEPLOYMENT.md): Vercel, Neon, Upstash deployment steps
+- [LAUNCH_CHECKLIST.md](./LAUNCH_CHECKLIST.md): pre-launch and go-live checklist
+- [API_README.md](./API_README.md): current API surface
+- [docs/archive/README.md](./docs/archive/README.md): historical planning and design notes
+
 ## Deployment Notes
 
 - The app is configured for Vercel in [vercel.json](./vercel.json).

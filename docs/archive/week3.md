@@ -1,4 +1,6 @@
 
+> Archived document. This file preserves an earlier week-by-week implementation plan and is no longer authoritative for the current codebase.
+
 # Week 3 — Live Test Arena, Submission Pipeline & Real-Time Events
 
 **Duration:** Days 15–21  
@@ -257,4 +259,3 @@
 | 9 | Frontend arena connected to real APIs (no mock data) | [ ] |
 | 10 | Results page shows instant score + async AI feedback | [ ] |
 | 11 | Concurrency test passing (50 simultaneous users) | [ ] |
-# Archived planning note: this file reflects an earlier implementation plan and may mention services that are no longer used in the current codebase.

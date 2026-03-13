@@ -1,4 +1,6 @@
 
+> Archived document. This file preserves an earlier week-by-week implementation plan and is no longer authoritative for the current codebase.
+
 # Week 4 — AI Integration, Analytics, Testing & Deployment Prep
 
 **Duration:** Days 22–28  
@@ -299,4 +301,3 @@ By the end of 4 weeks, the platform will have:
 | **AI** | Word→MCQ generation, personalized feedback, cost tracking |
 | **Security** | Role isolation, data scoping, no answer leakage, rate limits, lockout |
 | **Deployment** | Docker configs, Prisma migrations, documentation |
-# Archived planning note: this file reflects an earlier implementation plan and may mention services that are no longer used in the current codebase.

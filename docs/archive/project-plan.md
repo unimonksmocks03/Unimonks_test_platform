@@ -1,4 +1,6 @@
 
+> Archived document. This file preserves an earlier architecture plan and is not the source of truth for the current implementation. Use [README.md](../../README.md), [DEPLOYMENT.md](../../DEPLOYMENT.md), [API_README.md](../../API_README.md), and [LAUNCH_CHECKLIST.md](../../LAUNCH_CHECKLIST.md) first.
+
 # EdTech MCQ Test Platform - Architecture & Implementation Plan
 
 ## Goal Description
@@ -102,4 +104,3 @@ app/
 ├── globals.css             # Tailwind imports & CSS vars
 └── layout.tsx              # Root layout (providers, fonts)
 ```
-# Archived planning note: this file reflects an earlier architecture draft and is not the source of truth for the current implementation. Use `README.md`, `DEPLOYMENT.md`, and `API_README.md` instead.

@@ -1,3 +1,5 @@
+> Archived document. This file preserves an earlier week-by-week implementation plan and is no longer authoritative for the current codebase.
+
 # Week 2 — CRUD APIs, Zod Schemas & Role-Based Data Scoping
 
 **Duration:** Days 8–14  

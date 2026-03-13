@@ -7,6 +7,8 @@ This project is designed to run on:
 - Upstash Redis
 - Upstash QStash
 
+Before going live, use [LAUNCH_CHECKLIST.md](./LAUNCH_CHECKLIST.md) as the final gate.
+
 ## 1. Choose One Region First
 
 Keep Vercel Functions, Neon, and the Upstash **primary** in the same region for launch. The repo is currently configured for `iad1` in [vercel.json](./vercel.json). Change that before deployment if your database primary is elsewhere.

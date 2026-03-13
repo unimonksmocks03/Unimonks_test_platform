@@ -1,4 +1,6 @@
 
+> Archived document. This file preserves an earlier design draft and is not the source of truth for the current implementation. Use [README.md](../../README.md), [DEPLOYMENT.md](../../DEPLOYMENT.md), [API_README.md](../../API_README.md), and [LAUNCH_CHECKLIST.md](../../LAUNCH_CHECKLIST.md) first.
+
 # Backend System Design — Unimonk Test Platform
 
 Complete backend architecture for auth, user management, APIs, middleware, real-time events, AI integration, analytics, and role-based content delivery. Designed for **400 concurrent students** with zero data loss.
@@ -767,4 +769,3 @@ graph LR
 
 > [!IMPORTANT]
 > This plan requires PostgreSQL and Redis running locally (or via Docker). Before starting Phase 1, we should set up `docker-compose.yml` for local development.
-# Archived planning note: this file reflects an earlier architecture draft and is not the source of truth for the current implementation.

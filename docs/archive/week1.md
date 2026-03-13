@@ -1,4 +1,6 @@
 
+> Archived document. This file preserves an earlier week-by-week implementation plan and is no longer authoritative for the current codebase.
+
 # Week 1 — Foundation, Auth System & Middleware
 
 **Duration:** Days 1–7  
@@ -227,4 +229,3 @@
 | 8 | 4 middleware modules (auth guard, rate limiter, validation, error handler) | [ ] |
 | 9 | Root `middleware.ts` with role-based route protection | [ ] |
 | 10 | All routes compile (`next build` passes) | [ ] |
-# Archived planning note: this file reflects an earlier implementation plan and may mention services that are no longer used in the current codebase.
