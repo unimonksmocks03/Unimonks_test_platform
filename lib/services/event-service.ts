@@ -1,4 +1,4 @@
-import Redis from 'ioredis'
+import { redis } from '@/lib/redis'
 import { prisma } from '@/lib/prisma'
 
 /**
@@ -10,18 +10,6 @@ import { prisma } from '@/lib/prisma'
  * Producers call `emitToUser()` → LPUSH to `events:{userId}` (TTL 5min)
  * Consumers call `GET /api/events/poll` → LRANGE + DEL to drain the list
  */
-
-let redisClient: Redis | null = null
-
-function getRedis(): Redis {
-    if (!redisClient) {
-        redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-            maxRetriesPerRequest: null,
-            enableReadyCheck: false,
-        })
-    }
-    return redisClient
-}
 
 const EVENT_TTL_SECONDS = 300 // 5 minutes
 
@@ -38,7 +26,6 @@ export interface SSEEvent {
  * The consumer (poll endpoint) drains the list atomically.
  */
 export async function emitToUser(userId: string, event: Omit<SSEEvent, 'timestamp'>) {
-    const redis = getRedis()
     const key = `events:${userId}`
     const fullEvent: SSEEvent = {
         ...event,
@@ -57,7 +44,6 @@ export async function emitToUser(userId: string, event: Omit<SSEEvent, 'timestam
  * Returns the events and deletes them from Redis atomically.
  */
 export async function drainEvents(userId: string): Promise<SSEEvent[]> {
-    const redis = getRedis()
     const key = `events:${userId}`
 
     // LRANGE to get all, then DEL — use pipeline for speed

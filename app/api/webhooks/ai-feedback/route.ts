@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Receiver } from '@upstash/qstash'
+import { getQStashEnv } from '@/lib/env'
 import { prisma } from '@/lib/prisma'
 import { generatePersonalizedFeedback } from '@/lib/services/ai-service'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60 // Allow up to 60s for AI generation (Vercel Pro/Enterprise)
 
-const isLocalDev = !!process.env.QSTASH_URL
+const qstashEnv = getQStashEnv()
 
-const receiver = isLocalDev
+const receiver = qstashEnv.mode === 'local'
     ? null
     : new Receiver({
-        currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY!,
-        nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY!,
+        currentSigningKey: qstashEnv.currentSigningKey,
+        nextSigningKey: qstashEnv.nextSigningKey,
     })
 
 /**

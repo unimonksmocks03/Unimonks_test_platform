@@ -1,4 +1,5 @@
 import { Client } from '@upstash/qstash'
+import { getAppEnv, getQStashEnv } from '@/lib/env'
 
 /**
  * Upstash QStash Client — serverless-friendly job queue.
@@ -16,17 +17,17 @@ import { Client } from '@upstash/qstash'
  *    Set QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY, QSTASH_NEXT_SIGNING_KEY
  */
 
-const isLocalDev = !!process.env.QSTASH_URL
+const qstashEnv = getQStashEnv()
 
 const qstashClient = new Client({
-    ...(isLocalDev
-        ? { baseUrl: process.env.QSTASH_URL!, token: 'dev' }
-        : { token: process.env.QSTASH_TOKEN! }
+    ...(qstashEnv.mode === 'local'
+        ? { baseUrl: qstashEnv.baseUrl, token: 'dev' }
+        : { token: qstashEnv.token }
     ),
 })
 
 function getBaseUrl(): string {
-    return process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+    return getAppEnv().NEXT_PUBLIC_APP_URL
 }
 
 /**

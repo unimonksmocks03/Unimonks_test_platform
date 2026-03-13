@@ -1,4 +1,7 @@
 import { PrismaClient } from '@prisma/client'
+import { getDatabaseEnv } from '@/lib/env'
+
+getDatabaseEnv()
 
 const prismaClientSingleton = () => {
     return new PrismaClient()

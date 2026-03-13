@@ -11,6 +11,8 @@ const RATE_LIMIT_KEY = (userId: string) => `ai:docgen:${userId}`
 const RATE_LIMIT_MAX = 5
 const RATE_LIMIT_WINDOW = 3600 // 1 hour in seconds
 
+export const maxDuration = 60 // Large DOCX parsing + AI generation can exceed the default serverless budget
+
 async function postHandler(
     req: NextRequest,
     ctx: { userId: string; role: Role }

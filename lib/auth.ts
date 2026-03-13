@@ -1,9 +1,10 @@
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
 import { Role } from '@prisma/client'
+import { getAuthEnv } from '@/lib/env'
 
-const JWT_SECRET = process.env.JWT_SECRET!
-const _JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET!
+const authEnv = getAuthEnv()
+const JWT_SECRET = authEnv.JWT_SECRET
 const ACCESS_TOKEN_EXPIRY = '24h' // 24 hours for OTP-based session
 
 export interface JWTPayload {
