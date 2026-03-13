@@ -7,7 +7,7 @@ import { prisma } from '@/lib/prisma'
 import { Role } from '@prisma/client'
 
 // GET /api/admin/users — paginated user list with search + filters
-async function getHandler(req: NextRequest, ctx: { userId: string; role: Role }) {
+async function getHandler(req: NextRequest) {
     const url = new URL(req.url)
     const parsed = UserQuerySchema.safeParse({
         search: url.searchParams.get('search') || undefined,
@@ -63,4 +63,3 @@ async function postHandler(req: NextRequest, ctx: { userId: string; role: Role }
 export const GET = withAuth(getHandler, ['ADMIN'])
 
 export const POST = withAuth(postHandler, ['ADMIN'])
-

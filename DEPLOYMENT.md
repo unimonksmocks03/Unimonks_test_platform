@@ -1,117 +1,183 @@
-# Unimonk Test Platform — Deployment Guide
+# Unimonk Test Platform — Vercel Deployment Guide
 
-## Prerequisites
+This project is designed to run on:
 
-| Dependency | Version |
-|---|---|
-| Node.js | 20+ |
-| PostgreSQL | 14+ |
-| Redis | 7+ |
-| Docker & Docker Compose | Latest |
-| npm | 9+ |
+- Vercel
+- Neon Postgres
+- Upstash Redis
+- Upstash QStash
 
----
+## 1. Choose One Region First
 
-## Local Development
+Keep Vercel Functions, Neon, and the Upstash **primary** in the same region for launch. The repo is currently configured for `iad1` in [vercel.json](./vercel.json). Change that before deployment if your database primary is elsewhere.
+
+## 2. Provision Services
+
+### Neon
+
+Create a Neon database and collect:
+
+- a **pooled** connection string for `DATABASE_URL`
+- a **direct** connection string for `DIRECT_URL`
+
+Recommended runtime query params for Neon:
+
+- `sslmode=require`
+- `connect_timeout=15`
+- `pool_timeout=15` on the pooled URL if needed
+
+### Upstash Redis
+
+Create a Redis database and collect:
+
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+
+For local development you can keep using `REDIS_URL`.
+
+### Upstash QStash
+
+Create a QStash project and collect:
+
+- `QSTASH_TOKEN`
+- `QSTASH_CURRENT_SIGNING_KEY`
+- `QSTASH_NEXT_SIGNING_KEY`
+
+For local development use:
+
+- `QSTASH_URL=http://localhost:8080`
+
+### SMTP
+
+Set real SMTP credentials before launch:
+
+- `GMAIL_USER`
+- `GMAIL_APP_PASSWORD`
+
+If the client later provides a dedicated mail service, replace these env values without changing the auth flow.
+
+### OpenAI
+
+AI features are optional for launch, but if enabled set:
+
+- `OPENAI_API_KEY`
+
+## 3. Configure Vercel Project
+
+Import the repository into Vercel and define environment variables for **Preview** and **Production**.
+
+Minimum required variables:
+
+```env
+DATABASE_URL=
+DIRECT_URL=
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+JWT_SECRET=
+JWT_REFRESH_SECRET=
+NEXT_PUBLIC_APP_URL=
+GMAIL_USER=
+GMAIL_APP_PASSWORD=
+QSTASH_TOKEN=
+QSTASH_CURRENT_SIGNING_KEY=
+QSTASH_NEXT_SIGNING_KEY=
+```
+
+Optional but recommended:
+
+```env
+OPENAI_API_KEY=
+CRON_SECRET=
+```
+
+Do not set `QSTASH_URL` in production.
+
+## 4. Run Database Migration
+
+Before first live use:
 
 ```bash
-# 1. Clone & install
-git clone <repo-url> && cd Unimonk_test_platform
-npm install
+npm run db:migrate:deploy
+```
 
-# 2. Set up environment
-cp .env.example .env
-# Edit .env with your DATABASE_URL, REDIS_URL, JWT_SECRET, etc.
+If this is the first deployment and you are not using migrations yet, use `npx prisma db push` only for non-production setup. For client production, prefer real migrations.
 
-# 3. Push schema & seed
-npx prisma db push
-npx prisma db seed
+## 5. Deploy Preview First
 
-# 4. Start dev server
+Use Preview before Production and test these flows end-to-end:
+
+- send OTP
+- verify OTP
+- logout
+- create test
+- import test from document
+- assign test to batch
+- start test
+- autosave answers
+- submit test
+- AI feedback generation
+- teacher analytics
+- admin impersonation
+
+## 6. Verify Background Jobs
+
+The repo already includes:
+
+- `/api/webhooks/ai-feedback`
+- `/api/webhooks/force-submit`
+- `/api/webhooks/qstash-dlq`
+- `/api/cron/reconcile-jobs`
+- `/api/cron/tests-retention`
+
+On Vercel, cron schedules come from [vercel.json](./vercel.json). After deploy, confirm that:
+
+- finished tests are being cleaned up
+- expired `IN_PROGRESS` sessions get reconciled
+- missing AI feedback gets re-enqueued
+
+## 7. Verify Health
+
+Use:
+
+```txt
+/api/health
+```
+
+Expected result:
+
+- HTTP `200` when database and Redis are both reachable
+- HTTP `503` when either dependency is degraded
+
+## 8. Go Live Checklist
+
+- Production env vars are set
+- `DATABASE_URL` uses Neon pooled host
+- `DIRECT_URL` uses Neon direct host
+- OTP mail delivery works with real credentials
+- OpenAI features are either enabled with a valid key or intentionally hidden
+- Vercel cron jobs are enabled
+- Preview smoke test passed
+- One rehearsal with real-like users completed
+
+## 9. Post-Deploy Monitoring
+
+Watch these areas first:
+
+- OTP delivery failures
+- QStash webhook retries and DLQ
+- Neon cold-start or connection timeout errors
+- Redis rate limit failures
+- AI generation latency and failures
+- Arena submit and autosave errors
+
+## Local Dev Reminder
+
+For local development:
+
+```bash
+docker compose up -d postgres redis
+npx @upstash/qstash-cli@latest dev
+npm run db:push
+npm run db:seed
 npm run dev
-```
-
----
-
-## Environment Variables
-
-| Variable | Description | Example |
-|---|---|---|
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@localhost:5432/unimonk` |
-| `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
-| `JWT_SECRET` | Secret for signing JWTs (min 32 chars) | `your-secure-random-string-here` |
-| `OPENAI_API_KEY` | OpenAI API key for AI features (optional) | `sk-...` |
-| `RESEND_API_KEY` | Resend API key for email (optional) | `re_...` |
-| `NEXT_PUBLIC_APP_URL` | Public URL of the app (CORS enforcement) | `https://unimonk.example.com` |
-| `NODE_ENV` | Environment mode | `production` |
-
----
-
-## Production Deployment
-
-### Option 1: Docker Compose
-
-```bash
-# Build and start all services
-docker compose -f docker-compose.prod.yml up -d --build
-
-# Run database migrations
-docker compose exec app npx prisma migrate deploy
-
-# View logs
-docker compose logs -f app
-```
-
-### Option 2: Standalone Node.js
-
-```bash
-# Build
-npm run build
-
-# Run database migrations
-npx prisma migrate deploy
-
-# Start production server
-npm start
-
-# Start BullMQ workers (separate process)
-npx ts-node lib/queue/workers.ts
-```
-
----
-
-## Database Migrations
-
-```bash
-# Create a migration from schema changes
-npx prisma migrate dev --name <description>
-
-# Apply migrations in production
-npx prisma migrate deploy
-
-# Rollback: Reset to a specific migration
-npx prisma migrate resolve --rolled-back <migration-name>
-```
-
----
-
-## Monitoring & Health
-
-- **Application logs**: `stdout` via Node.js console
-- **Queue monitoring**: BullMQ dashboard (install `bull-board` if needed)
-- **Database**: Use `pgAdmin` or `psql` for direct queries
-- **Redis**: `redis-cli monitor` for real-time command tracking
-
----
-
-## Backup Strategy
-
-```bash
-# PostgreSQL backup
-pg_dump -Fc $DATABASE_URL > backup_$(date +%Y%m%d).dump
-
-# Restore
-pg_restore -d $DATABASE_URL backup.dump
-
-# Redis: AOF persistence enabled by default in Docker config
 ```

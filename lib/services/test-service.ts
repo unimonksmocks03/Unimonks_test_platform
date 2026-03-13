@@ -326,28 +326,69 @@ export async function assignTest(teacherId: string, testId: string, data: Assign
     if (test.teacherId !== teacherId) return { error: true, code: 'FORBIDDEN', message: 'You do not own this test' }
     // We allow assigning a test even in DRAFT status so the UI can save batch checkboxes before publishing.
 
+    const batchIds = [...new Set(data.batchIds ?? [])]
+    const studentIds = [...new Set(data.studentIds ?? [])]
 
-    const assignments: { testId: string; batchId?: string; studentId?: string }[] = []
-
-    if (data.batchIds) {
-        // Clear previous batch assignments to sync state with the UI
-        await prisma.testAssignment.deleteMany({
-            where: { testId, batchId: { not: null } }
+    if (batchIds.length > 0) {
+        const ownedBatchCount = await prisma.batch.count({
+            where: {
+                id: { in: batchIds },
+                teacherId,
+            },
         })
-        for (const batchId of data.batchIds) {
-            assignments.push({ testId, batchId })
-        }
-    }
-    if (data.studentIds) {
-        for (const studentId of data.studentIds) {
-            assignments.push({ testId, studentId })
+
+        if (ownedBatchCount !== batchIds.length) {
+            return {
+                error: true,
+                code: 'FORBIDDEN',
+                message: 'You can only assign tests to your own batches',
+            }
         }
     }
 
-    const result = await prisma.testAssignment.createMany({
-        data: assignments,
-        skipDuplicates: true,
+    if (studentIds.length > 0) {
+        const accessibleStudentRows = await prisma.batchStudent.findMany({
+            where: {
+                studentId: { in: studentIds },
+                batch: { teacherId },
+            },
+            select: { studentId: true },
+            distinct: ['studentId'],
+        })
+
+        if (accessibleStudentRows.length !== studentIds.length) {
+            return {
+                error: true,
+                code: 'FORBIDDEN',
+                message: 'You can only assign tests to students in your own batches',
+            }
+        }
+    }
+
+    const assignments: { testId: string; batchId?: string; studentId?: string }[] = [
+        ...batchIds.map((batchId) => ({ testId, batchId })),
+        ...studentIds.map((studentId) => ({ testId, studentId })),
+    ]
+
+    await prisma.$transaction(async (tx) => {
+        if (data.batchIds) {
+            await tx.testAssignment.deleteMany({
+                where: { testId, batchId: { not: null } },
+            })
+        }
+
+        if (data.studentIds) {
+            await tx.testAssignment.deleteMany({
+                where: { testId, studentId: { not: null } },
+            })
+        }
+
+        if (assignments.length > 0) {
+            await tx.testAssignment.createMany({
+                data: assignments,
+            })
+        }
     })
 
-    return { assigned: result.count, total: assignments.length }
+    return { assigned: assignments.length, total: assignments.length }
 }

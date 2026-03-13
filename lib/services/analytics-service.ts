@@ -1,5 +1,4 @@
 import { prisma } from '@/lib/prisma'
-import { redis } from '@/lib/redis'
 
 /**
  * Analytics service for admin overview and test-level analytics.
@@ -11,6 +10,7 @@ export async function getAdminOverview() {
         usersByRole,
         testsByStatus,
         totalSessions,
+        activeSessions,
         avgResult,
     ] = await Promise.all([
         prisma.user.groupBy({
@@ -25,24 +25,14 @@ export async function getAdminOverview() {
         prisma.testSession.count({
             where: { status: { in: ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] } },
         }),
+        prisma.testSession.count({
+            where: { status: 'IN_PROGRESS' },
+        }),
         prisma.testSession.aggregate({
             _avg: { percentage: true },
             where: { status: { in: ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] } },
         }),
     ])
-
-    // Active sessions from Redis (use SCAN instead of KEYS for production safety)
-    let activeSessions = 0
-    try {
-        let cursor = '0'
-        do {
-            const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'session:*', 'COUNT', 100)
-            cursor = nextCursor
-            activeSessions += keys.length
-        } while (cursor !== '0')
-    } catch {
-        // Redis might not have session tracking keys
-    }
 
     const userCounts: Record<string, number> = {}
     usersByRole.forEach((g) => { userCounts[g.role] = g._count })

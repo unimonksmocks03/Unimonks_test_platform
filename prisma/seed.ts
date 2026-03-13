@@ -20,7 +20,7 @@ async function main() {
     console.log('🌱 Seeding database...')
 
     // ── Admin ──
-    const _admin = await prisma.user.upsert({
+    await prisma.user.upsert({
         where: { email: 'tohin1400@gmail.com' },
         update: {},
         create: {
@@ -97,7 +97,7 @@ async function main() {
         },
     })
 
-    const _batch3 = await prisma.batch.upsert({
+    await prisma.batch.upsert({
         where: { code: 'BATCH-2025-C' },
         update: {},
         create: {

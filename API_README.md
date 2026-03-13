@@ -1,97 +1,105 @@
 # Unimonk Test Platform — API Reference
 
+This file documents the current API surface of the project.
+
 ## Authentication
 
-All API routes are protected by JWT-based authentication via httpOnly cookies. The middleware enforces role-based access control.
+Authentication is cookie-based.
 
-### Auth Flow
-1. `POST /api/auth/send-otp` — Send OTP to email
-2. `POST /api/auth/verify-otp` — Verify OTP → receive access + refresh tokens via cookies
-3. `POST /api/auth/refresh` — Rotate refresh token → new access token
-4. `POST /api/auth/logout` — Destroy all sessions
+Flow:
 
-### Error Codes
+1. `POST /api/auth/send-otp`
+2. `POST /api/auth/verify-otp`
+3. `POST /api/auth/refresh`
+4. `GET /api/auth/session`
+5. `POST /api/auth/logout`
+
+## Shared Error Codes
+
 | Code | Meaning |
 |---|---|
-| `VALIDATION_ERROR` | Request body failed Zod validation |
-| `UNAUTHORIZED` | Missing or invalid access token |
-| `FORBIDDEN` | Role doesn't have access to this resource |
-| `NOT_FOUND` | Resource doesn't exist |
-| `ACCOUNT_LOCKED` | Too many failed login attempts (15 min lockout) |
-| `RATE_LIMITED` | Too many requests (varies by endpoint) |
-| `PAYLOAD_TOO_LARGE` | JSON body > 100KB |
+| `VALIDATION_ERROR` | Request payload or query params are invalid |
+| `UNAUTHORIZED` | Missing or invalid session |
+| `FORBIDDEN` | Caller is authenticated but not allowed |
+| `NOT_FOUND` | Resource does not exist |
+| `RATE_LIMITED` | Caller exceeded endpoint rate limits |
+| `PAYLOAD_TOO_LARGE` | JSON request exceeded the proxy limit |
+| `OTP_DELIVERY_FAILED` | OTP email could not be sent |
 
----
-
-## Admin Routes (`/api/admin/*`)
+## Admin Routes
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/admin/users` | List all users (with search, filter, pagination) |
-| POST | `/api/admin/users` | Create a new user |
-| GET | `/api/admin/users/:id` | Get user details |
-| PATCH | `/api/admin/users/:id` | Update user (name, role, status) |
+| GET | `/api/admin/analytics/overview` | Admin dashboard overview |
+| GET | `/api/admin/users` | List users |
+| POST | `/api/admin/users` | Create user |
+| GET | `/api/admin/users/:id` | Get user |
+| PATCH | `/api/admin/users/:id` | Update user |
 | DELETE | `/api/admin/users/:id` | Delete user |
-| GET | `/api/admin/batches` | List all batches |
-| POST | `/api/admin/batches` | Create a new batch |
-| GET | `/api/admin/batches/:id` | Get batch details + enrolled students |
+| GET | `/api/admin/batches` | List batches |
+| POST | `/api/admin/batches` | Create batch |
+| GET | `/api/admin/batches/:id` | Get batch details |
 | PATCH | `/api/admin/batches/:id` | Update batch |
 | DELETE | `/api/admin/batches/:id` | Delete batch |
+| GET | `/api/admin/batches/:id/students` | List batch students |
 | GET | `/api/admin/tests` | List all tests |
-| GET | `/api/admin/tests/:id` | Get test details |
-| DELETE | `/api/admin/tests/:id` | Delete test |
+| DELETE | `/api/admin/tests/:id` | Force-delete a test |
+| POST | `/api/admin/impersonate/:userId` | Start impersonation |
+| POST | `/api/admin/stop-impersonation` | Stop impersonation |
 
----
-
-## Teacher Routes (`/api/teacher/*`)
+## Teacher Routes
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/teacher/dashboard` | Teacher stats (batches, tests, attempts) |
-| GET | `/api/teacher/batches` | List teacher's assigned batches |
-| GET | `/api/teacher/tests` | List teacher's tests |
-| POST | `/api/teacher/tests` | Create a new test |
-| GET | `/api/teacher/tests/:id` | Get test with questions |
+| GET | `/api/teacher/dashboard` | Teacher dashboard stats |
+| GET | `/api/teacher/batches` | Teacher-owned batches |
+| GET | `/api/teacher/tests` | List teacher tests |
+| POST | `/api/teacher/tests` | Create draft test |
+| GET | `/api/teacher/tests/:id` | Get test details |
 | PATCH | `/api/teacher/tests/:id` | Update test |
-| DELETE | `/api/teacher/tests/:id` | Delete test |
-| POST | `/api/teacher/tests/:id/questions` | Add a question |
-| PATCH | `/api/teacher/tests/:id/questions/:qId` | Update a question |
-| DELETE | `/api/teacher/tests/:id/questions/:qId` | Delete a question |
-| POST | `/api/teacher/tests/:id/assign` | Assign test to batches |
+| DELETE | `/api/teacher/tests/:id` | Delete draft or finished published test |
+| POST | `/api/teacher/tests/:id/questions` | Add question |
+| PATCH | `/api/teacher/tests/:id/questions/:qId` | Update question |
+| DELETE | `/api/teacher/tests/:id/questions/:qId` | Delete question |
+| POST | `/api/teacher/tests/:id/assign` | Assign test to teacher-owned batches or students |
 | GET | `/api/teacher/tests/:id/analytics` | Test analytics |
-| POST | `/api/teacher/tests/generate-from-doc` | AI: Upload .docx → generate MCQs |
+| POST | `/api/teacher/tests/generate-from-doc` | DOCX/PDF import with extraction-first AI fallback |
 
----
-
-## Student Routes (`/api/student/*`)
+## Student Routes
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/student/dashboard` | Student dashboard stats |
-| GET | `/api/student/tests` | List assigned tests |
-| GET | `/api/student/results/:sessionId` | Get test results + AI feedback |
+| GET | `/api/student/dashboard` | Student dashboard data |
+| GET | `/api/student/tests` | Assigned tests list |
+| GET | `/api/student/results/:sessionId` | Full result payload |
+| GET | `/api/student/results/:sessionId/feedback-status` | Lightweight AI feedback status |
 
----
-
-## Arena Routes (`/api/arena/*`)
-
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/arena/start` | Start a test session |
-| POST | `/api/arena/:sessionId/answer` | Save an answer (rate limited: 2/sec) |
-| POST | `/api/arena/:sessionId/submit` | Submit test → instant grading |
-| GET | `/api/arena/:sessionId/status` | Get time remaining + progress |
-| POST | `/api/arena/:sessionId/flag` | Flag anti-cheat violation |
-
----
-
-## Real-Time Events (`/api/events/*`)
+## Arena Routes
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/events/stream` | SSE stream for real-time events |
+| POST | `/api/arena/start` | Start or resume a test session |
+| POST | `/api/arena/:sessionId/answer` | Save one answer |
+| POST | `/api/arena/:sessionId/batch-answer` | Save multiple answers in one call |
+| GET | `/api/arena/:sessionId/status` | Session status and remaining time |
+| POST | `/api/arena/:sessionId/submit` | Submit test and enqueue AI feedback |
+| POST | `/api/arena/:sessionId/flag` | Record anti-cheat signals |
 
-### Event Types
-- `feedback:ready` — AI feedback generated for a session
-- `test:started` — Test session started
-- `test:submitted` — Test submitted
+## Event and Operational Routes
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/events/poll` | Pull queued user events |
+| GET | `/api/health` | Database and Redis readiness check |
+
+## Internal Cron and Webhook Routes
+
+These are internal operational endpoints and should not be used directly by frontend clients.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/cron/reconcile-jobs` | Reconcile expired sessions and missing feedback |
+| GET | `/api/cron/tests-retention` | Purge finished tests past retention |
+| POST | `/api/webhooks/ai-feedback` | QStash AI feedback worker |
+| POST | `/api/webhooks/force-submit` | QStash force-submit worker |
+| POST | `/api/webhooks/qstash-dlq` | QStash dead-letter intake |

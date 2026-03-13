@@ -22,100 +22,110 @@ async function verifyToken(token: string): Promise<JWTPayload | null> {
     }
 }
 
-// Routes that don't require authentication
+function withRequestId(response: NextResponse, requestId: string) {
+    response.headers.set('x-request-id', requestId)
+    return response
+}
+
+function nextWithHeaders(requestHeaders: Headers, requestId: string) {
+    return withRequestId(
+        NextResponse.next({
+            request: { headers: requestHeaders },
+        }),
+        requestId
+    )
+}
+
 const PUBLIC_ROUTES = ['/login', '/reset-password', '/forgot-password']
 
-// Role → protected path prefix mapping
 const ROLE_ROUTES: Record<string, 'ADMIN' | 'TEACHER' | 'STUDENT'> = {
     '/admin': 'ADMIN',
     '/teacher': 'TEACHER',
     '/student': 'STUDENT',
 }
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
     const { pathname } = req.nextUrl
+    const requestId = req.headers.get('x-request-id') || crypto.randomUUID()
+    const requestHeaders = new Headers(req.headers)
+    requestHeaders.set('x-request-id', requestId)
 
-    // CORS enforcement for API routes
     if (pathname.startsWith('/api/')) {
         const origin = req.headers.get('origin')
-        // In production, strictly enforce origin
         if (process.env.NODE_ENV === 'production' && origin && origin !== ALLOWED_ORIGIN) {
-            return NextResponse.json(
-                { error: true, code: 'CORS_DENIED', message: 'Origin not allowed' },
-                { status: 403 }
+            return withRequestId(
+                NextResponse.json(
+                    { error: true, code: 'CORS_DENIED', message: 'Origin not allowed' },
+                    { status: 403 }
+                ),
+                requestId
             )
         }
 
-        // Request body size limit for non-file-upload JSON endpoints
         const contentType = req.headers.get('content-type') || ''
         const contentLength = parseInt(req.headers.get('content-length') || '0')
         if (contentType.includes('application/json') && contentLength > MAX_JSON_BODY) {
-            return NextResponse.json(
-                { error: true, code: 'PAYLOAD_TOO_LARGE', message: 'Request body exceeds 100KB limit' },
-                { status: 413 }
+            return withRequestId(
+                NextResponse.json(
+                    { error: true, code: 'PAYLOAD_TOO_LARGE', message: 'Request body exceeds 100KB limit' },
+                    { status: 413 }
+                ),
+                requestId
             )
         }
     }
 
-    // Allow auth API routes and webhook routes publicly (QStash has its own auth)
     if (pathname.startsWith('/api/auth/') || pathname.startsWith('/api/webhooks/')) {
-        return NextResponse.next()
+        return nextWithHeaders(requestHeaders, requestId)
     }
 
-    // Allow public page routes
-    if (PUBLIC_ROUTES.some((r) => pathname.startsWith(r))) {
-        return NextResponse.next()
+    if (PUBLIC_ROUTES.some((route) => pathname.startsWith(route))) {
+        return nextWithHeaders(requestHeaders, requestId)
     }
 
-    // Read and verify access token from cookie
     const token = req.cookies.get('access_token')?.value
     const payload = token ? await verifyToken(token) : null
 
-    // Unauthenticated: redirect to /login
     if (!payload) {
-        const loginUrl = new URL('/login', req.url)
-        return NextResponse.redirect(loginUrl)
+        return withRequestId(NextResponse.redirect(new URL('/login', req.url)), requestId)
     }
 
-    // Arena is accessible to any authenticated user
+    requestHeaders.set('x-user-id', payload.userId)
+    requestHeaders.set('x-user-role', payload.role)
+
     if (pathname.startsWith('/arena') || pathname.startsWith('/api/arena')) {
-        const requestHeaders = new Headers(req.headers)
-        requestHeaders.set('x-user-id', payload.userId)
-        requestHeaders.set('x-user-role', payload.role)
-        return NextResponse.next({ request: { headers: requestHeaders } })
+        return nextWithHeaders(requestHeaders, requestId)
     }
 
-    // Role-based route enforcement
     for (const [prefix, requiredRole] of Object.entries(ROLE_ROUTES)) {
         if (pathname.startsWith(prefix) || pathname.startsWith(`/api${prefix}`)) {
             if (payload.role !== requiredRole) {
-                // API routes: return 403 JSON
                 if (pathname.startsWith('/api/')) {
-                    return NextResponse.json(
-                        { error: true, code: 'FORBIDDEN', message: 'Access denied' },
-                        { status: 403 }
+                    return withRequestId(
+                        NextResponse.json(
+                            { error: true, code: 'FORBIDDEN', message: 'Access denied' },
+                            { status: 403 }
+                        ),
+                        requestId
                     )
                 }
-                // Page routes: redirect to their own dashboard
+
                 const dashboardMap: Record<string, string> = {
                     ADMIN: '/admin/dashboard',
                     TEACHER: '/teacher/dashboard',
                     STUDENT: '/student/dashboard',
                 }
-                return NextResponse.redirect(new URL(dashboardMap[payload.role] || '/login', req.url))
+
+                return withRequestId(
+                    NextResponse.redirect(new URL(dashboardMap[payload.role] || '/login', req.url)),
+                    requestId
+                )
             }
             break
         }
     }
 
-    // Inject user info as headers for downstream API route handlers
-    const requestHeaders = new Headers(req.headers)
-    requestHeaders.set('x-user-id', payload.userId)
-    requestHeaders.set('x-user-role', payload.role)
-
-    return NextResponse.next({
-        request: { headers: requestHeaders },
-    })
+    return nextWithHeaders(requestHeaders, requestId)
 }
 
 export const config = {

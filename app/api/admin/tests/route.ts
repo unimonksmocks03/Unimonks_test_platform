@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
 import { withAuth } from '@/lib/middleware/auth-guard'
 import { prisma } from '@/lib/prisma'
-import { Role } from '@prisma/client'
 
 // GET /api/admin/tests — list ALL tests across all teachers
-async function getHandler(req: NextRequest, ctx: { userId: string; role: Role }) {
+async function getHandler(req: NextRequest) {
     const url = new URL(req.url)
     const status = url.searchParams.get('status') || undefined
     const search = url.searchParams.get('search') || undefined

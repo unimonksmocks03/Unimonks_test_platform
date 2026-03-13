@@ -1,3 +1,4 @@
+
 # EdTech MCQ Test Platform - Architecture & Implementation Plan
 
 ## Goal Description
@@ -101,3 +102,4 @@ app/
 ├── globals.css             # Tailwind imports & CSS vars
 └── layout.tsx              # Root layout (providers, fonts)
 ```
+# Archived planning note: this file reflects an earlier architecture draft and is not the source of truth for the current implementation. Use `README.md`, `DEPLOYMENT.md`, and `API_README.md` instead.

@@ -68,7 +68,6 @@ export default function MyTestsPage() {
 
     const handlePermanentDelete = async () => {
         if (!deleteTarget) return;
-        console.log('[DELETE] Attempting to delete test:', deleteTarget.id, deleteTarget.title);
         const res = await apiClient.delete(`/api/teacher/tests/${deleteTarget.id}`);
         if (res.ok) {
             toast.success("Test deleted", { description: `"${deleteTarget.title}" has been removed.` });

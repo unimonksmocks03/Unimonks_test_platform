@@ -1,18 +1,28 @@
 import { PrismaClient } from '@prisma/client'
+import { PrismaNeon } from '@prisma/adapter-neon'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { getDatabaseEnv } from '@/lib/env'
 
-getDatabaseEnv()
+const { DATABASE_URL } = getDatabaseEnv()
 
-const prismaClientSingleton = () => {
-    return new PrismaClient()
+function isNeonConnectionString(connectionString: string) {
+    return new URL(connectionString).hostname.includes('neon.tech')
 }
 
-type PrismaClientSingleton = ReturnType<typeof prismaClientSingleton>
-
 const globalForPrisma = globalThis as unknown as {
-    prisma: PrismaClientSingleton | undefined
+    prisma: PrismaClient | undefined
+}
+
+const prismaClientSingleton = () => {
+    const adapter = isNeonConnectionString(DATABASE_URL)
+        ? new PrismaNeon({ connectionString: DATABASE_URL })
+        : new PrismaPg({ connectionString: DATABASE_URL })
+
+    return new PrismaClient({ adapter })
 }
 
 export const prisma = globalForPrisma.prisma ?? prismaClientSingleton()
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+if (process.env.NODE_ENV !== 'production') {
+    globalForPrisma.prisma = prisma
+}

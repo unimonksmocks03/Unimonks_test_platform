@@ -1,125 +1,110 @@
-<h1 align="center">Unimonk Test Platform (Backend Architecture Showcase)</h1>
+# Unimonk Test Platform
 
-<p align="center">
-  A highly scalable, production-grade EdTech testing platform designed to handle <strong>400+ concurrent student test submissions with zero data loss</strong>. This project serves as a showcase of advanced backend engineering patterns, custom authentication flows, asynchronous job processing, and AI integrations within the Next.js ecosystem.
-</p>
+Unimonk is a full-stack online test platform built with Next.js App Router, Prisma, PostgreSQL, Redis, and QStash. It supports admin, teacher, and student roles; timed test sessions with autosave; AI-assisted document import; and asynchronous post-submission feedback.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Next.js-16%20App%20Router-black?style=for-the-badge&logo=next.js" alt="Next.js" />
-  <img src="https://img.shields.io/badge/PostgreSQL-Robust%20Relational%20DB-blue?style=for-the-badge&logo=postgresql" alt="PostgreSQL" />
-  <img src="https://img.shields.io/badge/Prisma-TypeSafe%20ORM-2D3748?style=for-the-badge&logo=prisma" alt="Prisma" />
-  <img src="https://img.shields.io/badge/Redis-Session%20%26%20Rate%20Limit-DC382D?style=for-the-badge&logo=redis" alt="Redis" />
-  <img src="https://img.shields.io/badge/BullMQ-Async%20Job%20Queues-FFB13B?style=for-the-badge" alt="BullMQ" />
-  <img src="https://img.shields.io/badge/OpenAI-GPT_4o_Mini-412991?style=for-the-badge&logo=openai" alt="OpenAI" />
-</p>
+The current production target is:
 
----
+- Vercel for app hosting and cron execution
+- Neon for PostgreSQL
+- Upstash Redis for sessions, rate limiting, and event queues
+- Upstash QStash for background webhook delivery
 
-## 🚀 Key Engineering Highlights & Standout Features
+## Current Architecture
 
-While many tutorial applications rely on BaaS (Backend-as-a-Service) providers like Clerk or Supabase, this project implements **everything entirely from scratch** to demonstrate deep understanding of backend systems:
+- **Frontend and API**: Next.js 16 App Router
+- **Database**: PostgreSQL via Prisma
+- **Serverless runtime path**: Prisma client JS engine with Neon adapter
+- **Redis access**: `@upstash/redis` in production, `ioredis` fallback for local TCP Redis
+- **Async jobs**: QStash webhooks for AI feedback and timeout force-submit
+- **Realtime-ish updates**: short polling through `/api/events/poll` plus a lightweight feedback status endpoint
+- **Email**: Nodemailer SMTP
+- **AI**: OpenAI API for question generation and personalized feedback
 
-- **Custom JWT & Refresh Token Rotation via Redis:** Built a custom session management system from the ground up. Short-lived Access Tokens (15m) and long-lived Refresh Tokens (7d). Refresh tokens are stored in Redis allowing for immediate, server-side session invalidation on logout or password changes.
-- **Asynchronous Submission Pipeline (BullMQ):** Grading 400 synchronized test submissions synchronously would block the Node event loop and cause timeouts. This platform instantly returns a raw score, but pushes the heavy AI analysis off to a Redis-backed BullMQ Queue.
-- **Batch Answer Synchronization:** Instead of firing an API request on every single option click, the Arena interface queues answers locally and flushes them to the server via a `/batch-answer` endpoint periodically, drastically reducing horizontal network load during high-concurrency exams.
-- **Real-Time Push via Server-Sent Events (SSE):** Replaced heavy WebSockets with raw Server-Sent Events utilizing Redis Pub/Sub. The moment a BullMQ worker finishes generating AI feedback, an event is pushed directly to the exact student's browser tab over a persistent HTTP connection to auto-refresh the UI.
-- **Strict Role-Based Middleware Guarding:** A multi-layered architecture where the Edge Middleware prevents illegal UI access, while deep service-level restrictions prevent horizontal privilege escalation (e.g., a Teacher can only fetch their *own* Batches, a Student can only view their *own* Test results).
-- **AI-Driven DocX to Test Pipeline:** Teachers can upload raw `.docx` study material. The backend extracts text using `mammoth`, chunks it intelligently, and streams it to OpenAI to deterministically generate strict JSON validation-checked Multiple Choice Questions.
+## Core Product Features
 
----
+- OTP-based login for admin, teacher, and student users
+- Teacher test builder with manual MCQ creation
+- Hybrid document import for `.docx` and text-based `.pdf`
+- Extraction-first flow for existing MCQ papers
+- AI fallback generation for plain notes, with a minimum generation floor
+- Timed arena with server-authoritative deadlines
+- Autosave with batch sync and safe submit handling
+- AI feedback generated asynchronously after submission
+- Teacher analytics and admin overview dashboards
+- Automatic finished-test retention cleanup
 
-## 🏗️ System Architecture & Design
+## Local Development
 
-> **[View the Complete System Architecture Markdown →](./Backend_system_design.md)**
+### Prerequisites
 
-Below is a high-level overview of the request lifecycle demonstrating the separation of concerns:
+- Node.js 20+
+- PostgreSQL 14+
+- Redis 7+
+- npm 9+
 
-```mermaid
-graph LR
-    A[Request] --> B[Redis Rate Limiter]
-    B --> C[Next.js Middleware<br/>JWT verification]
-    C --> D[Role Guard<br/>ADMIN/TEACHER/STUDENT]
-    D --> E[Zod Input Validation]
-    E --> F[API Route Handler]
-    F --> G[Service Layer<br/>Business logic]
-    G --> H[(PostgreSQL / Prisma)]
-    F --> I[Structured Error Handler]
-```
+### Setup
 
-### 1. Database Schema
-Modeled in PostgreSQL via Prisma, featuring 8 core models including `User`, `Batch`, `Test`, `Question`, and `TestSession`.
-* **Advanced design pattern:** Used `JSONB` fields for dynamic question options and AI Feedback data, preventing the need for overly complex, rigid relational joins for strictly nested, read-heavy data.
-
-### 2. The Test Arena (Concurrency Management)
-When a student starts a test, the server defines the `serverDeadline`. The client cannot cheat the timer.
-Upon submission, the route `/api/arena/[sessionId]/submit` leverages a queue system:
-1. **Synchronous Phase:** The API grades the test instantly against the DB and returns the score (sub-50ms).
-2. **Asynchronous Phase:** The API adds an `ai-feedback` job to the BullMQ queue. A background Node worker processes this queue, interfaces with OpenAI, saves the insight to PostgreSQL, and pushes a notification back to the client via Redis SSE.
-
----
-
-## ⚙️ Tech Stack Breakdown
-
-### Core Backend Setup
-- **Framework:** Next.js 16 (App Router + API Routes)
-- **Language:** TypeScript (Strict Mode)
-- **Database:** PostgreSQL (Relational)
-- **ORM:** Prisma Studio & Client
-- **Caching & Queues:** Redis Server, BullMQ
-- **Email Delivery:** Resend SDK
-
-### Security & Validation
-- **Authentication:** `jsonwebtoken`, `bcryptjs`, and native `crypto.randomUUID()`
-- **Input Validation:** Zod schema validation injected at the middleware level route-by-route.
-- **Rate Limiting:** Custom sliding-window rate limiters built on Redis to protect Login APIs and AI Generation endpoints from DDoS and spam.
-
----
-
-## 💻 Local Setup & Development
-
-To run this backend architecture locally:
-
-### 1. Prerequisites
-You must have **Node.js 20+**, **PostgreSQL**, and **Redis** running on your local machine.
-
-### 2. Clone & Install
 ```bash
-git clone https://github.com/tohin003/Unimonks-test-platform.git
-cd Unimonks-test-platform
 npm install
-```
-
-### 3. Environment Variables
-Create a `.env` file based on `.env.example`:
-```env
-DATABASE_URL="postgresql://user:password@localhost:5432/unimonk"
-REDIS_URL="redis://localhost:6379"
-
-JWT_SECRET="generate-a-random-secure-string"
-JWT_REFRESH_SECRET="generate-another-random-secure-string"
-
-OPENAI_API_KEY="sk-your-key-here"
-RESEND_API_KEY="re_your_resend_key_here"
-FROM_EMAIL="noreply@yourdomain.com"
-```
-
-### 4. Database Initialization
-```bash
-# Push the schema to your PostgreSQL database
+cp .env.example .env
 npx prisma db push
-
-# Seed the database with sample Admins, Teachers, Students, and Tests
 npx prisma db seed
 ```
 
-### 5. Start the Server
-```bash
-# Start the Next.js development server
-npm run dev
+If you want local QStash delivery, run this in a separate terminal:
 
-# (Optional) In a separate terminal, start the Prisma Studio DB viewer
-npx prisma studio
+```bash
+npx @upstash/qstash-cli@latest dev
 ```
 
----
-*Architected and developed by [Tohin](https://github.com/tohin003).*
+Then start the app:
+
+```bash
+npm run dev
+```
+
+Useful scripts:
+
+```bash
+npm run typecheck
+npm run lint
+npm run build
+npm run db:push
+npm run db:seed
+npm run db:migrate:deploy
+```
+
+## Environment Variables
+
+Use [.env.example](./.env.example) as the source of truth.
+
+Important variables:
+
+- `DATABASE_URL`: pooled PostgreSQL URL for runtime
+- `DIRECT_URL`: direct PostgreSQL URL for migrations and Prisma CLI
+- `REDIS_URL`: local Redis TCP URL
+- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`: production Upstash Redis REST credentials
+- `JWT_SECRET` and `JWT_REFRESH_SECRET`: auth signing secrets
+- `GMAIL_USER` and `GMAIL_APP_PASSWORD`: SMTP credentials for OTP delivery
+- `OPENAI_API_KEY`: required only for AI generation and AI feedback
+- `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`: production QStash credentials
+- `QSTASH_URL`: local QStash dev server URL
+- `NEXT_PUBLIC_APP_URL`: public app URL
+- `CRON_SECRET`: optional manual authorization for cron endpoints outside Vercel Cron
+
+## Deployment Notes
+
+- The app is configured for Vercel in [vercel.json](./vercel.json).
+- Cron routes are already defined for reconciliation and finished-test cleanup.
+- `/api/health` provides a simple readiness check for database and Redis.
+- Primary deployment instructions are in [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+## Operational Limits
+
+- Text-based PDFs are supported. Scanned PDFs still need OCR.
+- The AI document import path is designed for teacher workflows, not bulk ingestion pipelines.
+- Concurrency claims should be based on deployed load testing, not local dev runs.
+
+## API Reference
+
+See [API_README.md](./API_README.md) for the current API surface.

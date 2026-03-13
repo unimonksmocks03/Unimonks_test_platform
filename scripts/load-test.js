@@ -18,28 +18,30 @@ export const options = {
 
 const BASE_URL = __ENV.API_URL || 'http://localhost:3000';
 
-export default function () {
-    // 1. Setup - we assume auth token is passed via environment variable (or hardcoded for dev test)
-    // To run: k6 run -e API_URL=http://localhost:3000 -e AUTH_TOKEN=your_token scripts/load-test.js
+export default function arenaLoadTest() {
+    // Run with:
+    // k6 run -e API_URL=http://localhost:3000 -e AUTH_TOKEN=your_token -e SESSION_ID=uuid -e QUESTION_IDS=q1,q2,q3 scripts/load-test.js
     const token = __ENV.AUTH_TOKEN || 'missing_token';
-    const sessionId = __ENV.SESSION_ID || '123e4567-e89b-12d3-a456-426614174000'; // mock session uuid
+    const sessionId = __ENV.SESSION_ID || '123e4567-e89b-12d3-a456-426614174000';
+    const questionIds = (__ENV.QUESTION_IDS || 'q1,q2,q3')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
 
     const headers = { 
         'Content-Type': 'application/json',
         'Cookie': `access_token=${token}` 
     };
 
-    // 2. Simulate progressive auto-saving (like a student answering questions)
-    // Send a batch of answers to the status append route
+    // 2. Simulate periodic batch autosave.
     const savePayload = JSON.stringify({
-        answers: {
-            "q1": "A",
-            "q2": "C"
-        },
-        tabSwitchCount: 0
+        answers: questionIds.slice(0, 2).map((questionId, index) => ({
+            questionId,
+            optionId: ['A', 'B', 'C', 'D'][index % 4],
+        })),
     });
 
-    const saveRes = http.post(`${BASE_URL}/api/arena/${sessionId}/status`, savePayload, { headers });
+    const saveRes = http.post(`${BASE_URL}/api/arena/${sessionId}/batch-answer`, savePayload, { headers });
     check(saveRes, {
         'auto-save status is 200': (r) => r.status === 200,
     });
@@ -50,13 +52,10 @@ export default function () {
     // 3. Simulate final test submission
     if (Math.random() < 0.1) { // 10% of iterations do a full submit to avoid overwhelming with submits
         const submitPayload = JSON.stringify({
-             answers: {
-                 "q1": "A",
-                 "q2": "C",
-                 "q3": "B"
-             },
-             tabSwitchCount: 1,
-             autoSubmit: false
+             answers: questionIds.map((questionId, index) => ({
+                 questionId,
+                 optionId: ['A', 'B', 'C', 'D'][index % 4],
+             })),
         });
         
         const submitRes = http.post(`${BASE_URL}/api/arena/${sessionId}/submit`, submitPayload, { headers });
