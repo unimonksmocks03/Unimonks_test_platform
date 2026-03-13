@@ -26,6 +26,7 @@ import {
 import React from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "next-themes";
+import { useState } from "react";
 
 // Route group segments that shouldn't appear in breadcrumbs or generate links
 const ROUTE_GROUP_SEGMENTS = new Set(["(auth)", "(public)"]);
@@ -37,15 +38,26 @@ export function TopHeader() {
     const pathname = usePathname();
     const { user, logout } = useAuth();
     const { theme, setTheme } = useTheme();
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
 
     // Filter out route group segments
     const segments = pathname
         .split("/")
         .filter((s) => s && !ROUTE_GROUP_SEGMENTS.has(s));
 
-    const handleLogout = () => {
-        logout();
-        toast.info("Session Cleared", { description: "You have been successfully logged out." });
+    const handleLogout = async () => {
+        if (isLoggingOut) return;
+
+        setIsLoggingOut(true);
+        try {
+            await logout();
+            toast.info("Session Cleared", { description: "You have been successfully logged out." });
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Logout failed. Please try again."
+            toast.error("Logout Failed", { description: message });
+        } finally {
+            setIsLoggingOut(false);
+        }
     };
 
     const toggleTheme = () => {
@@ -167,10 +179,11 @@ export function TopHeader() {
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                             onClick={handleLogout}
+                            disabled={isLoggingOut}
                             className="cursor-pointer rounded-lg text-rose-600 focus:text-rose-700 focus:bg-rose-50 flex items-center"
                         >
                             <LogOut className="mr-2 h-4 w-4" />
-                            <span>Log out</span>
+                            <span>{isLoggingOut ? "Logging out..." : "Log out"}</span>
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>

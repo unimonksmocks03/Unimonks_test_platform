@@ -40,6 +40,12 @@ type AppEnv = {
     NODE_ENV: 'development' | 'test' | 'production'
 }
 
+type EmailEnv = {
+    gmailUser: string
+    gmailAppPassword: string
+    enableDevOtpLogs: boolean
+}
+
 type QStashEnv =
     | {
         mode: 'local'
@@ -56,6 +62,7 @@ let databaseEnvCache: DatabaseEnv | null = null
 let redisEnvCache: RedisEnv | null = null
 let authEnvCache: AuthEnv | null = null
 let appEnvCache: AppEnv | null = null
+let emailEnvCache: EmailEnv | null = null
 let qstashEnvCache: QStashEnv | null = null
 
 function formatEnvIssues(scope: string, issues: { path: PropertyKey[]; message: string }[]) {
@@ -199,6 +206,31 @@ export function getAppEnv(): AppEnv {
 
     appEnvCache = parsed.data
     return appEnvCache
+}
+
+export function getEmailEnv(): EmailEnv {
+    if (emailEnvCache) {
+        return emailEnvCache
+    }
+
+    const schema = z.object({
+        GMAIL_USER: nonEmptyString,
+        GMAIL_APP_PASSWORD: nonEmptyString,
+        ENABLE_DEV_OTP_LOGS: z.enum(['true', 'false']).optional().default('false'),
+    })
+
+    const parsed = schema.safeParse(process.env)
+    if (!parsed.success) {
+        throw new Error(formatEnvIssues('email', parsed.error.issues))
+    }
+
+    emailEnvCache = {
+        gmailUser: parsed.data.GMAIL_USER,
+        gmailAppPassword: parsed.data.GMAIL_APP_PASSWORD,
+        enableDevOtpLogs: parsed.data.ENABLE_DEV_OTP_LOGS === 'true',
+    }
+
+    return emailEnvCache
 }
 
 export function getQStashEnv(): QStashEnv {

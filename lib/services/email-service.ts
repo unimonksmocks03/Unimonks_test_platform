@@ -1,23 +1,29 @@
 import * as nodemailer from 'nodemailer'
+import { getAppEnv, getEmailEnv } from '@/lib/env'
 
-// Gmail SMTP transport via Nodemailer
-// Requires: GMAIL_USER (your Gmail address) + GMAIL_APP_PASSWORD (16-char App Password)
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-})
-
-const FROM_EMAIL = process.env.GMAIL_USER || 'noreply@unimonk.com'
 const APP_NAME = 'Unimonk'
 
-export async function sendOTPEmail(to: string, otp: string): Promise<void> {
-  console.log(`\n=============================\n[DEV] OTP for ${to}: ${otp}\n=============================\n`)
+function getTransporter() {
+  const { gmailUser, gmailAppPassword } = getEmailEnv()
 
-  await transporter.sendMail({
-    from: `"${APP_NAME}" <${FROM_EMAIL}>`,
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: gmailUser,
+      pass: gmailAppPassword,
+    },
+  })
+}
+
+export async function sendOTPEmail(to: string, otp: string): Promise<void> {
+  const emailEnv = getEmailEnv()
+
+  if (process.env.NODE_ENV !== 'production' && emailEnv.enableDevOtpLogs) {
+    console.log(`\n=============================\n[DEV] OTP for ${to}: ${otp}\n=============================\n`)
+  }
+
+  await getTransporter().sendMail({
+    from: `"${APP_NAME}" <${emailEnv.gmailUser}>`,
     to,
     subject: `${otp} is your ${APP_NAME} login code`,
     html: `
@@ -50,10 +56,11 @@ export async function sendOTPEmail(to: string, otp: string): Promise<void> {
 }
 
 export async function sendWelcomeEmail(to: string, name: string): Promise<void> {
-  const loginUrl = `${process.env.NEXT_PUBLIC_APP_URL}/login`
+  const emailEnv = getEmailEnv()
+  const loginUrl = `${getAppEnv().NEXT_PUBLIC_APP_URL}/login`
 
-  await transporter.sendMail({
-    from: `"${APP_NAME}" <${FROM_EMAIL}>`,
+  await getTransporter().sendMail({
+    from: `"${APP_NAME}" <${emailEnv.gmailUser}>`,
     to,
     subject: `Welcome to ${APP_NAME} — Your account is ready`,
     html: `
