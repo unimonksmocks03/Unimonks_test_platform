@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
+import { MAX_PAID_TOTAL_ATTEMPTS } from '@/lib/config/platform-policy'
 import { enqueueForceSubmit } from '@/lib/queue/qstash'
-import { getScheduledTestLifecycle } from '@/lib/services/test-lifecycle'
 
 /**
  * Submission Service — Core arena engine.
@@ -16,6 +16,8 @@ interface AnswerEntry {
     answeredAt: string // ISO datetime
 }
 
+const COMPLETED_SESSION_STATUSES = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] as const
+
 // ── Start Test Session ──
 export async function startTestSession(studentId: string, testId: string) {
     const startResult = await prisma.$transaction(async (tx) => {
@@ -29,11 +31,9 @@ export async function startTestSession(studentId: string, testId: string) {
             where: { id: testId },
             select: {
                 id: true,
-                title: true,
                 status: true,
                 durationMinutes: true,
                 settings: true,
-                scheduledAt: true,
                 questions: {
                     orderBy: { order: 'asc' },
                     select: {
@@ -53,14 +53,6 @@ export async function startTestSession(studentId: string, testId: string) {
 
         if (!test) return { error: true, code: 'NOT_FOUND', message: 'Test not found' } as const
         if (test.status !== 'PUBLISHED') return { error: true, code: 'NOT_PUBLISHED', message: 'Test is not available' } as const
-        if (test.scheduledAt && test.scheduledAt.getTime() > Date.now()) {
-            return {
-                error: true,
-                code: 'NOT_STARTED',
-                message: `This test opens at ${test.scheduledAt.toISOString()}`,
-                scheduledAt: test.scheduledAt.toISOString(),
-            } as const
-        }
 
         const batchEnrollments = await tx.batchStudent.findMany({
             where: { studentId },
@@ -73,52 +65,66 @@ export async function startTestSession(studentId: string, testId: string) {
         )
         if (!isAssigned) return { error: true, code: 'FORBIDDEN', message: 'You are not assigned to this test' } as const
 
-        const existingSession = await tx.testSession.findFirst({
+        const existingSessions = await tx.testSession.findMany({
             where: { testId, studentId },
-            orderBy: { startedAt: 'desc' },
+            orderBy: { attemptNumber: 'asc' },
+            select: {
+                id: true,
+                attemptNumber: true,
+                status: true,
+                serverDeadline: true,
+                answers: true,
+            },
         })
 
-        if (existingSession) {
-            if (existingSession.status === 'IN_PROGRESS') {
-                const timeRemaining = Math.max(0, Math.floor(
-                    (existingSession.serverDeadline.getTime() - Date.now()) / 1000
-                ))
+        const inProgressSession = [...existingSessions].reverse().find((session) => session.status === 'IN_PROGRESS')
 
-                if (timeRemaining <= 0) {
-                    return { error: true, code: 'TIMED_OUT', message: 'Test time has expired', sessionId: existingSession.id } as const
-                }
+        if (inProgressSession) {
+            const timeRemaining = Math.max(0, Math.floor(
+                (inProgressSession.serverDeadline.getTime() - Date.now()) / 1000
+            ))
 
-                const safeQuestions = stripCorrectAnswers(test.questions, test.settings)
+            if (timeRemaining <= 0) {
                 return {
-                    sessionId: existingSession.id,
-                    questions: safeQuestions,
-                    serverDeadline: existingSession.serverDeadline.toISOString(),
-                    durationMinutes: test.durationMinutes,
-                    answers: existingSession.answers as unknown as AnswerEntry[] || [],
-                    resumed: true,
+                    staleSessionId: inProgressSession.id,
                 } as const
             }
 
-            return { error: true, code: 'ALREADY_COMPLETED', message: 'You have already completed this test' } as const
+            const safeQuestions = stripCorrectAnswers(test.questions, test.settings)
+            return {
+                sessionId: inProgressSession.id,
+                attemptNumber: inProgressSession.attemptNumber,
+                questions: safeQuestions,
+                serverDeadline: inProgressSession.serverDeadline.toISOString(),
+                durationMinutes: test.durationMinutes,
+                answers: inProgressSession.answers as unknown as AnswerEntry[] || [],
+                resumed: true,
+            } as const
         }
 
-        const lifecycle = getScheduledTestLifecycle(test)
-        if (lifecycle.isFinished) {
+        const completedAttempts = existingSessions.filter((session) =>
+            COMPLETED_SESSION_STATUSES.includes(session.status as typeof COMPLETED_SESSION_STATUSES[number])
+        ).length
+
+        if (completedAttempts >= MAX_PAID_TOTAL_ATTEMPTS) {
             return {
                 error: true,
-                code: 'WINDOW_CLOSED',
-                message: 'This test has already finished and is no longer available.',
-                scheduledEndAt: lifecycle.scheduledEndAt?.toISOString(),
+                code: 'ATTEMPT_LIMIT_REACHED',
+                message: `You have reached the ${MAX_PAID_TOTAL_ATTEMPTS}-attempt limit for this test.`,
+                attemptsUsed: completedAttempts,
+                maxAttempts: MAX_PAID_TOTAL_ATTEMPTS,
             } as const
         }
 
         const now = new Date()
         const deadline = new Date(now.getTime() + test.durationMinutes * 60 * 1000)
+        const nextAttemptNumber = completedAttempts + 1
 
         const session = await tx.testSession.create({
             data: {
                 testId,
                 studentId,
+                attemptNumber: nextAttemptNumber,
                 status: 'IN_PROGRESS',
                 startedAt: now,
                 serverDeadline: deadline,
@@ -132,6 +138,7 @@ export async function startTestSession(studentId: string, testId: string) {
 
         return {
             sessionId: session.id,
+            attemptNumber: nextAttemptNumber,
             questions: safeQuestions,
             serverDeadline: deadline.toISOString(),
             durationMinutes: test.durationMinutes,
@@ -141,9 +148,18 @@ export async function startTestSession(studentId: string, testId: string) {
         } as const
     })
 
-    if ('error' in startResult && startResult.error && startResult.code === 'TIMED_OUT' && 'sessionId' in startResult) {
-        const result = await submitTest(studentId, startResult.sessionId, true)
-        return { error: true, code: 'TIMED_OUT', message: 'Test time has expired', result }
+    if ('staleSessionId' in startResult) {
+        const recoveryResult = await submitTest(studentId, startResult.staleSessionId, true)
+
+        if ('error' in recoveryResult && recoveryResult.error && recoveryResult.code !== 'ALREADY_SUBMITTED') {
+            return {
+                error: true,
+                code: 'TIMED_OUT',
+                message: 'A previous attempt expired before it could be resumed. Please try again.',
+            } as const
+        }
+
+        return startTestSession(studentId, testId)
     }
 
     if (!('error' in startResult) && !startResult.resumed && 'forceSubmitNotBefore' in startResult) {
@@ -155,6 +171,7 @@ export async function startTestSession(studentId: string, testId: string) {
 
         return {
             sessionId: startResult.sessionId,
+            attemptNumber: startResult.attemptNumber,
             questions: startResult.questions,
             serverDeadline: startResult.serverDeadline,
             durationMinutes: startResult.durationMinutes,

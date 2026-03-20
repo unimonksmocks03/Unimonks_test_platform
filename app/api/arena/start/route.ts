@@ -20,10 +20,8 @@ export const POST = withAuth(async (req: NextRequest, { userId }) => {
         const statusMap: Record<string, number> = {
             NOT_FOUND: 404,
             NOT_PUBLISHED: 400,
-            NOT_STARTED: 409,
-            WINDOW_CLOSED: 410,
             FORBIDDEN: 403,
-            ALREADY_COMPLETED: 409,
+            ATTEMPT_LIMIT_REACHED: 409,
             TIMED_OUT: 410,
         }
         return NextResponse.json(result, { status: statusMap[result.code as string] || 400 })
