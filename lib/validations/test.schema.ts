@@ -1,5 +1,8 @@
 import { z } from 'zod'
 
+const nonEmptyUuidArray = z.array(z.string().uuid('Each ID must be a valid UUID'))
+    .max(200, 'Cannot submit more than 200 IDs at once')
+
 // ── Test Settings ──
 const TestSettingsSchema = z.object({
     shuffleQuestions: z.boolean().default(false),
@@ -13,7 +16,6 @@ export const CreateTestSchema = z.object({
     description: z.string().trim().max(2000).optional(),
     durationMinutes: z.number().int().min(5, 'Duration must be at least 5 minutes').max(300, 'Duration must be at most 300 minutes'),
     settings: TestSettingsSchema.optional().default({ shuffleQuestions: false, showResult: true, passingScore: 40 }),
-    scheduledAt: z.string().datetime().optional(),
 })
 
 // ── Update Test ──
@@ -23,7 +25,6 @@ export const UpdateTestSchema = z.object({
     durationMinutes: z.number().int().min(5).max(300).optional(),
     settings: TestSettingsSchema.partial().optional(),
     status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']).optional(),
-    scheduledAt: z.string().datetime().optional().nullable(),
 }).refine((data) => Object.keys(data).length > 0, {
     message: 'At least one field must be provided for update',
 })
@@ -41,7 +42,7 @@ export const CreateQuestionSchema = z.object({
     options: z.array(QuestionOptionSchema)
         .length(4, 'Exactly 4 options are required')
         .refine(
-            (opts) => opts.filter((o) => o.isCorrect).length === 1,
+            (opts) => opts.filter((option) => option.isCorrect).length === 1,
             { message: 'Exactly 1 option must be marked as correct' }
         ),
     explanation: z.string().optional(),
@@ -51,25 +52,25 @@ export const CreateQuestionSchema = z.object({
 
 // ── Update Question ──
 export const UpdateQuestionSchema = z.object({
-    stem: z.string().min(3).optional(),
+    stem: z.string().trim().min(3).optional(),
     options: z.array(QuestionOptionSchema)
         .length(4, 'Exactly 4 options are required')
         .refine(
-            (opts) => opts.filter((o) => o.isCorrect).length === 1,
+            (opts) => opts.filter((option) => option.isCorrect).length === 1,
             { message: 'Exactly 1 option must be marked as correct' }
         )
         .optional(),
     explanation: z.string().optional().nullable(),
     difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']).optional(),
-    topic: z.string().max(100).optional().nullable(),
+    topic: z.string().trim().max(100).optional().nullable(),
 }).refine((data) => Object.keys(data).length > 0, {
     message: 'At least one field must be provided for update',
 })
 
 // ── Assign Test ──
 export const AssignTestSchema = z.object({
-    batchIds: z.array(z.string().uuid()).optional(),
-    studentIds: z.array(z.string().uuid()).optional(),
+    batchIds: nonEmptyUuidArray.optional(),
+    studentIds: nonEmptyUuidArray.optional(),
 }).refine(
     (data) => (data.batchIds && data.batchIds.length > 0) || (data.studentIds && data.studentIds.length > 0),
     { message: 'At least one batchId or studentId is required' }
@@ -77,6 +78,7 @@ export const AssignTestSchema = z.object({
 
 // ── Test Query (GET list) ──
 export const TestQuerySchema = z.object({
+    search: z.string().trim().max(200).optional(),
     status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']).optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
