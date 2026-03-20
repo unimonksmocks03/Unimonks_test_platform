@@ -5,8 +5,14 @@ import { listPublicFreeTestsForSitemap } from '@/lib/services/free-test-service'
 const siteUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-    const freeTests = await listPublicFreeTestsForSitemap()
     const now = new Date()
+    let freeTests: Awaited<ReturnType<typeof listPublicFreeTestsForSitemap>> = []
+
+    try {
+        freeTests = await listPublicFreeTestsForSitemap()
+    } catch (error) {
+        console.warn('[sitemap] Falling back to static sitemap entries:', error)
+    }
 
     return [
         {

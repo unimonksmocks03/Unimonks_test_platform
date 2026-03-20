@@ -148,8 +148,9 @@ export async function startTestSession(studentId: string, testId: string) {
         } as const
     })
 
-    if ('staleSessionId' in startResult) {
-        const recoveryResult = await submitTest(studentId, startResult.staleSessionId, true)
+    const staleSessionId = 'staleSessionId' in startResult ? startResult.staleSessionId : undefined
+    if (typeof staleSessionId === 'string') {
+        const recoveryResult = await submitTest(studentId, staleSessionId, true)
 
         if ('error' in recoveryResult && recoveryResult.error && recoveryResult.code !== 'ALREADY_SUBMITTED') {
             return {
@@ -162,9 +163,16 @@ export async function startTestSession(studentId: string, testId: string) {
         return startTestSession(studentId, testId)
     }
 
-    if (!('error' in startResult) && !startResult.resumed && 'forceSubmitNotBefore' in startResult) {
+    const forceSubmitNotBefore = 'forceSubmitNotBefore' in startResult ? startResult.forceSubmitNotBefore : undefined
+    const scheduledSessionId = 'sessionId' in startResult ? startResult.sessionId : undefined
+    if (
+        !('error' in startResult)
+        && !startResult.resumed
+        && typeof forceSubmitNotBefore === 'number'
+        && typeof scheduledSessionId === 'string'
+    ) {
         try {
-            await enqueueForceSubmit(startResult.sessionId, studentId, startResult.forceSubmitNotBefore)
+            await enqueueForceSubmit(scheduledSessionId, studentId, forceSubmitNotBefore)
         } catch (err) {
             console.warn('[ARENA] Could not schedule force-submit:', err)
         }
