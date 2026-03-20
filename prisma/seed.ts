@@ -1,6 +1,8 @@
 import 'dotenv/config'
 
 import { Prisma, PrismaClient } from '@prisma/client'
+import { PrismaNeon } from '@prisma/adapter-neon'
+import { PrismaPg } from '@prisma/adapter-pg'
 
 import {
     FREE_BATCH_CODE,
@@ -10,7 +12,21 @@ import {
 } from '../lib/config/platform-policy'
 import { normalizeOptionalEmail } from '../lib/utils/contact-normalization'
 
-const prisma = new PrismaClient()
+const seedConnectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL
+
+if (!seedConnectionString) {
+    throw new Error('DIRECT_URL or DATABASE_URL is required to run prisma/seed.ts')
+}
+
+function isNeonConnectionString(connectionString: string) {
+    return new URL(connectionString).hostname.includes('neon.tech')
+}
+
+const adapter = isNeonConnectionString(seedConnectionString)
+    ? new PrismaNeon({ connectionString: seedConnectionString })
+    : new PrismaPg({ connectionString: seedConnectionString })
+
+const prisma = new PrismaClient({ adapter })
 
 const adminAccount = {
     email: 'tohin1400@gmail.com',
