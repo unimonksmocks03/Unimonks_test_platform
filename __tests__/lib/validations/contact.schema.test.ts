@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
+import { expect, test } from 'vitest'
 
 import { CreateLeadContactSchema } from '../../../lib/validations/contact.schema'
 
@@ -10,7 +9,7 @@ test('CreateLeadContactSchema accepts email-only leads', () => {
         phone: '   ',
     })
 
-    assert.deepEqual(parsed, {
+    expect(parsed).toEqual({
         name: 'Alice Lead',
         email: 'alice@example.com',
         phone: undefined,
@@ -23,9 +22,9 @@ test('CreateLeadContactSchema accepts phone-only leads', () => {
         phone: '+91 98765 43210',
     })
 
-    assert.equal(parsed.name, 'Bob Lead')
-    assert.equal(parsed.phone, '+91 98765 43210')
-    assert.equal(parsed.email, undefined)
+    expect(parsed.name).toBe('Bob Lead')
+    expect(parsed.phone).toBe('+91 98765 43210')
+    expect(parsed.email).toBeUndefined()
 })
 
 test('CreateLeadContactSchema rejects leads without any contact method', () => {
@@ -35,10 +34,10 @@ test('CreateLeadContactSchema rejects leads without any contact method', () => {
         phone: '   ',
     })
 
-    assert.equal(result.success, false)
+    expect(result.success).toBe(false)
     if (result.success) return
 
-    assert.equal(result.error.issues.some((issue) => issue.message === 'Email or phone is required'), true)
+    expect(result.error.issues.some((issue) => issue.message === 'Email or phone is required')).toBe(true)
 })
 
 test('CreateLeadContactSchema rejects invalid phones', () => {
@@ -47,5 +46,5 @@ test('CreateLeadContactSchema rejects invalid phones', () => {
         phone: '12345',
     })
 
-    assert.equal(result.success, false)
+    expect(result.success).toBe(false)
 })

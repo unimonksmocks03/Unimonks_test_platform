@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
+import { expect, test } from 'vitest'
 
 import {
     isValidPhoneNumber,
@@ -10,26 +9,26 @@ import {
 } from '../../../lib/utils/contact-normalization'
 
 test('normalizeEmail trims and lowercases emails', () => {
-    assert.equal(normalizeEmail('  Student@Example.COM  '), 'student@example.com')
+    expect(normalizeEmail('  Student@Example.COM  ')).toBe('student@example.com')
 })
 
 test('normalizeOptionalEmail returns null for blank values', () => {
-    assert.equal(normalizeOptionalEmail('   '), null)
-    assert.equal(normalizeOptionalEmail(undefined), null)
+    expect(normalizeOptionalEmail('   ')).toBeNull()
+    expect(normalizeOptionalEmail(undefined)).toBeNull()
 })
 
 test('normalizePhone removes formatting characters and unifies 00-prefixed international numbers', () => {
-    assert.equal(normalizePhone('+91 98765-43210'), '919876543210')
-    assert.equal(normalizePhone('0091 (98765) 43210'), '919876543210')
+    expect(normalizePhone('+91 98765-43210')).toBe('919876543210')
+    expect(normalizePhone('0091 (98765) 43210')).toBe('919876543210')
 })
 
 test('normalizeOptionalPhone returns null for blank values', () => {
-    assert.equal(normalizeOptionalPhone('   '), null)
-    assert.equal(normalizeOptionalPhone(null), null)
+    expect(normalizeOptionalPhone('   ')).toBeNull()
+    expect(normalizeOptionalPhone(null)).toBeNull()
 })
 
 test('isValidPhoneNumber enforces the shared digit-length bounds', () => {
-    assert.equal(isValidPhoneNumber('9876543210'), true)
-    assert.equal(isValidPhoneNumber('+1 202-555-0142'), true)
-    assert.equal(isValidPhoneNumber('12345'), false)
+    expect(isValidPhoneNumber('9876543210')).toBe(true)
+    expect(isValidPhoneNumber('+1 202-555-0142')).toBe(true)
+    expect(isValidPhoneNumber('12345')).toBe(false)
 })
