@@ -50,7 +50,7 @@ The current production target is:
 npm install
 cp .env.example .env
 npm run db:migrate:deploy
-npx prisma db seed
+npm run db:seed
 ```
 
 If you want local QStash delivery, run this in a separate terminal:
@@ -71,9 +71,11 @@ Useful scripts:
 npm run typecheck
 npm run lint
 npm run build
+npm run vercel-build
 npm run db:migrate:deploy
 npm run db:push
 npm run db:seed
+npm run db:bootstrap:owner-admin
 ```
 
 ## Environment Variables
@@ -87,6 +89,7 @@ Important variables:
 - `REDIS_URL`: local Redis TCP URL
 - `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`: production Upstash Redis REST credentials
 - `JWT_SECRET` and `JWT_REFRESH_SECRET`: auth signing secrets
+- `OWNER_ADMIN_EMAIL` and `OWNER_ADMIN_NAME`: owner account bootstrap values for fresh environments
 - `GMAIL_USER` and `GMAIL_APP_PASSWORD`: SMTP credentials for OTP delivery
 - `OPENAI_API_KEY`: required only for AI generation and AI feedback
 - `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`: production QStash credentials
@@ -102,7 +105,6 @@ Use these files first when regaining context:
 - [DEPLOYMENT.md](./DEPLOYMENT.md): Vercel, Neon, Upstash deployment steps
 - [LAUNCH_CHECKLIST.md](./LAUNCH_CHECKLIST.md): pre-launch and go-live checklist
 - [API_README.md](./API_README.md): current API surface
-- [docs/archive/README.md](./docs/archive/README.md): historical planning and design notes
 
 ## Deployment Notes
 
@@ -122,6 +124,8 @@ Use these files first when regaining context:
 - Use `npm run db:migrate:deploy` for any persistent environment, including Preview and Production.
 - Keep `npm run db:push` only for throwaway local experiments where schema history does not matter.
 - Do not deploy from a database that was manually drifted away from the committed Prisma migrations.
+- Use `npm run db:bootstrap:owner-admin` after the first migration on a brand-new persistent environment.
+- Keep `npm run db:seed` for local/demo data only. It is intentionally blocked in production unless you explicitly override it.
 
 ## API Reference
 

@@ -1,8 +1,6 @@
 import 'dotenv/config'
 
-import { Prisma, PrismaClient } from '@prisma/client'
-import { PrismaNeon } from '@prisma/adapter-neon'
-import { PrismaPg } from '@prisma/adapter-pg'
+import { Prisma } from '@prisma/client'
 
 import {
     FREE_BATCH_CODE,
@@ -11,22 +9,9 @@ import {
     STANDARD_BATCH_KIND,
 } from '../lib/config/platform-policy'
 import { normalizeOptionalEmail } from '../lib/utils/contact-normalization'
+import { createScriptPrismaClient } from './runtime'
 
-const seedConnectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL
-
-if (!seedConnectionString) {
-    throw new Error('DIRECT_URL or DATABASE_URL is required to run prisma/seed.ts')
-}
-
-function isNeonConnectionString(connectionString: string) {
-    return new URL(connectionString).hostname.includes('neon.tech')
-}
-
-const adapter = isNeonConnectionString(seedConnectionString)
-    ? new PrismaNeon({ connectionString: seedConnectionString })
-    : new PrismaPg({ connectionString: seedConnectionString })
-
-const prisma = new PrismaClient({ adapter })
+const prisma = createScriptPrismaClient()
 
 const adminAccount = {
     email: 'tohin1400@gmail.com',
@@ -276,6 +261,12 @@ async function upsertDemoLead(freeTestId: string) {
 }
 
 async function main() {
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PRODUCTION_DEMO_SEED !== 'true') {
+        throw new Error(
+            'Refusing to run demo seed in production. Use npm run db:bootstrap:owner-admin for live environments, or set ALLOW_PRODUCTION_DEMO_SEED=true only if you intentionally want demo data.',
+        )
+    }
+
     console.log('🌱 Seeding database...')
 
     const admin = await upsertUser({

@@ -18,6 +18,8 @@ Use this file as the final go-live checklist for the current Vercel deployment m
 - `UPSTASH_REDIS_REST_TOKEN` is set
 - `JWT_SECRET` is set
 - `JWT_REFRESH_SECRET` is set
+- `OWNER_ADMIN_EMAIL` is set
+- `OWNER_ADMIN_NAME` is set
 - `NEXT_PUBLIC_APP_URL` matches the deployed domain
 - `GMAIL_USER` is set
 - `GMAIL_APP_PASSWORD` is set
@@ -30,6 +32,7 @@ Use this file as the final go-live checklist for the current Vercel deployment m
 ## 3. Database
 
 - `npm run db:migrate:deploy` completed successfully against production
+- `npm run db:bootstrap:owner-admin` completed successfully against production
 - Seed data is not being used as production data
 - One manual DB connection test passed
 - No persistent environment has been updated via `db push`
@@ -39,6 +42,7 @@ Use this file as the final go-live checklist for the current Vercel deployment m
 - OTP send works
 - OTP verify works
 - logout clears the session
+- exactly one owner admin exists after bootstrap and before adding users manually
 - admin can create users and batches
 - owner admin can create a sub-admin
 - sub-admin cannot manage the owner admin account
