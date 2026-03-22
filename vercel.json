@@ -6,7 +6,7 @@
       "maxDuration": 15
     },
     "app/api/admin/tests/generate-from-doc/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 180
     },
     "app/api/webhooks/ai-feedback/route.ts": {
       "maxDuration": 60

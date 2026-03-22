@@ -15,6 +15,8 @@ import {
 
 const COMPLETED_SESSION_STATUSES: SessionStatus[] = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED']
 const SUBMISSION_GRACE_PERIOD_MS = 30 * 1000
+const FREE_ATTEMPT_ALREADY_USED_MESSAGE =
+    'You have already given this free mock and are out of attempts. Get enrolled to UNIMONKS to access the paid ones.'
 
 type SafeQuestionOption = {
     id: string
@@ -175,13 +177,6 @@ function buildPublicFreeTestWhere(testId?: string): Prisma.TestWhereInput {
             none: {
                 OR: [
                     { studentId: { not: null } },
-                    {
-                        batch: {
-                            is: {
-                                kind: STANDARD_BATCH_KIND,
-                            },
-                        },
-                    },
                 ],
             },
         },
@@ -699,7 +694,7 @@ export async function startPublicFreeTestSession(
 
                     return serviceError(
                         'FREE_ATTEMPT_ALREADY_USED',
-                        'You have already used your free attempt for this mock.',
+                        FREE_ATTEMPT_ALREADY_USED_MESSAGE,
                         {
                             sessionId: existingSession.id,
                             status: 'error' in timedOutResult
@@ -723,7 +718,7 @@ export async function startPublicFreeTestSession(
 
             return serviceError(
                 'FREE_ATTEMPT_ALREADY_USED',
-                'You have already used your free attempt for this mock.',
+                FREE_ATTEMPT_ALREADY_USED_MESSAGE,
                 {
                     sessionId: existingSession.id,
                     status: existingSession.status,

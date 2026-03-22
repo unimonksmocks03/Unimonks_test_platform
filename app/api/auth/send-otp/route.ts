@@ -10,7 +10,7 @@ import { sendOTPRateLimit } from '@/lib/middleware/rate-limiter'
 
 const OTP_EXPIRY_MINUTES = 5
 const GENERIC_SUCCESS_MESSAGE = 'If the email is registered and active, a login code has been sent.'
-const AUTHENTICATED_ROLES = new Set(['ADMIN', 'STUDENT'])
+const AUTHENTICATED_ROLES = new Set(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
 
 async function sendOTPHandler(req: NextRequest): Promise<NextResponse> {
     const body = await req.json()

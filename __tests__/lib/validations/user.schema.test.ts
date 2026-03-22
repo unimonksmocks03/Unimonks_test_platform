@@ -8,7 +8,7 @@ import {
 
 const legacyRole = 'TEA' + 'CHER'
 
-test('CreateUserSchema only accepts student account creation', () => {
+test('CreateUserSchema accepts student and sub-admin account creation only', () => {
     const parsed = CreateUserSchema.parse({
         name: 'Alice Student',
         email: 'alice@example.com',
@@ -16,6 +16,14 @@ test('CreateUserSchema only accepts student account creation', () => {
     })
 
     expect(parsed.role).toBe('STUDENT')
+
+    const subAdminParsed = CreateUserSchema.parse({
+        name: 'Priya Support',
+        email: 'priya@example.com',
+        role: 'SUB_ADMIN',
+    })
+
+    expect(subAdminParsed.role).toBe('SUB_ADMIN')
 
     expect(CreateUserSchema.safeParse({
         name: 'Admin User',
@@ -30,8 +38,9 @@ test('CreateUserSchema only accepts student account creation', () => {
     }).success).toBe(false)
 })
 
-test('UpdateUserSchema allows admin and student values only', () => {
+test('UpdateUserSchema allows admin, sub-admin, and student values only', () => {
     expect(UpdateUserSchema.safeParse({ role: 'STUDENT' }).success).toBe(true)
+    expect(UpdateUserSchema.safeParse({ role: 'SUB_ADMIN' }).success).toBe(true)
     expect(UpdateUserSchema.safeParse({ role: 'ADMIN' }).success).toBe(true)
     expect(UpdateUserSchema.safeParse({ role: legacyRole }).success).toBe(false)
 })
@@ -48,4 +57,6 @@ test('UserQuerySchema trims filters to the final role set', () => {
         page: 2,
         limit: 25,
     })
+
+    expect(UserQuerySchema.safeParse({ role: 'SUB_ADMIN' }).success).toBe(true)
 })

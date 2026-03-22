@@ -6,7 +6,7 @@ interface JWTPayload extends JosePayload {
     role: string
 }
 
-type AppRole = 'ADMIN' | 'STUDENT'
+type AppRole = 'ADMIN' | 'SUB_ADMIN' | 'STUDENT'
 
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET!)
 if (!process.env.JWT_SECRET) {
@@ -40,13 +40,13 @@ function nextWithHeaders(requestHeaders: Headers, requestId: string) {
 
 const PUBLIC_ROUTES = ['/login', '/reset-password', '/forgot-password']
 
-const ROLE_ROUTES: Record<string, AppRole> = {
-    '/admin': 'ADMIN',
-    '/student': 'STUDENT',
+const ROLE_ROUTES: Record<string, AppRole[]> = {
+    '/admin': ['ADMIN', 'SUB_ADMIN'],
+    '/student': ['STUDENT'],
 }
 
 function isAppRole(role: string): role is AppRole {
-    return role === 'ADMIN' || role === 'STUDENT'
+    return role === 'ADMIN' || role === 'SUB_ADMIN' || role === 'STUDENT'
 }
 
 export async function proxy(req: NextRequest) {
@@ -102,9 +102,9 @@ export async function proxy(req: NextRequest) {
         return nextWithHeaders(requestHeaders, requestId)
     }
 
-    for (const [prefix, requiredRole] of Object.entries(ROLE_ROUTES)) {
+    for (const [prefix, requiredRoles] of Object.entries(ROLE_ROUTES)) {
         if (pathname.startsWith(prefix) || pathname.startsWith(`/api${prefix}`)) {
-            if (payload.role !== requiredRole) {
+            if (!requiredRoles.includes(payload.role)) {
                 if (pathname.startsWith('/api/')) {
                     return withRequestId(
                         NextResponse.json(
@@ -117,6 +117,7 @@ export async function proxy(req: NextRequest) {
 
                 const dashboardMap: Record<string, string> = {
                     ADMIN: '/admin/dashboard',
+                    SUB_ADMIN: '/admin/dashboard',
                     STUDENT: '/student/dashboard',
                 }
 

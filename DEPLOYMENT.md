@@ -89,6 +89,11 @@ Optional but recommended:
 
 ```env
 OPENAI_API_KEY=
+```
+
+Required for production cron authorization:
+
+```env
 CRON_SECRET=
 ```
 
@@ -102,7 +107,7 @@ Before first live use:
 npm run db:migrate:deploy
 ```
 
-If this is the first deployment and you are not using migrations yet, use `npx prisma db push` only for non-production setup. For client production, prefer real migrations.
+Do not use `db push` for Preview or Production. This codebase relies on committed migrations, and schema drift can cause runtime role/enum mismatches even when the app still builds.
 
 ## 5. Deploy Preview First
 
@@ -114,12 +119,15 @@ Use Preview before Production and test these flows end-to-end:
 - create test
 - import test from document
 - assign test to batch
+- publish a free mock to `FREE-Batch`
+- publish a paid mock to a standard batch
 - start test
 - autosave answers
 - submit test
 - AI feedback generation
 - admin analytics
 - admin impersonation
+- sub-admin creation and owner-only protections
 
 ## 6. Verify Background Jobs
 
@@ -177,7 +185,7 @@ For local development:
 ```bash
 docker compose up -d postgres redis
 npx @upstash/qstash-cli@latest dev
-npm run db:push
+npm run db:migrate:deploy
 npm run db:seed
 npm run dev
 ```

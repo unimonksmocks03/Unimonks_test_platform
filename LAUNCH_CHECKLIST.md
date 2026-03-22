@@ -25,13 +25,14 @@ Use this file as the final go-live checklist for the current Vercel deployment m
 - `QSTASH_CURRENT_SIGNING_KEY` is set
 - `QSTASH_NEXT_SIGNING_KEY` is set
 - `OPENAI_API_KEY` is set if AI features are enabled
-- `CRON_SECRET` is set if you want manual cron access outside Vercel Cron
+- `CRON_SECRET` is set for production cron authorization
 
 ## 3. Database
 
 - `npm run db:migrate:deploy` completed successfully against production
 - Seed data is not being used as production data
 - One manual DB connection test passed
+- No persistent environment has been updated via `db push`
 
 ## 4. Core Product Flows
 
@@ -39,10 +40,13 @@ Use this file as the final go-live checklist for the current Vercel deployment m
 - OTP verify works
 - logout clears the session
 - admin can create users and batches
-- teacher can create a manual test
-- teacher can import a test from `.docx` or text-based `.pdf`
-- teacher can assign a test to a batch
-- student can start a test only inside the allowed window
+- owner admin can create a sub-admin
+- sub-admin cannot manage the owner admin account
+- admin/sub-admin can create a manual test
+- admin/sub-admin can import a test from `.docx` or text-based `.pdf`
+- admin/sub-admin can assign a test to free, paid, and mixed audiences correctly
+- free user can start a free mock after lead capture
+- enrolled student can start a paid mock and reattempt up to 4 total times
 - autosave works
 - submit works
 - results page loads
@@ -53,7 +57,6 @@ Use this file as the final go-live checklist for the current Vercel deployment m
 - `/api/health` returns `200`
 - Vercel cron routes are enabled
 - QStash webhooks are reachable
-- finished test retention cleanup runs
 - reconcile job runs
 - no critical build warnings are blocking deployment
 

@@ -3,18 +3,26 @@ import {
     ArrowRight,
     BadgeCheck,
     CircleHelp,
+    Globe,
     GraduationCap,
     Lock,
+    Mail,
+    MapPin,
+    Phone,
     Radar,
     ShieldCheck,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
+import { UnimonksBrand } from '@/components/branding/unimonks-brand'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { PLATFORM_POLICY } from '@/lib/config/platform-policy'
+import { UNIMONKS_BRAND, UNIMONKS_CONTACT } from '@/lib/config/unimonks'
 import type { PublicMockCatalog } from '@/lib/services/free-test-service'
+import { cn } from '@/lib/utils'
 
 import { PublicShell } from './public-shell'
 import { TestCard } from './test-card'
@@ -62,6 +70,50 @@ const fallbackPremiumCards = [
     },
 ]
 
+type LandingContactItem = {
+    label: string
+    value: string
+    href: string
+    helper: string
+    icon: LucideIcon
+    external?: boolean
+    className?: string
+}
+
+const landingContactItems: LandingContactItem[] = [
+    {
+        label: 'Call or WhatsApp',
+        value: UNIMONKS_CONTACT.phoneDisplay,
+        href: UNIMONKS_CONTACT.phoneHref,
+        helper: 'Talk to the UNIMONKS team for admissions, batch guidance, and paid mock access.',
+        icon: Phone,
+    },
+    {
+        label: 'Email',
+        value: UNIMONKS_CONTACT.email,
+        href: UNIMONKS_CONTACT.emailHref,
+        helper: 'Share questions about mock tests, coaching plans, or enrollment.',
+        icon: Mail,
+    },
+    {
+        label: 'Website',
+        value: UNIMONKS_CONTACT.websiteLabel,
+        href: UNIMONKS_CONTACT.websiteUrl,
+        helper: 'Browse the wider coaching site and current course information.',
+        icon: Globe,
+        external: true,
+    },
+    {
+        label: 'Visit the center',
+        value: UNIMONKS_CONTACT.addressDisplay,
+        href: UNIMONKS_CONTACT.mapUrl,
+        helper: UNIMONKS_CONTACT.locationLabel,
+        icon: MapPin,
+        external: true,
+        className: 'sm:col-span-2',
+    },
+]
+
 type LandingPageProps = {
     catalog: PublicMockCatalog
 }
@@ -82,8 +134,9 @@ export function LandingPage({ catalog }: LandingPageProps) {
                             Public CUET mocks in front. Premium batch practice behind the lock.
                         </h1>
                         <p className="max-w-2xl text-lg leading-8 text-slate-600">
-                            UNIMONKS gives every serious CUET aspirant a clean public starting point: take a free mock,
-                            get a result immediately, and move into the paid batch system when you want the full program.
+                            {UNIMONKS_BRAND.shortName} gives every serious CUET aspirant a clean public starting point:
+                            take a free mock, get a result immediately, and move into the paid batch system when you want
+                            the full program.
                         </p>
                     </div>
 
@@ -245,7 +298,7 @@ export function LandingPage({ catalog }: LandingPageProps) {
                             </p>
                         </div>
                         <Button asChild className="rounded-2xl bg-white text-slate-950 hover:bg-white/90">
-                            <Link href="/#contact">Talk to UNIMONKS</Link>
+                            <Link href="/#contact">Talk to {UNIMONKS_BRAND.shortName}</Link>
                         </Button>
                     </div>
 
@@ -265,7 +318,7 @@ export function LandingPage({ catalog }: LandingPageProps) {
             <section id="why" className="mx-auto max-w-7xl px-4 py-18 sm:px-6 lg:px-8">
                 <div className="mb-10 space-y-3">
                     <p className="text-sm font-semibold uppercase tracking-[0.28em] text-emerald-700">
-                        Why UNIMONKS
+                        Why {UNIMONKS_BRAND.shortName}
                     </p>
                     <h2 className="font-serif text-4xl font-bold text-slate-950">
                         Built for a cleaner public funnel and a sharper paid experience.
@@ -305,24 +358,64 @@ export function LandingPage({ catalog }: LandingPageProps) {
 
             <section id="contact" className="mx-auto max-w-7xl px-4 pb-18 sm:px-6 lg:px-8">
                 <Card className="overflow-hidden border-0 bg-[linear-gradient(135deg,#1f2937_0%,#0f766e_100%)] text-white">
-                    <CardContent className="grid gap-10 p-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:p-10">
-                        <div className="space-y-5">
+                    <CardContent className="grid gap-10 p-8 lg:grid-cols-[minmax(0,1fr)_320px] lg:p-10">
+                        <div className="space-y-6">
                             <p className="text-sm font-semibold uppercase tracking-[0.28em] text-emerald-200">
-                                CTA and contact
+                                Contact {UNIMONKS_BRAND.shortName}
                             </p>
                             <h2 className="font-serif text-4xl font-bold">
-                                Take a free mock now, then let the result decide the next move.
+                                Take a free mock now, then talk to the team when you want the full CUET program.
                             </h2>
                             <p className="max-w-2xl text-base leading-7 text-white/78">
-                                Share your details, use your single free attempt well, and move into the paid batch lane
-                                when you want more depth. If you are already enrolled, skip the public lane and use login.
+                                The public lane stays open for first-time practice. When you want batch guidance,
+                                classroom support, or the paid mock stack, use any of the verified UNIMONKS contact
+                                routes below.
                             </p>
+
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                {landingContactItems.map((item) => (
+                                    <a
+                                        key={item.label}
+                                        href={item.href}
+                                        target={item.external ? '_blank' : undefined}
+                                        rel={item.external ? 'noreferrer' : undefined}
+                                        className={cn(
+                                            'rounded-[28px] border border-white/12 bg-white/10 p-5 transition-transform hover:-translate-y-0.5 hover:bg-white/14',
+                                            item.className,
+                                        )}
+                                    >
+                                        <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-white/12">
+                                            <item.icon className="h-5 w-5 text-emerald-200" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-200/90">
+                                                {item.label}
+                                            </div>
+                                            <div className="break-words text-base font-semibold text-white">
+                                                {item.value}
+                                            </div>
+                                            <p className="text-sm leading-6 text-white/70">{item.helper}</p>
+                                        </div>
+                                    </a>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="space-y-4 rounded-[28px] bg-white/10 p-6">
-                            <div className="flex items-center gap-3 text-sm text-white/86">
-                                <CircleHelp className="h-5 w-5 text-amber-300" />
-                                <span>Your lead details can be used for enrollment follow-up after the free mock.</span>
+                            <UnimonksBrand
+                                className="gap-3"
+                                imageClassName="h-16 w-auto max-w-full"
+                                titleClassName="text-[1.65rem]"
+                                cuetClassName="text-[1.65rem]"
+                                underlineClassName="mt-1 h-[3px] w-[96%]"
+                                variant="inverse"
+                            />
+                            <div className="flex items-start gap-3 text-sm leading-6 text-white/86">
+                                <CircleHelp className="mt-0.5 h-5 w-5 text-amber-300" />
+                                <span>
+                                    Free mocks do not require a login. Admin and enrolled students should use the OTP
+                                    login button in the top-right.
+                                </span>
                             </div>
                             <Button asChild className="h-12 w-full rounded-2xl bg-white text-slate-950 hover:bg-white/90">
                                 <Link href="/free-mocks">Start a Free Mock</Link>

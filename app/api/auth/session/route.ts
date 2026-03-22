@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { clearAuthCookies, destroySession, getSessionFromRequest } from '@/lib/session'
 import { withErrorHandler } from '@/lib/middleware/error-handler'
 
-const AUTHENTICATED_ROLES = new Set(['ADMIN', 'STUDENT'])
+const AUTHENTICATED_ROLES = new Set(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
 
 async function getSessionHandler(req: NextRequest): Promise<NextResponse> {
     const session = getSessionFromRequest(req)

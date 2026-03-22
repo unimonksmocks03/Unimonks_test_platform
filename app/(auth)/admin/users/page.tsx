@@ -20,11 +20,22 @@ import {
     Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
     SheetTrigger, SheetFooter, SheetClose
 } from "@/components/ui/sheet";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api-client";
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
+import { useAuth } from "@/lib/auth-context";
 
 type User = {
     id: string;
@@ -41,7 +52,25 @@ type UsersResponse = {
     totalPages: number;
 };
 
+type CreateUserPayload = {
+    name: string;
+    email: string;
+    role: "STUDENT" | "SUB_ADMIN";
+};
+
+function formatRoleLabel(role: string) {
+    if (role === "ADMIN") return "Admin";
+    if (role === "SUB_ADMIN") return "Sub-admin";
+    return "Student";
+}
+
+function normalizeSelectValue(value: string) {
+    return value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+}
+
 export default function UserManagementPage() {
+    const { user: currentUser } = useAuth();
+    const isPrimaryAdmin = currentUser?.role === "admin";
     const [isLoading, setIsLoading] = useState(true);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
     const [users, setUsers] = useState<User[]>([]);
@@ -51,6 +80,8 @@ export default function UserManagementPage() {
     const [statusFilter, setStatusFilter] = useState("all");
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
     const [creating, setCreating] = useState(false);
+    const [createRole, setCreateRole] = useState<"STUDENT" | "SUB_ADMIN">("STUDENT");
+    const [subAdminConfirmOpen, setSubAdminConfirmOpen] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
     const fetchUsers = useCallback(async (search?: string, role?: string, status?: string) => {
@@ -84,23 +115,32 @@ export default function UserManagementPage() {
         return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     }, [searchQuery, roleFilter, statusFilter, fetchUsers]);
 
-    const handleCreateUser = async (e: React.FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
+    const submitCreateUser = async (payload: CreateUserPayload) => {
         setCreating(true);
-        const formData = new FormData(e.currentTarget);
-        const name = formData.get("name") as string;
-        const email = formData.get("email") as string;
-        const role = "STUDENT";
-
-        const res = await apiClient.post("/api/admin/users", { name, email, role });
+        const res = await apiClient.post("/api/admin/users", payload);
         if (res.ok) {
-            toast.success("User Created", { description: `${name} has been added to the platform.` });
+            toast.success("User Created", {
+                description: `${payload.name} has been added as ${formatRoleLabel(payload.role).toLowerCase()}.`,
+            });
             setCreateDialogOpen(false);
+            setCreateRole("STUDENT");
             fetchUsers(searchQuery, roleFilter, statusFilter);
         } else {
             toast.error("Failed to create user", { description: res.message });
         }
         setCreating(false);
+    };
+
+    const handleCreateUser = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        const formData = new FormData(e.currentTarget);
+        const payload: CreateUserPayload = {
+            name: (formData.get("name") as string).trim(),
+            email: (formData.get("email") as string).trim(),
+            role: createRole,
+        };
+
+        await submitCreateUser(payload);
     };
 
     const handleSaveUser = async (userId: string, formEl: HTMLDivElement) => {
@@ -113,8 +153,8 @@ export default function UserManagementPage() {
 
         const roleSelect = formEl.querySelector<HTMLButtonElement>(`[data-field="role"]`);
         const statusSelect = formEl.querySelector<HTMLButtonElement>(`[data-field="status"]`);
-        if (roleSelect?.textContent) body.role = roleSelect.textContent.toUpperCase();
-        if (statusSelect?.textContent) body.status = statusSelect.textContent.toUpperCase();
+        if (roleSelect?.textContent) body.role = normalizeSelectValue(roleSelect.textContent);
+        if (statusSelect?.textContent) body.status = normalizeSelectValue(statusSelect.textContent);
 
         const res = await apiClient.patch(`/api/admin/users/${userId}`, body);
         if (res.ok) {
@@ -153,21 +193,29 @@ export default function UserManagementPage() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b pb-6 gap-4" style={{ borderColor: 'var(--border-soft)' }}>
                 <div>
                     <h1 className="text-3xl font-serif font-bold text-slate-900 tracking-tight">User Management</h1>
-                    <p className="text-slate-500 mt-1">Manage the protected admin account and enrolled student access.</p>
+                    <p className="text-slate-500 mt-1">Manage the protected owner admin, temporary sub-admins, and enrolled student access.</p>
                 </div>
 
-                <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+                <Dialog
+                    open={createDialogOpen}
+                    onOpenChange={(open) => {
+                        setCreateDialogOpen(open);
+                        if (!open) {
+                            setCreateRole("STUDENT");
+                        }
+                    }}
+                >
                     <DialogTrigger asChild>
                         <Button className="bg-primary hover:bg-primary/90 rounded-xl px-6 h-12 shadow-clay-inner text-white font-bold text-base">
                             <Plus className="h-5 w-5 mr-2" />
-                            Add Student
+                            Add User
                         </Button>
                     </DialogTrigger>
                     <DialogContent className="sm:max-w-[425px] rounded-3xl p-6 border-0 shadow-clay-outer">
                         <DialogHeader>
-                            <DialogTitle className="font-serif text-2xl">Create Student</DialogTitle>
+                            <DialogTitle className="font-serif text-2xl">Create User</DialogTitle>
                             <DialogDescription>
-                                Add an enrolled student account. The admin account is fixed and cannot be duplicated here.
+                                Add an enrolled student or grant temporary sub-admin access. The owner admin account remains fixed.
                             </DialogDescription>
                         </DialogHeader>
                         <form onSubmit={handleCreateUser}>
@@ -180,10 +228,43 @@ export default function UserManagementPage() {
                                     <Label htmlFor="email" className="font-bold text-slate-700">Email Address</Label>
                                     <Input id="email" name="email" type="email" placeholder="alice@example.com" required className="rounded-xl h-11 bg-surface-2 border-transparent" />
                                 </div>
+                                <div className="grid gap-2">
+                                    <Label className="font-bold text-slate-700">Role</Label>
+                                    <Select
+                                        value={createRole}
+                                        onValueChange={(value) => {
+                                            if (value === "SUB_ADMIN") {
+                                                setSubAdminConfirmOpen(true);
+                                                return;
+                                            }
+
+                                            setCreateRole("STUDENT");
+                                        }}
+                                    >
+                                        <SelectTrigger className="rounded-xl h-11 bg-surface-2 border-transparent font-medium">
+                                            <SelectValue placeholder="Select role" />
+                                        </SelectTrigger>
+                                        <SelectContent className="rounded-xl">
+                                            <SelectItem value="STUDENT">Student</SelectItem>
+                                            {isPrimaryAdmin ? (
+                                                <SelectItem value="SUB_ADMIN">Sub-admin</SelectItem>
+                                            ) : null}
+                                        </SelectContent>
+                                    </Select>
+                                    {isPrimaryAdmin ? (
+                                        <p className="text-xs text-slate-500">
+                                            Sub-admins get full admin-panel access, but only the owner admin can suspend, deactivate, or delete them.
+                                        </p>
+                                    ) : (
+                                        <p className="text-xs text-slate-500">
+                                            Only the owner admin can grant sub-admin access. You can add student accounts from here.
+                                        </p>
+                                    )}
+                                </div>
                             </div>
                             <DialogFooter>
                                 <Button type="submit" disabled={creating} className="w-full bg-primary hover:bg-primary/90 rounded-xl h-12 text-base font-bold shadow-clay-inner">
-                                    {creating ? "Creating..." : "Create Student"}
+                                    {creating ? "Creating..." : createRole === "SUB_ADMIN" ? "Continue" : "Create User"}
                                 </Button>
                             </DialogFooter>
                         </form>
@@ -210,6 +291,7 @@ export default function UserManagementPage() {
                             </SelectTrigger>
                             <SelectContent className="rounded-xl">
                                 <SelectItem value="all">All Roles</SelectItem>
+                                <SelectItem value="sub_admin">Sub-admin</SelectItem>
                                 <SelectItem value="student">Student</SelectItem>
                                 <SelectItem value="admin">Admin</SelectItem>
                             </SelectContent>
@@ -261,109 +343,167 @@ export default function UserManagementPage() {
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            users.map((user) => (
-                                <TableRow key={user.id} className="group border-0 hover:bg-surface/30 transition-colors">
-                                    <TableCell className="pl-6 py-4">
-                                        <Checkbox className="border-slate-300 rounded-[4px] data-[state=checked]:bg-primary" />
-                                    </TableCell>
-                                    <TableCell className="font-bold text-slate-900 group-hover:text-primary transition-colors">
-                                        {user.name}
-                                    </TableCell>
-                                    <TableCell className="text-slate-500 font-medium">{user.email}</TableCell>
-                                    <TableCell className="text-slate-700 font-medium capitalize">{user.role.toLowerCase()}</TableCell>
-                                    <TableCell>
-                                        <Badge variant="secondary" className={statusBadgeStyle(user.status)}>
-                                            {user.status}
-                                        </Badge>
-                                    </TableCell>
-                                    <TableCell className="text-right pr-8">
-                                        <div className="flex items-center justify-end gap-1">
-                                            <Sheet>
-                                                <SheetTrigger asChild>
-                                                    <Button variant="ghost" size="icon" className="h-9 w-9 shadow-none text-slate-400 hover:text-primary hover:bg-surface-2 rounded-xl">
-                                                        <Edit className="h-4 w-4" />
-                                                    </Button>
-                                                </SheetTrigger>
-                                                <SheetContent className="border-l-0 shadow-clay-outer p-0 sm:max-w-md w-full flex flex-col">
-                                                    <div className="p-6 border-b" style={{ borderColor: 'var(--border-soft)' }}>
-                                                        <SheetHeader>
-                                                            <SheetTitle className="font-serif text-2xl text-slate-900">Edit User</SheetTitle>
-                                                            <SheetDescription>
-                                                                Make changes to {user.name}&apos;s profile here.
-                                                            </SheetDescription>
-                                                        </SheetHeader>
-                                                    </div>
-                                                    <div className="p-6 flex-1 overflow-auto grid gap-6 content-start" id={`edit-form-${user.id}`}>
-                                                        <div className="grid gap-2">
-                                                            <Label className="font-bold text-slate-700">Full Name</Label>
-                                                            <Input data-field="name" defaultValue={user.name} className="rounded-xl h-11 bg-surface-2 border-transparent" />
+                            users.map((user) => {
+                                const isOwnerAdminRow = user.role === "ADMIN";
+                                const isSubAdminRow = user.role === "SUB_ADMIN";
+                                const isOwnerAdminProtected = isOwnerAdminRow && !isPrimaryAdmin;
+                                const isSubAdminProtected = isSubAdminRow && !isPrimaryAdmin;
+                                const canDeleteUser =
+                                    user.status !== "INACTIVE" &&
+                                    !isOwnerAdminRow &&
+                                    (!isSubAdminRow || isPrimaryAdmin);
+
+                                return (
+                                    <TableRow key={user.id} className="group border-0 hover:bg-surface/30 transition-colors">
+                                        <TableCell className="pl-6 py-4">
+                                            <Checkbox className="border-slate-300 rounded-[4px] data-[state=checked]:bg-primary" />
+                                        </TableCell>
+                                        <TableCell className="font-bold text-slate-900 group-hover:text-primary transition-colors">
+                                            {user.name}
+                                        </TableCell>
+                                        <TableCell className="text-slate-500 font-medium">{user.email}</TableCell>
+                                        <TableCell className="text-slate-700 font-medium">{formatRoleLabel(user.role)}</TableCell>
+                                        <TableCell>
+                                            <Badge variant="secondary" className={statusBadgeStyle(user.status)}>
+                                                {user.status}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right pr-8">
+                                            <div className="flex items-center justify-end gap-1">
+                                                <Sheet>
+                                                    <SheetTrigger asChild>
+                                                        <Button variant="ghost" size="icon" className="h-9 w-9 shadow-none text-slate-400 hover:text-primary hover:bg-surface-2 rounded-xl">
+                                                            <Edit className="h-4 w-4" />
+                                                        </Button>
+                                                    </SheetTrigger>
+                                                    <SheetContent className="border-l-0 shadow-clay-outer p-0 sm:max-w-md w-full flex flex-col">
+                                                        <div className="p-6 border-b" style={{ borderColor: 'var(--border-soft)' }}>
+                                                            <SheetHeader>
+                                                                <SheetTitle className="font-serif text-2xl text-slate-900">Edit User</SheetTitle>
+                                                                <SheetDescription>
+                                                                    Make changes to {user.name}&apos;s profile here.
+                                                                </SheetDescription>
+                                                            </SheetHeader>
                                                         </div>
-                                                        <div className="grid gap-2">
-                                                            <Label className="font-bold text-slate-700">Email Address</Label>
-                                                            <Input data-field="email" defaultValue={user.email} className="rounded-xl h-11 bg-surface-2 border-transparent" />
-                                                        </div>
-                                                        <div className="grid gap-2">
-                                                            <Label className="font-bold text-slate-700">Role</Label>
-                                                            <Input
-                                                                value={user.role === "ADMIN" ? "Admin" : "Student"}
-                                                                disabled
-                                                                className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
-                                                            />
-                                                        </div>
-                                                        <div className="grid gap-2">
-                                                            <Label className="font-bold text-slate-700">Status</Label>
-                                                            {user.role === "ADMIN" ? (
+                                                        <div className="p-6 flex-1 overflow-auto grid gap-6 content-start" id={`edit-form-${user.id}`}>
+                                                            <div className="grid gap-2">
+                                                                <Label className="font-bold text-slate-700">Full Name</Label>
                                                                 <Input
-                                                                    value="ACTIVE"
-                                                                    disabled
-                                                                    className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
+                                                                    data-field="name"
+                                                                    defaultValue={user.name}
+                                                                    disabled={isOwnerAdminProtected || isSubAdminProtected}
+                                                                    className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100 disabled:text-slate-600"
                                                                 />
-                                                            ) : (
-                                                                <Select defaultValue={user.status}>
-                                                                    <SelectTrigger data-field="status" className="rounded-xl h-11 bg-surface-2 border-transparent">
-                                                                        <SelectValue placeholder="Select status" />
-                                                                    </SelectTrigger>
-                                                                    <SelectContent className="rounded-xl">
-                                                                        <SelectItem value="ACTIVE">Active</SelectItem>
-                                                                        <SelectItem value="INACTIVE">Inactive</SelectItem>
-                                                                        <SelectItem value="SUSPENDED">Suspended</SelectItem>
-                                                                    </SelectContent>
-                                                                </Select>
-                                                            )}
+                                                            </div>
+                                                            <div className="grid gap-2">
+                                                                <Label className="font-bold text-slate-700">Email Address</Label>
+                                                                <Input
+                                                                    data-field="email"
+                                                                    defaultValue={user.email}
+                                                                    disabled={isOwnerAdminProtected || isSubAdminProtected}
+                                                                    className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100 disabled:text-slate-600"
+                                                                />
+                                                            </div>
+                                                            <div className="grid gap-2">
+                                                                <Label className="font-bold text-slate-700">Role</Label>
+                                                                {isOwnerAdminRow ? (
+                                                                    <Input
+                                                                        value="Admin (Owner)"
+                                                                        disabled
+                                                                        className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
+                                                                    />
+                                                                ) : isPrimaryAdmin ? (
+                                                                    <Select defaultValue={user.role}>
+                                                                        <SelectTrigger data-field="role" className="rounded-xl h-11 bg-surface-2 border-transparent">
+                                                                            <SelectValue placeholder="Select role" />
+                                                                        </SelectTrigger>
+                                                                        <SelectContent className="rounded-xl">
+                                                                            <SelectItem value="STUDENT">Student</SelectItem>
+                                                                            <SelectItem value="SUB_ADMIN">Sub-admin</SelectItem>
+                                                                        </SelectContent>
+                                                                    </Select>
+                                                                ) : (
+                                                                    <Input
+                                                                        value={formatRoleLabel(user.role)}
+                                                                        disabled
+                                                                        className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                            <div className="grid gap-2">
+                                                                <Label className="font-bold text-slate-700">Status</Label>
+                                                                {isOwnerAdminRow || isSubAdminProtected ? (
+                                                                    <Input
+                                                                        value={user.status}
+                                                                        disabled
+                                                                        className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
+                                                                    />
+                                                                ) : (
+                                                                    <Select defaultValue={user.status}>
+                                                                        <SelectTrigger data-field="status" className="rounded-xl h-11 bg-surface-2 border-transparent">
+                                                                            <SelectValue placeholder="Select status" />
+                                                                        </SelectTrigger>
+                                                                        <SelectContent className="rounded-xl">
+                                                                            <SelectItem value="ACTIVE">Active</SelectItem>
+                                                                            <SelectItem value="INACTIVE">Inactive</SelectItem>
+                                                                            <SelectItem value="SUSPENDED">Suspended</SelectItem>
+                                                                        </SelectContent>
+                                                                    </Select>
+                                                                )}
+                                                            </div>
+                                                            {isOwnerAdminProtected ? (
+                                                                <p className="text-xs text-slate-500">
+                                                                    Only the owner admin can change the main admin account details.
+                                                                </p>
+                                                            ) : isOwnerAdminRow ? (
+                                                                <p className="text-xs text-slate-500">
+                                                                    The owner admin account is protected from role, status, and deletion changes.
+                                                                </p>
+                                                            ) : isSubAdminProtected ? (
+                                                                <p className="text-xs text-slate-500">
+                                                                    Only the owner admin can change or revoke a sub-admin account.
+                                                                </p>
+                                                            ) : isSubAdminRow ? (
+                                                                <p className="text-xs text-slate-500">
+                                                                    This user currently has full admin-panel access. The owner admin can downgrade or deactivate it here.
+                                                                </p>
+                                                            ) : null}
                                                         </div>
-                                                        {user.role === "ADMIN" ? (
-                                                            <p className="text-xs text-slate-500">
-                                                                The primary admin account is protected from role, status, and deletion changes.
-                                                            </p>
-                                                        ) : null}
-                                                    </div>
-                                                    <div className="p-6 border-t bg-surface-2" style={{ borderColor: 'var(--border-soft)' }}>
-                                                        <SheetFooter className="flex-col sm:flex-row gap-2">
-                                                            <SheetClose asChild>
-                                                                <Button variant="outline" className="rounded-xl h-12 w-full sm:w-auto border-transparent shadow-sm bg-white">Cancel</Button>
-                                                            </SheetClose>
-                                                            <Button type="button" onClick={() => {
-                                                                const formEl = document.getElementById(`edit-form-${user.id}`);
-                                                                if (formEl) handleSaveUser(user.id, formEl as HTMLDivElement);
-                                                            }} className="rounded-xl h-12 w-full sm:w-auto bg-primary text-white font-bold shadow-clay-inner">Save Changes</Button>
-                                                        </SheetFooter>
-                                                    </div>
-                                                </SheetContent>
-                                            </Sheet>
-                                            {user.status !== "INACTIVE" && user.role !== "ADMIN" && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-9 w-9 shadow-none text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl"
-                                                    onClick={() => handleDeleteUser(user.id, user.name)}
-                                                >
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            )}
-                                        </div>
-                                    </TableCell>
-                                </TableRow>
-                            ))
+                                                        <div className="p-6 border-t bg-surface-2" style={{ borderColor: 'var(--border-soft)' }}>
+                                                            <SheetFooter className="flex-col sm:flex-row gap-2">
+                                                                <SheetClose asChild>
+                                                                    <Button variant="outline" className="rounded-xl h-12 w-full sm:w-auto border-transparent shadow-sm bg-white">Cancel</Button>
+                                                                </SheetClose>
+                                                                <Button
+                                                                    type="button"
+                                                                    disabled={isOwnerAdminProtected || isSubAdminProtected}
+                                                                    onClick={() => {
+                                                                        const formEl = document.getElementById(`edit-form-${user.id}`);
+                                                                        if (formEl) handleSaveUser(user.id, formEl as HTMLDivElement);
+                                                                    }}
+                                                                    className="rounded-xl h-12 w-full sm:w-auto bg-primary text-white font-bold shadow-clay-inner"
+                                                                >
+                                                                    Save Changes
+                                                                </Button>
+                                                            </SheetFooter>
+                                                        </div>
+                                                    </SheetContent>
+                                                </Sheet>
+                                                {canDeleteUser && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-9 w-9 shadow-none text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl"
+                                                        onClick={() => handleDeleteUser(user.id, user.name)}
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })
                         )}
                     </TableBody>
                 </Table>
@@ -381,6 +521,40 @@ export default function UserManagementPage() {
                 showDisableOption={false}
                 onPermanentDelete={handlePermanentDeactivate}
             />
+
+            <AlertDialog
+                open={subAdminConfirmOpen}
+                onOpenChange={(open) => {
+                    setSubAdminConfirmOpen(open);
+                    if (!open && createRole !== "SUB_ADMIN") {
+                        setCreateRole("STUDENT");
+                    }
+                }}
+            >
+                <AlertDialogContent className="rounded-2xl border-0 shadow-lg max-w-md">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle className="font-serif text-xl text-slate-900">
+                            Grant sub-admin access?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription className="text-slate-500 leading-relaxed">
+                            This user will get full access to the admin panel. Only the owner admin can suspend, deactivate,
+                            or delete a sub-admin later.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel className="rounded-xl border-slate-200">Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            className="rounded-xl bg-primary text-white hover:bg-primary/90"
+                            onClick={() => {
+                                setCreateRole("SUB_ADMIN");
+                                setSubAdminConfirmOpen(false);
+                            }}
+                        >
+                            Yes, make this a sub-admin
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

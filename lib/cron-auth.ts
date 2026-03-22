@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 
 export function isAuthorizedCronRequest(req: NextRequest) {
     const authHeader = req.headers.get('authorization')
-    const cronSecret = process.env.CRON_SECRET
+    const cronSecret = process.env.CRON_SECRET?.trim()
 
     if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
         return true
@@ -12,6 +12,5 @@ export function isAuthorizedCronRequest(req: NextRequest) {
         return true
     }
 
-    const userAgent = req.headers.get('user-agent') || ''
-    return userAgent.toLowerCase().startsWith('vercel-cron/')
+    return false
 }

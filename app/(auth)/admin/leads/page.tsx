@@ -47,9 +47,9 @@ type LeadQueueResponse = {
 type LeadSessionSummary = NonNullable<LeadQueueItem["latestSession"]>;
 
 const REVIEW_FILTERS = [
+    { value: "all", label: "All Leads" },
     { value: "unreviewed", label: "Unreviewed" },
     { value: "reviewed", label: "Reviewed" },
-    { value: "all", label: "All Leads" },
 ] as const;
 
 function formatSessionStatus(status: LeadSessionSummary["status"]) {
@@ -74,7 +74,7 @@ export default function AdminLeadsPage() {
     const [totalPages, setTotalPages] = useState(1);
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
-    const [reviewedFilter, setReviewedFilter] = useState<(typeof REVIEW_FILTERS)[number]["value"]>("unreviewed");
+    const [reviewedFilter, setReviewedFilter] = useState<(typeof REVIEW_FILTERS)[number]["value"]>("all");
     const [updatingLeadId, setUpdatingLeadId] = useState<string | null>(null);
 
     const fetchLeads = useCallback(async (filters?: {
@@ -82,34 +82,47 @@ export default function AdminLeadsPage() {
         reviewed?: string;
         page?: number;
     }) => {
-        setIsRefreshing(true);
-        const response = await apiClient.get<LeadQueueResponse>("/api/admin/leads", {
+        return apiClient.get<LeadQueueResponse>("/api/admin/leads", {
             search: filters?.search || undefined,
             reviewed: filters?.reviewed || undefined,
             page: filters?.page || 1,
             limit: 25,
         });
-
-        if (response.ok) {
-            startTransition(() => {
-                setLeads(response.data.leads);
-                setTotal(response.data.total);
-                setTotalPages(response.data.totalPages);
-            });
-        } else {
-            toast.error("Failed to load leads", { description: response.message });
-        }
-
-        setIsLoading(false);
-        setIsRefreshing(false);
     }, []);
 
     useEffect(() => {
-        void fetchLeads({
-            search: deferredSearch.trim() || undefined,
-            reviewed: reviewedFilter,
-            page,
-        });
+        let isCancelled = false;
+
+        const loadLeads = async () => {
+            const response = await fetchLeads({
+                search: deferredSearch.trim() || undefined,
+                reviewed: reviewedFilter,
+                page,
+            });
+
+            if (isCancelled) {
+                return;
+            }
+
+            if (response.ok) {
+                startTransition(() => {
+                    setLeads(response.data.leads);
+                    setTotal(response.data.total);
+                    setTotalPages(response.data.totalPages);
+                });
+            } else {
+                toast.error("Failed to load leads", { description: response.message });
+            }
+
+            setIsLoading(false);
+            setIsRefreshing(false);
+        };
+
+        void loadLeads();
+
+        return () => {
+            isCancelled = true;
+        };
     }, [deferredSearch, fetchLeads, page, reviewedFilter]);
 
     const handleReviewToggle = async (leadId: string, isReviewed: boolean) => {
@@ -126,13 +139,23 @@ export default function AdminLeadsPage() {
             return;
         }
 
-        toast.success(isReviewed ? "Lead marked as reviewed" : "Lead moved back to unreviewed");
-
-        await fetchLeads({
-            search: deferredSearch.trim() || undefined,
-            reviewed: reviewedFilter,
-            page,
+        // Keep the updated lead visible in the current table instead of immediately
+        // refetching and letting the active reviewed filter remove it from view.
+        startTransition(() => {
+            setLeads((currentLeads) =>
+                currentLeads.map((lead) =>
+                    lead.id === response.data.lead.id
+                        ? {
+                            ...lead,
+                            isReviewed: response.data.lead.isReviewed,
+                            reviewedAt: response.data.lead.reviewedAt,
+                        }
+                        : lead,
+                ),
+            );
         });
+
+        toast.success(isReviewed ? "Lead marked as reviewed" : "Lead moved back to unreviewed");
 
         setUpdatingLeadId(null);
     };
@@ -160,6 +183,7 @@ export default function AdminLeadsPage() {
                     <Input
                         value={search}
                         onChange={(event) => {
+                            setIsRefreshing(true);
                             setSearch(event.target.value);
                             setPage(1);
                         }}
@@ -170,6 +194,7 @@ export default function AdminLeadsPage() {
                 <Select
                     value={reviewedFilter}
                     onValueChange={(value) => {
+                        setIsRefreshing(true);
                         setReviewedFilter(value as typeof reviewedFilter);
                         setPage(1);
                     }}
@@ -304,7 +329,10 @@ export default function AdminLeadsPage() {
                         variant="outline"
                         className="rounded-xl"
                         disabled={page <= 1 || isRefreshing}
-                        onClick={() => setPage((current) => Math.max(1, current - 1))}
+                        onClick={() => {
+                            setIsRefreshing(true);
+                            setPage((current) => Math.max(1, current - 1));
+                        }}
                     >
                         Previous
                     </Button>
@@ -312,7 +340,10 @@ export default function AdminLeadsPage() {
                         variant="outline"
                         className="rounded-xl"
                         disabled={page >= totalPages || isRefreshing}
-                        onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                        onClick={() => {
+                            setIsRefreshing(true);
+                            setPage((current) => Math.min(totalPages, current + 1));
+                        }}
                     >
                         Next
                     </Button>

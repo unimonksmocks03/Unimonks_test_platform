@@ -37,15 +37,12 @@ export function mapTestServiceError(error: TestServiceError) {
                 return 403
             case 'NOT_FOUND':
                 return 404
-            case 'RATE_LIMITED':
-                return 429
             case 'BAD_REQUEST':
             case 'PARSE_ERROR':
             case 'UNSUPPORTED_DIRECT_ASSIGNMENTS':
                 return 400
             case 'GENERATION_FAILED':
                 return 500
-            case 'INVALID_ASSIGNMENT_MIX':
             case 'INVALID_TRANSITION':
             case 'NO_ASSIGNMENTS':
             case 'NO_QUESTIONS':

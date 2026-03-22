@@ -6,7 +6,7 @@ import { generateAdminTestFromDocument } from '@/lib/services/test-service'
 import { mapTestServiceError } from '@/app/api/admin/tests/_lib/route-helpers'
 import { Role } from '@prisma/client'
 
-export const maxDuration = 60
+export const maxDuration = 180
 
 // POST /api/admin/tests/generate-from-doc — import a document into a draft test
 async function postHandler(

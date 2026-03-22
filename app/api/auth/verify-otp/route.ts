@@ -10,7 +10,7 @@ import { verifyOTPRateLimit } from '@/lib/middleware/rate-limiter'
 
 const LOCKOUT_MAX = 5
 const LOCKOUT_DURATION = 900 // 15 minutes in seconds
-const AUTHENTICATED_ROLES = new Set(['ADMIN', 'STUDENT'])
+const AUTHENTICATED_ROLES = new Set(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
 
 async function verifyOTPHandler(req: NextRequest): Promise<NextResponse> {
     const body = await req.json()

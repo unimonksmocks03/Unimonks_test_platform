@@ -61,6 +61,16 @@ test('AssignTestSchema requires at least one target and preserves batch assignme
     })
 })
 
+test('AssignTestSchema accepts database UUIDs that are valid in Postgres even when they are not RFC-versioned UUIDs', () => {
+    const parsed = AssignTestSchema.parse({
+        batchIds: ['4e979f2d-bbfe-0cc5-a2b0-207d5d21dd1b'],
+    })
+
+    expect(parsed).toEqual({
+        batchIds: ['4e979f2d-bbfe-0cc5-a2b0-207d5d21dd1b'],
+    })
+})
+
 test('TestQuerySchema trims search input for the admin tests list', () => {
     const parsed = TestQuerySchema.parse({
         search: '  physics  ',

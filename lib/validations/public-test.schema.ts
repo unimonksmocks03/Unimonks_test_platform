@@ -5,13 +5,14 @@ import {
     LeadContactNameSchema,
     LeadContactPhoneSchema,
 } from '@/lib/validations/contact.schema'
+import { dbUuid } from '@/lib/validations/db-id.schema'
 
 export const PublicTestParamSchema = z.object({
-    testId: z.string().uuid('Valid test ID is required'),
+    testId: dbUuid('Valid test ID is required'),
 })
 
 export const PublicSessionParamSchema = z.object({
-    sessionId: z.string().uuid('Valid session ID is required'),
+    sessionId: dbUuid('Valid session ID is required'),
 })
 
 export const PublicLeadCaptureSchema = z.object({
@@ -21,7 +22,7 @@ export const PublicLeadCaptureSchema = z.object({
 })
 
 export const PublicAnswerEntrySchema = z.object({
-    questionId: z.string().uuid('Valid question ID is required'),
+    questionId: dbUuid('Valid question ID is required'),
     optionId: z.string().trim().min(1, 'Option ID is required').nullable(),
     markedForReview: z.boolean().optional(),
     answeredAt: z.string().datetime().optional(),

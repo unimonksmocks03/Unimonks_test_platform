@@ -1,7 +1,8 @@
 import * as nodemailer from 'nodemailer'
+import { UNIMONKS_BRAND } from '@/lib/config/unimonks'
 import { getAppEnv, getEmailEnv } from '@/lib/env'
 
-const APP_NAME = 'Unimonk'
+const APP_NAME = UNIMONKS_BRAND.shortName
 
 function getTransporter() {
   const { gmailUser, gmailAppPassword } = getEmailEnv()

@@ -2,9 +2,9 @@ import { BatchKind, Difficulty, Prisma, Role, SessionStatus, TestStatus } from '
 
 import { FREE_BATCH_KIND, STANDARD_BATCH_KIND } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
-import { redis } from '@/lib/redis'
 import {
-    extractQuestionsFromDocumentText,
+    enrichGeneratedQuestionsMetadata,
+    extractQuestionsFromDocumentTextPrecisely,
     generateQuestionsFromText,
     generateQuestionsFromPdfVisionFallback,
     parseDocumentToText,
@@ -22,8 +22,6 @@ import type {
 const COMPLETED_SESSION_STATUSES: SessionStatus[] = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED']
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 const MIN_GENERATED_QUESTIONS = 30
-const DOC_GENERATION_RATE_LIMIT_MAX = 5
-const DOC_GENERATION_RATE_LIMIT_WINDOW_SECONDS = 60 * 60
 
 type ServiceErrorCode =
     | 'ACTIVE_SESSIONS'
@@ -31,7 +29,6 @@ type ServiceErrorCode =
     | 'FORBIDDEN'
     | 'GENERATION_FAILED'
     | 'INACTIVE_ADMIN'
-    | 'INVALID_ASSIGNMENT_MIX'
     | 'INVALID_TRANSITION'
     | 'NO_ASSIGNMENTS'
     | 'NO_QUESTIONS'
@@ -39,7 +36,6 @@ type ServiceErrorCode =
     | 'NOT_EDITABLE'
     | 'NOT_FOUND'
     | 'PARSE_ERROR'
-    | 'RATE_LIMITED'
     | 'UNSUPPORTED_DIRECT_ASSIGNMENTS'
     | 'WINDOW_OPEN'
 
@@ -51,7 +47,7 @@ export type TestServiceError = {
     retryAfter?: number
 }
 
-type BatchAudience = 'FREE' | 'PAID' | 'UNASSIGNED' | 'INVALID'
+type BatchAudience = 'FREE' | 'PAID' | 'HYBRID' | 'UNASSIGNED'
 
 type DocumentUploadValidationInput = {
     fileName?: string | null
@@ -80,10 +76,11 @@ type AdminDocumentGenerationInput = {
 }
 
 type DocumentImportDiagnostics = {
-    parserStatus: 'OK' | 'FAILED' | 'WEAK_OUTPUT'
+    parserStatus: 'OK' | 'FAILED' | 'WEAK_OUTPUT' | 'REPAIRED'
     aiFallbackUsed: boolean
     reportParserIssue: boolean
     warning: string | null
+    metadataAiUsed?: boolean
 }
 
 function serviceError(
@@ -114,7 +111,7 @@ export function classifyBatchAudience(batchKinds: readonly BatchKind[]): BatchAu
     const hasStandardBatch = batchKinds.includes(STANDARD_BATCH_KIND)
 
     if (hasFreeBatch && hasStandardBatch) {
-        return 'INVALID'
+        return 'HYBRID'
     }
 
     if (hasFreeBatch) {
@@ -125,16 +122,8 @@ export function classifyBatchAudience(batchKinds: readonly BatchKind[]): BatchAu
 }
 
 export function validateBatchAudienceConsistency(batchKinds: readonly BatchKind[]) {
-    const audience = classifyBatchAudience(batchKinds)
-
-    if (audience !== 'INVALID') {
-        return null
-    }
-
-    return serviceError(
-        'INVALID_ASSIGNMENT_MIX',
-        'Free-system batches cannot be mixed with paid batches in the same assignment.',
-    )
+    void batchKinds
+    return null
 }
 
 export function validateAdminDocumentUpload(input: DocumentUploadValidationInput): DocumentUploadValidationResult | TestServiceError {
@@ -289,18 +278,30 @@ export function validateDraftEditableStatus(status: TestStatus) {
     return ensureDraftEditable(status)
 }
 
+function ensureAssignmentEditable(status: TestStatus) {
+    if (status === 'DRAFT' || status === 'PUBLISHED') {
+        return null
+    }
+
+    return serviceError('NOT_EDITABLE', 'Archived tests are read-only')
+}
+
+export function validateAssignmentEditableStatus(status: TestStatus) {
+    return ensureAssignmentEditable(status)
+}
+
 async function ensureActiveAdmin(adminId: string) {
     const admin = await prisma.user.findUnique({
         where: { id: adminId },
         select: { id: true, role: true, status: true },
     })
 
-    if (!admin || admin.role !== Role.ADMIN) {
-        return serviceError('FORBIDDEN', 'Only admins can manage tests through this route')
+    if (!admin || (admin.role !== Role.ADMIN && admin.role !== Role.SUB_ADMIN)) {
+        return serviceError('FORBIDDEN', 'Only admin operators can manage tests through this route')
     }
 
     if (admin.status !== 'ACTIVE') {
-        return serviceError('INACTIVE_ADMIN', 'Only active admins can manage tests')
+        return serviceError('INACTIVE_ADMIN', 'Only active admin operators can manage tests')
     }
 
     return admin
@@ -495,6 +496,7 @@ export async function getAdminTest(testId: string) {
         test: {
             ...buildAdminTestListItem(test),
             isEditable: test.status === 'DRAFT',
+            canManageAssignments: test.status !== 'ARCHIVED',
             assignedBatches,
         },
     }
@@ -876,7 +878,7 @@ export async function assignAdminTest(adminId: string, testId: string, data: Ass
         return serviceError('NOT_FOUND', 'Test not found')
     }
 
-    const editableError = ensureDraftEditable(test.status)
+    const editableError = ensureAssignmentEditable(test.status)
     if (editableError) {
         return editableError
     }
@@ -938,22 +940,6 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         return admin
     }
 
-    const rateLimitKey = `ai:docgen:${admin.id}`
-    const currentRequestCount = await redis.incr(rateLimitKey)
-    if (currentRequestCount === 1) {
-        await redis.expire(rateLimitKey, DOC_GENERATION_RATE_LIMIT_WINDOW_SECONDS)
-    }
-
-    if (currentRequestCount > DOC_GENERATION_RATE_LIMIT_MAX) {
-        const retryAfter = await redis.ttl(rateLimitKey)
-        return serviceError(
-            'RATE_LIMITED',
-            `Upload limit reached. Try again in ${retryAfter}s.`,
-            undefined,
-            retryAfter,
-        )
-    }
-
     const uploadValidation = validateAdminDocumentUpload({
         fileName: input.file.name,
         fileSize: input.file.size,
@@ -972,6 +958,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         aiFallbackUsed: false,
         reportParserIssue: false,
         warning: null,
+        metadataAiUsed: false,
     }
 
     try {
@@ -981,14 +968,36 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         console.error('[AI-DOC][ADMIN] Failed to parse uploaded document:', error)
     }
 
-    let extracted = {
+    let extracted: Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>> = {
         detectedAsMcqDocument: false,
         answerHintCount: 0,
         candidateBlockCount: 0,
-        questions: [] as Awaited<ReturnType<typeof extractQuestionsFromDocumentText>>['questions'],
+        questions: [] as Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>>['questions'],
+        expectedQuestionCount: null as number | null,
+        exactMatchAchieved: false,
+        invalidQuestionNumbers: [] as number[],
+        missingQuestionNumbers: [] as number[],
+        duplicateQuestionNumbers: [] as number[],
+        aiRepairUsed: false,
+        cost: undefined as Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>>['cost'],
+        error: undefined as boolean | undefined,
+        message: undefined as string | undefined,
     }
     if (text.length >= 50) {
-        extracted = extractQuestionsFromDocumentText(text)
+        extracted = await extractQuestionsFromDocumentTextPrecisely(text, admin.id)
+    }
+
+    if (extracted.detectedAsMcqDocument && extracted.error) {
+        return serviceError(
+            'GENERATION_FAILED',
+            extracted.message || 'Failed to recover an exact MCQ set from the document.',
+            {
+                expectedQuestionCount: extracted.expectedQuestionCount,
+                missingQuestionNumbers: extracted.missingQuestionNumbers,
+                invalidQuestionNumbers: extracted.invalidQuestionNumbers,
+                duplicateQuestionNumbers: extracted.duplicateQuestionNumbers,
+            },
+        )
     }
 
     const isPdfUpload = uploadValidation.sanitizedFileName.toLowerCase().endsWith('.pdf')
@@ -998,6 +1007,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         && (
             text.length < 50
             || (
+                !extracted.detectedAsMcqDocument
+                &&
                 extracted.candidateBlockCount >= 5
                 && extracted.questions.length < Math.max(3, Math.floor(extracted.candidateBlockCount * 0.35))
             )
@@ -1010,7 +1021,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             message: undefined
             questions: typeof extracted.questions
             failedCount: number
-            cost: undefined
+            cost: { model: string; inputTokens: number; outputTokens: number; costUSD: number } | undefined
         }
         | Awaited<ReturnType<typeof generateQuestionsFromText>>
         | Awaited<ReturnType<typeof generateQuestionsFromPdfVisionFallback>>
@@ -1066,7 +1077,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 message: undefined,
                 questions: extracted.questions,
                 failedCount: Math.max(0, extracted.candidateBlockCount - extracted.questions.length),
-                cost: undefined,
+                cost: extracted.cost,
             }
             : await generateQuestionsFromText(text, uploadValidation.generationTarget, admin.id)
 
@@ -1092,6 +1103,15 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 result = fallback
             }
         }
+
+        if (extracted.detectedAsMcqDocument && extracted.aiRepairUsed) {
+            importDiagnostics = {
+                parserStatus: 'REPAIRED',
+                aiFallbackUsed: true,
+                reportParserIssue: true,
+                warning: 'AI took the lead because the parser needed help to reconcile this file into an exact MCQ set. Please inform engineering so the parser can be improved for this document type.',
+            }
+        }
     }
 
     if (result.error || !result.questions || result.questions.length === 0) {
@@ -1103,18 +1123,32 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
 
     const baseTitle = uploadValidation.sanitizedFileName.replace(/\.(docx|pdf)$/i, '')
     const testTitle = (input.title?.trim() || `AI Generated Test - ${baseTitle || new Date().toLocaleDateString()}`)
+    const metadataEnrichment = await enrichGeneratedQuestionsMetadata({
+        questions: result.questions,
+        auditUserId: admin.id,
+        sourceLabel: uploadValidation.sanitizedFileName,
+    })
+    const finalQuestions = metadataEnrichment.questions
+    const finalDescription = metadataEnrichment.description
+    importDiagnostics.metadataAiUsed = metadataEnrichment.aiUsed
+
+    if (metadataEnrichment.warning) {
+        importDiagnostics.warning = importDiagnostics.warning
+            ? `${importDiagnostics.warning} ${metadataEnrichment.warning}`
+            : metadataEnrichment.warning
+    }
 
     const test = await prisma.test.create({
         data: {
             createdById: admin.id,
             title: testTitle,
-            description: `Auto-generated from document: ${uploadValidation.sanitizedFileName}`,
-            durationMinutes: Math.max(15, result.questions.length * 2),
+            description: finalDescription,
+            durationMinutes: Math.max(15, finalQuestions.length * 2),
             settings: resolveTestSettings(undefined) as Prisma.InputJsonValue,
             status: 'DRAFT',
             source: 'AI_GENERATED',
             questions: {
-                create: result.questions.map((question, index) => ({
+                create: finalQuestions.map((question, index) => ({
                     order: index + 1,
                     stem: question.stem,
                     options: question.options as unknown as Prisma.InputJsonValue,
@@ -1146,10 +1180,12 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 fallbackChunkCount: 'chunkCount' in result ? result.chunkCount : null,
                 extractedQuestionCandidates: extracted.candidateBlockCount,
                 extractedQuestions: extracted.questions.length,
-                questionsGenerated: result.questions.length,
+                questionsGenerated: finalQuestions.length,
                 failedCount: result.failedCount || 0,
                 generationTarget: strategy === 'AI_GENERATED' ? uploadValidation.generationTarget : null,
-                costUSD: result.cost?.costUSD || 0,
+                costUSD: (result.cost?.costUSD || 0) + (metadataEnrichment.cost?.costUSD || 0),
+                metadataAiUsed: metadataEnrichment.aiUsed,
+                metadataWarning: metadataEnrichment.warning || null,
             } as Prisma.InputJsonValue,
             ipAddress: input.ipAddress || undefined,
         },
@@ -1160,7 +1196,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         strategy,
         extractedQuestions: extracted.questions.length,
         generationTarget: strategy === 'AI_GENERATED' ? uploadValidation.generationTarget : null,
-        questionsGenerated: result.questions.length,
+        questionsGenerated: finalQuestions.length,
         failedCount: result.failedCount || 0,
         cost: result.cost,
         importDiagnostics,

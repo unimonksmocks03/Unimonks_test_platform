@@ -1,13 +1,15 @@
 import { z } from 'zod'
 
+import { dbUuid } from '@/lib/validations/db-id.schema'
+
 // ── Start Test ──
 export const StartTestSchema = z.object({
-    testId: z.string().uuid('Valid test ID is required'),
+    testId: dbUuid('Valid test ID is required'),
 })
 
 // ── Answer Question ──
 export const AnswerSchema = z.object({
-    questionId: z.string().uuid('Valid question ID is required'),
+    questionId: dbUuid('Valid question ID is required'),
     optionId: z.string().min(1, 'Option ID is required'),
 })
 

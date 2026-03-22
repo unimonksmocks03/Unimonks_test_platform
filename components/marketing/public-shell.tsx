@@ -1,7 +1,9 @@
 import Link from 'next/link'
-import { ArrowRight, LogIn, Sparkles } from 'lucide-react'
+import { ArrowRight, LogIn } from 'lucide-react'
 
+import { UnimonksBrand } from '@/components/branding/unimonks-brand'
 import { Button } from '@/components/ui/button'
+import { UNIMONKS_BRAND } from '@/lib/config/unimonks'
 import { cn } from '@/lib/utils'
 
 type PublicShellProps = {
@@ -18,17 +20,15 @@ export function PublicShell({ children, className }: PublicShellProps) {
             <header className="sticky top-0 z-40 border-b border-slate-900/5 bg-[#f7efe3]/90 backdrop-blur-xl">
                 <div className="mx-auto flex max-w-7xl items-center justify-between gap-6 px-4 py-4 sm:px-6 lg:px-8">
                     <Link href="/" className="flex items-center gap-3">
-                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-[0_20px_40px_rgba(15,23,42,0.18)]">
-                            <Sparkles className="h-5 w-5" />
-                        </div>
-                        <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.34em] text-emerald-700">
-                                UNIMONKS
-                            </div>
-                            <div className="font-serif text-xl font-bold tracking-tight text-slate-900">
-                                CUET Coaching
-                            </div>
-                        </div>
+                        <UnimonksBrand
+                            className="gap-2.5"
+                            imageClassName="h-11 w-auto"
+                            wordmarkClassName="hidden min-[420px]:block"
+                            titleClassName="text-[1.55rem] sm:text-[1.75rem]"
+                            cuetClassName="text-[1.55rem] sm:text-[1.75rem]"
+                            underlineClassName="mt-1 h-[3px] w-[88%]"
+                            priority
+                        />
                     </Link>
 
                     <nav className="hidden items-center gap-6 text-sm font-medium text-slate-600 md:flex">
@@ -36,7 +36,10 @@ export function PublicShell({ children, className }: PublicShellProps) {
                             Free Mocks
                         </Link>
                         <Link href="/#why" className="transition-colors hover:text-slate-900">
-                            Why UNIMONKS
+                            Why {UNIMONKS_BRAND.shortName}
+                        </Link>
+                        <Link href="/#contact" className="transition-colors hover:text-slate-900">
+                            Contact
                         </Link>
                         <Link href="/#faq" className="transition-colors hover:text-slate-900">
                             FAQ
@@ -69,9 +72,13 @@ export function PublicShell({ children, className }: PublicShellProps) {
             <footer className="border-t border-slate-900/5 bg-white/70">
                 <div className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-10 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
                     <div className="space-y-2">
-                        <p className="text-sm font-semibold uppercase tracking-[0.28em] text-emerald-700">
-                            UNIMONKS CUET Coaching
-                        </p>
+                        <UnimonksBrand
+                            className="gap-3"
+                            imageClassName="h-12 w-auto"
+                            titleClassName="text-[1.9rem]"
+                            cuetClassName="text-[1.9rem]"
+                            underlineClassName="mt-1 h-[3px] w-[94%]"
+                        />
                         <p className="max-w-2xl text-sm leading-6 text-slate-600">
                             Take a public mock, get an instant score summary, and move into the paid batch experience when you are ready.
                         </p>

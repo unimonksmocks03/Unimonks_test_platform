@@ -29,7 +29,7 @@ type AdminTestItem = {
     durationMinutes: number;
     status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
     source: "MANUAL" | "AI_GENERATED";
-    audience: "FREE" | "PAID" | "UNASSIGNED" | "INVALID";
+    audience: "FREE" | "PAID" | "HYBRID" | "UNASSIGNED";
     questionCount: number;
     attemptCount: number;
     assignmentCount: number;
@@ -61,13 +61,13 @@ function statusBadgeClass(status: AdminTestItem["status"]) {
 function audienceBadgeClass(audience: AdminTestItem["audience"]) {
     if (audience === "FREE") return "bg-sky-50 text-sky-700 border-none";
     if (audience === "PAID") return "bg-violet-50 text-violet-700 border-none";
-    if (audience === "INVALID") return "bg-rose-50 text-rose-700 border-none";
+    if (audience === "HYBRID") return "bg-emerald-50 text-emerald-700 border-none";
     return "bg-slate-100 text-slate-600 border-none";
 }
 
 function audienceLabel(audience: AdminTestItem["audience"]) {
     if (audience === "UNASSIGNED") return "Unassigned";
-    if (audience === "INVALID") return "Invalid Mix";
+    if (audience === "HYBRID") return "Free + Paid";
     return audience;
 }
 

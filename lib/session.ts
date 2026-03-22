@@ -10,7 +10,7 @@ import {
 } from '@/lib/auth'
 
 const SESSION_TTL = 24 * 60 * 60 // 24 hours in seconds
-const APP_SESSION_ROLES = new Set<Role>(['ADMIN', 'STUDENT'])
+const APP_SESSION_ROLES = new Set<Role>(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
 
 function refreshKey(token: string) {
     return `refresh:${token}`

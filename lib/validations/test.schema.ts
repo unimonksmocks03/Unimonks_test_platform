@@ -1,8 +1,9 @@
 import { z } from 'zod'
 
 import { DEFAULT_TEST_SETTINGS } from '@/lib/config/platform-policy'
+import { dbUuid } from '@/lib/validations/db-id.schema'
 
-const nonEmptyUuidArray = z.array(z.string().uuid('Each ID must be a valid UUID'))
+const nonEmptyUuidArray = z.array(dbUuid('Each ID must be a valid ID'))
     .max(200, 'Cannot submit more than 200 IDs at once')
 
 // ── Test Settings ──

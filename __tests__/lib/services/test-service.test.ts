@@ -25,6 +25,18 @@ test('validateDraftEditableStatus allows draft edits only', async () => {
     expect(archivedResult?.code).toBe('NOT_EDITABLE')
 })
 
+test('validateAssignmentEditableStatus allows published batch changes but keeps archived tests read-only', async () => {
+    const {
+        validateAssignmentEditableStatus,
+    } = await servicePromise
+
+    expect(validateAssignmentEditableStatus(TestStatus.DRAFT)).toBeNull()
+    expect(validateAssignmentEditableStatus(TestStatus.PUBLISHED)).toBeNull()
+
+    const archivedResult = validateAssignmentEditableStatus(TestStatus.ARCHIVED)
+    expect(archivedResult?.code).toBe('NOT_EDITABLE')
+})
+
 test('validatePublishDraftState enforces questions and assignments before publish', async () => {
     const {
         validatePublishDraftState,
@@ -66,10 +78,11 @@ test('batch audience helpers keep free and paid assignments separate', async () 
 
     expect(classifyBatchAudience([BatchKind.FREE_SYSTEM])).toBe('FREE')
     expect(classifyBatchAudience([BatchKind.STANDARD])).toBe('PAID')
+    expect(classifyBatchAudience([BatchKind.FREE_SYSTEM, BatchKind.STANDARD])).toBe('HYBRID')
     expect(classifyBatchAudience([])).toBe('UNASSIGNED')
 
     const mixedResult = validateBatchAudienceConsistency([BatchKind.FREE_SYSTEM, BatchKind.STANDARD])
-    expect(mixedResult?.code).toBe('INVALID_ASSIGNMENT_MIX')
+    expect(mixedResult).toBeNull()
 })
 
 test('validateAdminDocumentUpload enforces AI import file rules and generation floor', async () => {

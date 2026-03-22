@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
-import { GraduationCap, ArrowLeft, Mail, ShieldCheck } from "lucide-react";
+import { UnimonksBrand } from "@/components/branding/unimonks-brand";
+import { ArrowLeft, Mail, ShieldCheck } from "lucide-react";
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -117,12 +118,18 @@ export default function LoginPage() {
                 role: data.user.role.toLowerCase(),
             };
 
-            const roleName = normalizedUser.role === "admin" ? "Admin" : "Student";
+            const roleNameMap: Record<string, string> = {
+                admin: "Admin",
+                sub_admin: "Sub-admin",
+                student: "Student",
+            };
+            const roleName = roleNameMap[normalizedUser.role] || "User";
             toast.success(`Welcome ${roleName}!`, { description: "Redirecting to your dashboard..." });
 
             // Role-based redirect
             const dashboardMap: Record<string, string> = {
                 admin: "/admin/dashboard",
+                sub_admin: "/admin/dashboard",
                 student: "/student/dashboard",
             };
             router.replace(dashboardMap[normalizedUser.role] || "/login");
@@ -157,13 +164,17 @@ export default function LoginPage() {
 
     return (
         <div className="max-w-md w-full mx-auto">
-            <div className="mb-8 flex flex-col items-center justify-center text-center">
-                <div className="h-16 w-16 bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-3xl flex items-center justify-center shadow-clay-outer mb-6 rotate-3">
-                    <GraduationCap className="h-8 w-8 text-white -rotate-3" />
-                </div>
-                <h1 className="text-4xl font-serif text-slate-900 font-extrabold tracking-tight">Unimonk</h1>
+            <div className="mb-8 flex flex-col items-center justify-center gap-4 text-center">
+                <UnimonksBrand
+                    className="justify-center"
+                    imageClassName="h-24 w-auto max-w-full"
+                    titleClassName="text-[2.4rem] sm:text-[2.8rem]"
+                    cuetClassName="text-[2.4rem] sm:text-[2.8rem]"
+                    underlineClassName="mt-1.5 h-1 w-[96%]"
+                    priority
+                />
                 <p className="text-slate-600 mt-3 text-sm max-w-sm">
-                    Login is available for the admin and enrolled students. Public free mocks do not require an account.
+                    Login is available for the admin, sub-admins, and enrolled students. Public free mocks do not require an account.
                 </p>
             </div>
 
@@ -180,7 +191,7 @@ export default function LoginPage() {
                             </div>
                             <CardTitle className="text-2xl font-serif font-bold text-slate-800">Sign in</CardTitle>
                             <CardDescription className="text-slate-500">
-                                Enter the registered email for your admin or enrolled student account. We&apos;ll send you a one-time code.
+                                Enter the registered email for your admin, sub-admin, or enrolled student account. We&apos;ll send you a one-time code.
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-5 px-8">

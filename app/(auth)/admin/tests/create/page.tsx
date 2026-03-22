@@ -39,7 +39,7 @@ type Question = {
     saved: boolean;
 };
 
-type BatchAudience = "FREE" | "PAID" | "UNASSIGNED" | "INVALID";
+type BatchAudience = "FREE" | "PAID" | "HYBRID" | "UNASSIGNED";
 
 type AssignedBatch = {
     id: string;
@@ -58,6 +58,7 @@ type AdminTestResponse = {
         audience: BatchAudience;
         assignedBatches: AssignedBatch[];
         isEditable: boolean;
+        canManageAssignments: boolean;
     };
 };
 
@@ -77,6 +78,7 @@ type BatchesResponse = {
         id: string;
         name: string;
         code: string;
+        kind: "FREE_SYSTEM" | "STANDARD";
     }>;
 };
 
@@ -119,13 +121,13 @@ const normalizeOptions = (raw: any): QuestionOption[] => {
 function audienceBadgeClass(audience: BatchAudience) {
     if (audience === "FREE") return "bg-sky-50 text-sky-700 border-none";
     if (audience === "PAID") return "bg-violet-50 text-violet-700 border-none";
-    if (audience === "INVALID") return "bg-rose-50 text-rose-700 border-none";
+    if (audience === "HYBRID") return "bg-emerald-50 text-emerald-700 border-none";
     return "bg-slate-100 text-slate-600 border-none";
 }
 
 function audienceLabel(audience: BatchAudience) {
     if (audience === "UNASSIGNED") return "Unassigned";
-    if (audience === "INVALID") return "Invalid Mix";
+    if (audience === "HYBRID") return "Free + Paid";
     return audience;
 }
 
@@ -168,9 +170,10 @@ function AdminTestBuilderForm() {
     const [testStatus, setTestStatus] = useState<"DRAFT" | "PUBLISHED" | "ARCHIVED">("DRAFT");
     const [savedAudience, setSavedAudience] = useState<BatchAudience>("UNASSIGNED");
 
-    const [availableBatches, setAvailableBatches] = useState<Array<{ id: string; name: string; code: string }>>([]);
+    const [availableBatches, setAvailableBatches] = useState<Array<{ id: string; name: string; code: string; kind: "FREE_SYSTEM" | "STANDARD" }>>([]);
     const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
-    const [isLocked, setIsLocked] = useState(false);
+    const [isContentLocked, setIsContentLocked] = useState(false);
+    const [canManageAssignments, setCanManageAssignments] = useState(true);
 
     const [questions, setQuestions] = useState<Question[]>([emptyQuestion()]);
     const [activeQIndex, setActiveQIndex] = useState(0);
@@ -208,7 +211,8 @@ function AdminTestBuilderForm() {
         setTestStatus(test.status);
         setSavedAudience(test.audience);
         setSelectedBatchIds(test.assignedBatches.map((batch) => batch.id));
-        setIsLocked(!test.isEditable);
+        setIsContentLocked(!test.isEditable);
+        setCanManageAssignments(test.canManageAssignments);
 
         if (questionsResponse.ok && questionsResponse.data.questions.length > 0) {
             setQuestions(
@@ -432,6 +436,7 @@ function AdminTestBuilderForm() {
             }
 
             setSavedAudience(response.data.audience);
+            setSelectedBatchIds(response.data.assignedBatches.map((batch) => batch.id));
 
             if (showSuccessToast) {
                 toast.success("Batches assigned", {
@@ -473,11 +478,12 @@ function AdminTestBuilderForm() {
             }
 
             setTestStatus("PUBLISHED");
-            setIsLocked(true);
+            setIsContentLocked(true);
+            setCanManageAssignments(true);
             toast.success("Test published", {
-                description: "The test is now immediately available to its assigned batches.",
+                description: "The test is now immediately available. Question content is locked, but batch assignment stays open for corrections.",
             });
-            router.push("/admin/tests");
+            router.replace(`/admin/tests/create?edit=${savedId}`);
         } finally {
             setIsPublishing(false);
         }
@@ -506,7 +512,7 @@ function AdminTestBuilderForm() {
         setOpenAIModal(false);
         setIsGenerating(true);
         toast.info("Analyzing document", {
-            description: "We will extract existing MCQs first and fall back to AI generation when needed.",
+            description: "We will extract existing MCQs first and fall back to AI generation when needed. Large PDFs can take a couple of minutes.",
         });
 
         try {
@@ -576,14 +582,14 @@ function AdminTestBuilderForm() {
 
     return (
         <div className="flex w-full max-w-7xl flex-col gap-6 pb-10">
-            {isLocked && (
+            {isContentLocked && (
                 <div className="mx-auto mb-2 flex w-full max-w-6xl items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm text-amber-800">
                     <div className="mt-0.5 h-2.5 w-2.5 rounded-full bg-amber-500 shrink-0" />
                     <div>
                         <h4 className="font-bold text-amber-900">This test is read-only</h4>
                         <p className="mt-1 text-sm font-medium opacity-90">
                             {testStatus === "PUBLISHED"
-                                ? "Published tests are immutable. Open the draft workflow before publishing if you need to change content."
+                                ? "Published tests keep their content locked, but batch assignment is still open if you need to correct or expand the rollout."
                                 : "Archived tests stay visible for reference, but they cannot be edited."}
                         </p>
                     </div>
@@ -623,7 +629,7 @@ function AdminTestBuilderForm() {
                 <div className="flex w-full gap-3 sm:w-auto">
                     <Button
                         onClick={() => setOpenAIModal(true)}
-                        disabled={isLocked || isBusy}
+                        disabled={isContentLocked || isBusy}
                         variant="outline"
                         className="h-11 flex-1 rounded-xl border-indigo-200 px-5 font-bold text-indigo-700 shadow-sm transition-all hover:bg-indigo-50 hover:text-indigo-800 sm:flex-none"
                     >
@@ -679,7 +685,7 @@ function AdminTestBuilderForm() {
                                                         event.stopPropagation();
                                                         void removeQuestion(index);
                                                     }}
-                                                    disabled={isLocked || isBusy}
+                                                    disabled={isContentLocked || isBusy}
                                                     className="p-0.5 text-slate-400 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                                                     title="Delete question"
                                                 >
@@ -695,7 +701,7 @@ function AdminTestBuilderForm() {
                             <Button
                                 variant="outline"
                                 onClick={addQuestion}
-                                disabled={isLocked || isBusy}
+                                disabled={isContentLocked || isBusy}
                                 className="h-11 w-full rounded-xl border-slate-200 bg-white font-bold text-slate-700 shadow-sm hover:text-primary disabled:opacity-50"
                             >
                                 <Plus className="mr-2 h-4 w-4" />
@@ -722,7 +728,7 @@ function AdminTestBuilderForm() {
                                     className="min-h-[120px] resize-none rounded-2xl border-transparent bg-surface-2 p-4 text-base font-medium text-slate-900 focus-visible:ring-indigo-500 disabled:opacity-60"
                                     value={activeQuestion.stem}
                                     onChange={(event) => updateActiveQuestion({ stem: event.target.value })}
-                                    disabled={isLocked || isBusy}
+                                    disabled={isContentLocked || isBusy}
                                 />
                             </div>
 
@@ -736,7 +742,7 @@ function AdminTestBuilderForm() {
                                         placeholder={`Option ${option.id}`}
                                         value={option.text}
                                         onChange={(event) => handleOptionTextChange(optionIndex, event.target.value)}
-                                        disabled={isLocked || isBusy}
+                                        disabled={isContentLocked || isBusy}
                                         className="h-12 rounded-xl border-transparent bg-surface-2 px-4 font-medium text-slate-900 focus-visible:ring-indigo-500 disabled:opacity-60"
                                     />
                                 ))}
@@ -750,7 +756,7 @@ function AdminTestBuilderForm() {
                                     )}
                                 </Label>
                                 <RadioGroup
-                                    disabled={isLocked || isBusy}
+                                    disabled={isContentLocked || isBusy}
                                     value={activeQuestion.options.find((option) => option.isCorrect)?.id || "A"}
                                     onValueChange={handleCorrectAnswerChange}
                                     className="grid grid-cols-2 gap-4"
@@ -763,9 +769,9 @@ function AdminTestBuilderForm() {
                                                 option.isCorrect
                                                     ? "border-indigo-300 bg-indigo-50"
                                                     : "border-slate-200/60 bg-white hover:border-indigo-200 hover:bg-indigo-50/50"
-                                            } ${isLocked || isBusy ? "cursor-not-allowed opacity-60" : ""}`}
+                                            } ${isContentLocked || isBusy ? "cursor-not-allowed opacity-60" : ""}`}
                                         >
-                                            <RadioGroupItem value={option.id} id={`correct-${option.id}`} disabled={isLocked || isBusy} />
+                                            <RadioGroupItem value={option.id} id={`correct-${option.id}`} disabled={isContentLocked || isBusy} />
                                             <span className="flex-1 font-bold text-slate-700">
                                                 Option {option.id} {option.isCorrect ? "✓" : ""}
                                             </span>
@@ -778,7 +784,7 @@ function AdminTestBuilderForm() {
                                 <div className="space-y-3">
                                     <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Topic</Label>
                                     <Input
-                                        disabled={isLocked || isBusy}
+                                        disabled={isContentLocked || isBusy}
                                         value={activeQuestion.topic}
                                         onChange={(event) => updateActiveQuestion({ topic: event.target.value })}
                                         placeholder="e.g. Thermodynamics"
@@ -788,7 +794,7 @@ function AdminTestBuilderForm() {
                                 <div className="space-y-3">
                                     <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Difficulty</Label>
                                     <Select
-                                        disabled={isLocked || isBusy}
+                                        disabled={isContentLocked || isBusy}
                                         value={activeQuestion.difficulty}
                                         onValueChange={(value) => updateActiveQuestion({ difficulty: value as Question["difficulty"] })}
                                     >
@@ -817,7 +823,7 @@ function AdminTestBuilderForm() {
                             <div className="space-y-3">
                                 <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Test Name</Label>
                                 <Input
-                                    disabled={isLocked || isBusy}
+                                    disabled={isContentLocked || isBusy}
                                     value={testName}
                                     onChange={(event) => setTestName(event.target.value)}
                                     placeholder="e.g. CUET Physics Mock 3"
@@ -827,7 +833,7 @@ function AdminTestBuilderForm() {
                             <div className="space-y-3">
                                 <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Description</Label>
                                 <Textarea
-                                    disabled={isLocked || isBusy}
+                                    disabled={isContentLocked || isBusy}
                                     className="h-24 resize-none rounded-xl border-transparent bg-surface-2 p-4 font-medium text-slate-800 disabled:opacity-60"
                                     value={description}
                                     onChange={(event) => setDescription(event.target.value)}
@@ -837,7 +843,7 @@ function AdminTestBuilderForm() {
                             <div className="space-y-3 border-t border-slate-100 pt-4">
                                 <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Duration</Label>
                                 <Input
-                                    disabled={isLocked || isBusy}
+                                    disabled={isContentLocked || isBusy}
                                     type="number"
                                     value={testDuration}
                                     onChange={(event) => setTestDuration(event.target.value)}
@@ -861,13 +867,13 @@ function AdminTestBuilderForm() {
                                             <div
                                                 key={batch.id}
                                                 className={`flex items-center space-x-3 rounded-xl border border-slate-100 p-3 transition-colors ${
-                                                    isLocked || isBusy ? "opacity-60" : "hover:bg-slate-50"
+                                                    !canManageAssignments || isBusy ? "opacity-60" : "hover:bg-slate-50"
                                                 }`}
                                             >
                                                 <Checkbox
                                                     id={`admin-batch-${batch.id}`}
                                                     checked={selectedBatchIds.includes(batch.id)}
-                                                    disabled={isLocked || isBusy}
+                                                    disabled={!canManageAssignments || isBusy}
                                                     onCheckedChange={(checked) => {
                                                         if (checked) {
                                                             setSelectedBatchIds((current) => [...current, batch.id]);
@@ -877,12 +883,24 @@ function AdminTestBuilderForm() {
                                                     }}
                                                 />
                                                 <div className="flex-1">
-                                                    <Label
-                                                        htmlFor={`admin-batch-${batch.id}`}
-                                                        className={`block font-bold text-slate-800 ${isLocked || isBusy ? "" : "cursor-pointer"}`}
-                                                    >
-                                                        {batch.name}
-                                                    </Label>
+                                                    <div className="flex items-center gap-2">
+                                                        <Label
+                                                            htmlFor={`admin-batch-${batch.id}`}
+                                                            className={`block font-bold text-slate-800 ${!canManageAssignments || isBusy ? "" : "cursor-pointer"}`}
+                                                        >
+                                                            {batch.name}
+                                                        </Label>
+                                                        <Badge
+                                                            variant="outline"
+                                                            className={`border-none px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                                                                batch.kind === "FREE_SYSTEM"
+                                                                    ? "bg-sky-50 text-sky-700"
+                                                                    : "bg-violet-50 text-violet-700"
+                                                            }`}
+                                                        >
+                                                            {batch.kind === "FREE_SYSTEM" ? "Free" : "Paid"}
+                                                        </Badge>
+                                                    </div>
                                                     <p className="mt-0.5 text-xs text-slate-400">{batch.code}</p>
                                                 </div>
                                             </div>
@@ -890,14 +908,14 @@ function AdminTestBuilderForm() {
                                     </div>
                                 )}
                                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-600">
-                                    Assignments determine whether the test is treated as free or paid. Free-system and paid batches cannot be mixed.
+                                    Assignments determine who can access the test. Selecting FREE-Batch makes it public, and you can combine it with paid batches when the same mock should be available to both audiences.
                                 </div>
                             </div>
                         </CardContent>
                         <div className="flex flex-col gap-3 border-t bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
                             <Button
                                 onClick={() => void saveDraft()}
-                                disabled={isLocked || isBusy}
+                                disabled={isContentLocked || isBusy}
                                 variant="outline"
                                 className="h-12 w-full rounded-xl border-slate-200 text-base font-bold shadow-sm disabled:opacity-60"
                             >
@@ -906,7 +924,7 @@ function AdminTestBuilderForm() {
                             </Button>
                             <Button
                                 onClick={() => void assignSelectedBatches()}
-                                disabled={isLocked || isBusy}
+                                disabled={!canManageAssignments || isBusy}
                                 variant="outline"
                                 className="h-12 w-full rounded-xl border-slate-200 text-base font-bold shadow-sm disabled:opacity-60"
                             >
@@ -915,7 +933,7 @@ function AdminTestBuilderForm() {
                             </Button>
                             <Button
                                 onClick={handlePublish}
-                                disabled={isLocked || isBusy}
+                                disabled={isContentLocked || isBusy}
                                 className="h-12 w-full rounded-xl bg-indigo-600 text-base font-bold shadow-clay-inner hover:bg-indigo-700 disabled:opacity-60"
                             >
                                 <Send className="mr-2 h-4 w-4" />

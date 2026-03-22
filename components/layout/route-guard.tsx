@@ -11,11 +11,13 @@ import { useEffect } from "react";
  */
 const ROLE_ALLOWED_PREFIXES: Record<UserRole, string[]> = {
     admin: ["/admin"],
+    sub_admin: ["/admin"],
     student: ["/student", "/arena"],
 };
 
 const ROLE_HOME: Record<UserRole, string> = {
     admin: "/admin/dashboard",
+    sub_admin: "/admin/dashboard",
     student: "/student/dashboard",
 };
 

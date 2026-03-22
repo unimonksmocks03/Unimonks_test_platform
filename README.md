@@ -49,7 +49,7 @@ The current production target is:
 ```bash
 npm install
 cp .env.example .env
-npx prisma db push
+npm run db:migrate:deploy
 npx prisma db seed
 ```
 
@@ -71,9 +71,9 @@ Useful scripts:
 npm run typecheck
 npm run lint
 npm run build
+npm run db:migrate:deploy
 npm run db:push
 npm run db:seed
-npm run db:migrate:deploy
 ```
 
 ## Environment Variables
@@ -92,7 +92,7 @@ Important variables:
 - `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`: production QStash credentials
 - `QSTASH_URL`: local QStash dev server URL
 - `NEXT_PUBLIC_APP_URL`: public app URL
-- `CRON_SECRET`: optional manual authorization for cron endpoints outside Vercel Cron
+- `CRON_SECRET`: required in production so Vercel Cron can authorize scheduled requests
 
 ## Documentation Map
 
@@ -116,6 +116,12 @@ Use these files first when regaining context:
 - Text-based PDFs are supported. Scanned PDFs still need OCR.
 - The AI document import path is designed for admin workflows, not bulk ingestion pipelines.
 - Concurrency claims should be based on deployed load testing, not local dev runs.
+
+## Migration Discipline
+
+- Use `npm run db:migrate:deploy` for any persistent environment, including Preview and Production.
+- Keep `npm run db:push` only for throwaway local experiments where schema history does not matter.
+- Do not deploy from a database that was manually drifted away from the committed Prisma migrations.
 
 ## API Reference
 

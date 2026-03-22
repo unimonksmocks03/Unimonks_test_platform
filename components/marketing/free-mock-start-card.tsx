@@ -88,6 +88,10 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
     const [showForm, setShowForm] = useState(!leadAttempt)
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [registeredStudentMessage, setRegisteredStudentMessage] = useState<string | null>(null)
+    const [attemptLimitState, setAttemptLimitState] = useState<{
+        message: string
+        sessionId: string | null
+    } | null>(null)
 
     useEffect(() => {
         const rawValue = window.localStorage.getItem(LEAD_PROFILE_STORAGE_KEY)
@@ -124,10 +128,13 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
                     ? (startResponse.data.details as { sessionId?: string }).sessionId
                     : undefined
 
-                if (sessionId) {
-                    router.push(`/free-mocks/results/${sessionId}`)
-                    return
-                }
+                setAttemptLimitState({
+                    message: typeof startResponse.data?.message === 'string'
+                        ? startResponse.data.message
+                        : 'You have already given this free mock and are out of attempts. Get enrolled to UNIMONKS to access the paid ones.',
+                    sessionId: sessionId ?? null,
+                })
+                return
             }
 
             toast.error(
@@ -144,6 +151,7 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
     async function handleLeadCapture(event: React.FormEvent<HTMLFormElement>) {
         event.preventDefault()
         setRegisteredStudentMessage(null)
+        setAttemptLimitState(null)
 
         if (!fullName.trim() || !email.trim() || !phone.trim()) {
             toast.error('Name, email, and phone are required.')
@@ -297,7 +305,7 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
                                 variant="ghost"
                                 className="h-12 w-full rounded-2xl border border-white/15 bg-transparent text-white hover:bg-white/10"
                             >
-                                Use a Different Email
+                                Use Different Details
                             </Button>
                         </CardContent>
                     </Card>
@@ -308,13 +316,13 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
                         <form onSubmit={handleLeadCapture}>
                             <CardHeader className="gap-4 border-b border-slate-200 pb-6">
                                 <div className="text-sm font-semibold uppercase tracking-[0.28em] text-emerald-700">
-                                    Lead capture
+                                    Details capture
                                 </div>
                                 <CardTitle className="font-serif text-3xl font-bold text-slate-950">
                                     Start the public attempt
                                 </CardTitle>
                                 <p className="text-sm leading-7 text-slate-600">
-                                    Submit your full name, valid email, and phone before the mock begins. Returning users should use the same email to resume.
+                                    Submit your full name, valid email, and phone before the mock begins. Returning users should use the same email or phone details to resume or check their prior attempt.
                                 </p>
                             </CardHeader>
 
@@ -324,7 +332,11 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
                                     <Input
                                         id="fullName"
                                         value={fullName}
-                                        onChange={(event) => setFullName(event.target.value)}
+                                        onChange={(event) => {
+                                            setRegisteredStudentMessage(null)
+                                            setAttemptLimitState(null)
+                                            setFullName(event.target.value)
+                                        }}
                                         placeholder="Your full name"
                                         className="h-12 rounded-2xl"
                                         required
@@ -336,7 +348,11 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
                                         id="email"
                                         type="email"
                                         value={email}
-                                        onChange={(event) => setEmail(event.target.value)}
+                                        onChange={(event) => {
+                                            setRegisteredStudentMessage(null)
+                                            setAttemptLimitState(null)
+                                            setEmail(event.target.value)
+                                        }}
                                         placeholder="name@example.com"
                                         className="h-12 rounded-2xl"
                                         required
@@ -347,7 +363,11 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
                                     <Input
                                         id="phone"
                                         value={phone}
-                                        onChange={(event) => setPhone(event.target.value)}
+                                        onChange={(event) => {
+                                            setRegisteredStudentMessage(null)
+                                            setAttemptLimitState(null)
+                                            setPhone(event.target.value)
+                                        }}
                                         placeholder="+91 98765 43210"
                                         className="h-12 rounded-2xl"
                                         required
@@ -361,6 +381,27 @@ export function FreeMockStartCard({ test, leadAttempt }: FreeMockStartCardProps)
                                         <Button asChild className="mt-4 rounded-2xl bg-slate-900 text-white hover:bg-slate-800">
                                             <Link href="/login">Go to Login</Link>
                                         </Button>
+                                    </div>
+                                ) : null}
+
+                                {attemptLimitState ? (
+                                    <div className="rounded-[24px] bg-rose-50 p-4 text-sm leading-6 text-rose-900">
+                                        <p className="font-semibold">Free attempt already used</p>
+                                        <p className="mt-1">{attemptLimitState.message}</p>
+                                        <div className="mt-4 flex flex-wrap gap-3">
+                                            {attemptLimitState.sessionId ? (
+                                                <Button
+                                                    type="button"
+                                                    onClick={() => router.push(`/free-mocks/results/${attemptLimitState.sessionId}`)}
+                                                    className="rounded-2xl bg-slate-900 text-white hover:bg-slate-800"
+                                                >
+                                                    View Previous Result
+                                                </Button>
+                                            ) : null}
+                                            <Button asChild type="button" variant="outline" className="rounded-2xl border-rose-200 bg-white text-rose-900 hover:bg-rose-100">
+                                                <Link href="/#contact">Get Enrolled</Link>
+                                            </Button>
+                                        </div>
                                     </div>
                                 ) : null}
                             </CardContent>

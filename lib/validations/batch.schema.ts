@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { dbUuid } from '@/lib/validations/db-id.schema'
+
 // ── Create Batch ──
 export const CreateBatchSchema = z.object({
     name: z.string().min(2, 'Name must be at least 2 characters').max(100, 'Name must be at most 100 characters'),
@@ -28,7 +30,7 @@ export const BatchQuerySchema = z.object({
 
 // ── Enroll Students ──
 export const EnrollStudentsSchema = z.object({
-    studentIds: z.array(z.string().uuid('Each student ID must be a valid UUID'))
+    studentIds: z.array(dbUuid('Each student ID must be a valid ID'))
         .min(1, 'At least one student ID is required')
         .max(200, 'Cannot enroll more than 200 students at once'),
 })

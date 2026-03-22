@@ -6,7 +6,8 @@ import { Role, UserStatus, Prisma } from '@prisma/client'
 
 /**
  * Admin-level user management service.
- * All functions here assume the caller has ADMIN role (enforced at route level).
+ * All functions here assume the caller has admin-panel access (enforced at route level).
+ * Owner-only restrictions for sub-admin management are enforced here.
  */
 
 // ── List Users (paginated, filterable, searchable) ──
@@ -52,13 +53,17 @@ export async function listUsers(query: UserQueryInput) {
     }
 }
 
+function canGrantSubAdmin(actorRole: Role) {
+    return actorRole === 'ADMIN'
+}
+
 // ── Create User ──
-export async function createUser(data: CreateUserInput) {
-    if (data.role !== 'STUDENT') {
+export async function createUser(actorRole: Role, data: CreateUserInput) {
+    if (data.role === 'SUB_ADMIN' && !canGrantSubAdmin(actorRole)) {
         return {
             error: true,
-            code: 'INVALID_ROLE',
-            message: 'Only student accounts can be created from user management',
+            code: 'OWNER_ADMIN_REQUIRED',
+            message: 'Only the primary admin can grant sub-admin access',
         }
     }
 
@@ -96,14 +101,16 @@ export async function createUser(data: CreateUserInput) {
 }
 
 // ── Update User ──
-export async function updateUser(id: string, data: UpdateUserInput) {
+export async function updateUser(actorRole: Role, id: string, data: UpdateUserInput) {
     // Check user exists
     const existing = await prisma.user.findUnique({ where: { id } })
     if (!existing) {
         return { error: true, code: 'NOT_FOUND', message: 'User not found' }
     }
 
-    const isAdmin = existing.role === 'ADMIN'
+    const isOwnerAdmin = existing.role === 'ADMIN'
+    const isSubAdmin = existing.role === 'SUB_ADMIN'
+    const actorCanManageSubAdmins = canGrantSubAdmin(actorRole)
 
     if (data.role === 'ADMIN' && existing.role !== 'ADMIN') {
         return {
@@ -113,7 +120,15 @@ export async function updateUser(id: string, data: UpdateUserInput) {
         }
     }
 
-    if (isAdmin) {
+    if (isOwnerAdmin) {
+        if (actorRole !== 'ADMIN') {
+            return {
+                error: true,
+                code: 'OWNER_ADMIN_REQUIRED',
+                message: 'Only the owner admin can manage the primary admin account',
+            }
+        }
+
         if (data.role && data.role !== 'ADMIN') {
             return {
                 error: true,
@@ -128,6 +143,14 @@ export async function updateUser(id: string, data: UpdateUserInput) {
                 code: 'ADMIN_PROTECTED',
                 message: 'The primary admin cannot be deactivated or suspended',
             }
+        }
+    }
+
+    if (!actorCanManageSubAdmins && (isSubAdmin || data.role === 'SUB_ADMIN')) {
+        return {
+            error: true,
+            code: 'OWNER_ADMIN_REQUIRED',
+            message: 'Only the primary admin can create or manage sub-admin accounts',
         }
     }
 
@@ -167,7 +190,7 @@ export async function updateUser(id: string, data: UpdateUserInput) {
 }
 
 // ── Delete User (soft delete → status = INACTIVE) ──
-export async function deleteUser(id: string) {
+export async function deleteUser(actorRole: Role, id: string) {
     const existing = await prisma.user.findUnique({ where: { id } })
     if (!existing) {
         return { error: true, code: 'NOT_FOUND', message: 'User not found' }
@@ -178,6 +201,14 @@ export async function deleteUser(id: string) {
             error: true,
             code: 'ADMIN_PROTECTED',
             message: 'The primary admin cannot be deleted',
+        }
+    }
+
+    if (existing.role === 'SUB_ADMIN' && !canGrantSubAdmin(actorRole)) {
+        return {
+            error: true,
+            code: 'OWNER_ADMIN_REQUIRED',
+            message: 'Only the primary admin can deactivate or delete a sub-admin',
         }
     }
 

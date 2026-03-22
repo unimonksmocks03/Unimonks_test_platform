@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 
 import { getAuthEnv } from '@/lib/env'
@@ -43,6 +44,12 @@ type PublicLeadTokenPayload = {
     exp?: number
 }
 
+type ExistingLeadContact = {
+    id: string
+    emailNormalized: string | null
+    phoneNormalized: string | null
+}
+
 function serviceError(
     code: LeadCaptureServiceErrorCode,
     message: string,
@@ -56,12 +63,8 @@ function serviceError(
     }
 }
 
-function chooseExistingLead(
-    leads: Array<{
-        id: string
-        emailNormalized: string | null
-        phoneNormalized: string | null
-    }>,
+export function resolveExistingLeadByContact(
+    leads: ExistingLeadContact[],
     emailNormalized: string,
     phoneNormalized: string,
 ) {
@@ -75,24 +78,32 @@ function chooseExistingLead(
 }
 
 export function createPublicLeadAccessToken(leadId: string) {
-    const { JWT_SECRET } = getAuthEnv()
+    const signingSecret = getPublicLeadTokenSecret()
 
     return jwt.sign(
         {
             leadId,
             type: PUBLIC_LEAD_TOKEN_TYPE,
         } satisfies PublicLeadTokenPayload,
-        JWT_SECRET,
+        signingSecret,
         {
             expiresIn: PUBLIC_LEAD_TOKEN_MAX_AGE_SECONDS,
         },
     )
 }
 
+export function getPublicLeadTokenSecret() {
+    const { JWT_SECRET, JWT_REFRESH_SECRET } = getAuthEnv()
+
+    return crypto
+        .createHash('sha256')
+        .update(`${JWT_SECRET}::public-free-lead::${JWT_REFRESH_SECRET}`)
+        .digest('hex')
+}
+
 export function verifyPublicLeadAccessToken(token: string): { leadId: string } | null {
     try {
-        const { JWT_SECRET } = getAuthEnv()
-        const payload = jwt.verify(token, JWT_SECRET) as PublicLeadTokenPayload
+        const payload = jwt.verify(token, getPublicLeadTokenSecret()) as PublicLeadTokenPayload
 
         if (payload.type !== PUBLIC_LEAD_TOKEN_TYPE || typeof payload.leadId !== 'string') {
             return null
@@ -163,7 +174,7 @@ export async function captureLeadForFreeTest(
         take: 10,
     })
 
-    const existingLead = chooseExistingLead(matchingLeads, normalizedEmail, normalizedPhone)
+    const existingLead = resolveExistingLeadByContact(matchingLeads, normalizedEmail, normalizedPhone)
 
     const lead = existingLead
         ? await prisma.lead.update({

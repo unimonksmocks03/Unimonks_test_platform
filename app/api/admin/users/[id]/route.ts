@@ -26,10 +26,17 @@ async function patchHandler(
         )
     }
 
-    const result = await updateUser(id, parsed.data)
+    const result = await updateUser(ctx.role, id, parsed.data)
 
     if ('error' in result) {
-        const statusCode = result.code === 'NOT_FOUND' ? 404 : result.code === 'DUPLICATE_EMAIL' ? 409 : 400
+        const statusCode =
+            result.code === 'NOT_FOUND'
+                ? 404
+                : result.code === 'DUPLICATE_EMAIL'
+                    ? 409
+                    : result.code === 'OWNER_ADMIN_REQUIRED'
+                        ? 403
+                        : 400
         return NextResponse.json(result, { status: statusCode })
     }
 
@@ -46,10 +53,15 @@ async function deleteHandler(
         return NextResponse.json({ error: true, code: 'BAD_REQUEST', message: 'User ID is required' }, { status: 400 })
     }
 
-    const result = await deleteUser(id)
+    const result = await deleteUser(ctx.role, id)
 
     if ('error' in result) {
-        const statusCode = result.code === 'NOT_FOUND' ? 404 : 400
+        const statusCode =
+            result.code === 'NOT_FOUND'
+                ? 404
+                : result.code === 'OWNER_ADMIN_REQUIRED'
+                    ? 403
+                    : 400
         return NextResponse.json(result, { status: statusCode })
     }
 
@@ -69,4 +81,3 @@ async function deleteHandler(
 export const PATCH = withAuth(patchHandler, ['ADMIN'])
 
 export const DELETE = withAuth(deleteHandler, ['ADMIN'])
-
