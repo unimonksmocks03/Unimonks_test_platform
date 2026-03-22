@@ -1,14 +1,113 @@
+import { SessionStatus } from '@prisma/client'
+
+import { MAX_PAID_TOTAL_ATTEMPTS } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
-import { getScheduledTestLifecycle } from '@/lib/services/test-lifecycle'
 
 /**
  * Student-scoped service.
  * All queries are strictly scoped to the requesting student's own data.
  */
 
-// ── Dashboard Data ──
-export async function getDashboard(studentId: string) {
-    // Get student's batch IDs
+const COMPLETED_SESSION_STATUSES = new Set<SessionStatus>([
+    'SUBMITTED',
+    'TIMED_OUT',
+    'FORCE_SUBMITTED',
+])
+
+type AttemptSessionRecord = {
+    id: string
+    attemptNumber: number
+    status: SessionStatus
+    score: number | null
+    totalMarks: number
+    percentage: number | null
+    startedAt: Date
+    submittedAt: Date | null
+}
+
+function isCompletedStatus(status: SessionStatus) {
+    return COMPLETED_SESSION_STATUSES.has(status)
+}
+
+function toAttemptSummary(session: AttemptSessionRecord) {
+    return {
+        id: session.id,
+        attemptNumber: session.attemptNumber,
+        status: session.status,
+        score: session.score,
+        totalMarks: session.totalMarks,
+        percentage: session.percentage,
+        startedAt: session.startedAt,
+        submittedAt: session.submittedAt,
+    }
+}
+
+function getBestAttempt(attemptHistory: ReturnType<typeof toAttemptSummary>[]) {
+    const completedAttempts = attemptHistory.filter((attempt) => isCompletedStatus(attempt.status))
+
+    if (completedAttempts.length === 0) {
+        return null
+    }
+
+    return [...completedAttempts].sort((left, right) => {
+        const leftPercentage = left.percentage ?? -1
+        const rightPercentage = right.percentage ?? -1
+
+        if (rightPercentage !== leftPercentage) {
+            return rightPercentage - leftPercentage
+        }
+
+        const leftScore = left.score ?? -1
+        const rightScore = right.score ?? -1
+
+        if (rightScore !== leftScore) {
+            return rightScore - leftScore
+        }
+
+        return right.attemptNumber - left.attemptNumber
+    })[0]
+}
+
+function buildAttemptSummary(sessions: AttemptSessionRecord[]) {
+    const attemptHistory = [...sessions]
+        .sort((left, right) => left.attemptNumber - right.attemptNumber)
+        .map(toAttemptSummary)
+
+    const attemptsUsed = attemptHistory.length
+    const attemptsRemaining = Math.max(0, MAX_PAID_TOTAL_ATTEMPTS - attemptsUsed)
+    const latestAttempt = attemptHistory[attemptHistory.length - 1] ?? null
+    const hasInProgressSession = attemptHistory.some((attempt) => attempt.status === 'IN_PROGRESS')
+
+    return {
+        attemptsUsed,
+        attemptsRemaining,
+        canStartAttempt: hasInProgressSession || attemptsRemaining > 0,
+        hasInProgressSession,
+        latestAttempt,
+        bestAttempt: getBestAttempt(attemptHistory),
+        attemptHistory,
+    }
+}
+
+function toStudentTestCard(test: {
+    id: string
+    title: string
+    description: string | null
+    durationMinutes: number
+    _count: { questions: number }
+    sessions: AttemptSessionRecord[]
+}) {
+    return {
+        id: test.id,
+        title: test.title,
+        description: test.description,
+        durationMinutes: test.durationMinutes,
+        questionCount: test._count.questions,
+        ...buildAttemptSummary(test.sessions),
+    }
+}
+
+async function getAssignedTestsWithBatches(studentId: string) {
     const enrollments = await prisma.batchStudent.findMany({
         where: { studentId },
         select: {
@@ -16,125 +115,23 @@ export async function getDashboard(studentId: string) {
             batch: { select: { name: true, code: true } },
         },
     })
-    const batchIds = enrollments.map((e) => e.batchId)
 
-    // Upcoming tests: assigned via batch or direct, PUBLISHED status
-    const upcomingTests = await prisma.test.findMany({
-        where: {
-            status: 'PUBLISHED',
-            assignments: {
-                some: {
-                    OR: [
-                        { batchId: { in: batchIds.length > 0 ? batchIds : ['none'] } },
-                        { studentId },
-                    ],
-                },
-            },
-            // Exclude tests student has already completed
-            sessions: { none: { studentId, status: { in: ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] } } },
-        },
-        select: {
-            id: true,
-            title: true,
-            description: true,
-            durationMinutes: true,
-            scheduledAt: true,
-            teacher: { select: { name: true } },
-            _count: { select: { questions: true } },
-        },
-        orderBy: { scheduledAt: 'asc' },
-        take: 25,
-    })
-
-    // Recent results (last 5 completed)
-    const recentResults = await prisma.testSession.findMany({
-        where: {
-            studentId,
-            status: { in: ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] },
-        },
-        select: {
-            id: true,
-            score: true,
-            totalMarks: true,
-            percentage: true,
-            submittedAt: true,
-            test: { select: { id: true, title: true } },
-            aiFeedback: { select: { id: true, overallTag: true } },
-        },
-        orderBy: { submittedAt: 'desc' },
-        take: 5,
-    })
-
-    // Student stats
-    const sessions = await prisma.testSession.findMany({
-        where: {
-            studentId,
-            status: { in: ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED'] },
-        },
-        select: { percentage: true },
-    })
-
-    const totalTests = sessions.length
-    const avgScore = totalTests > 0 ? sessions.reduce((sum, s) => sum + (s.percentage ?? 0), 0) / totalTests : 0
-    const bestScore = totalTests > 0 ? Math.max(...sessions.map((s) => s.percentage ?? 0)) : 0
-
-    return {
-        upcoming: upcomingTests.map((t) => ({
-            ...(() => {
-                const lifecycle = getScheduledTestLifecycle(t)
-                return {
-                    isFinished: lifecycle.isFinished,
-                }
-            })(),
-            id: t.id,
-            title: t.title,
-            description: t.description,
-            durationMinutes: t.durationMinutes,
-            scheduledAt: t.scheduledAt,
-            teacherName: t.teacher.name,
-            questionCount: t._count.questions,
-        })).filter((t) => !t.isFinished).slice(0, 10),
-        recent: recentResults.map((r) => ({
-            sessionId: r.id,
-            testId: r.test.id,
-            testTitle: r.test.title,
-            score: r.score,
-            totalMarks: r.totalMarks,
-            percentage: r.percentage,
-            submittedAt: r.submittedAt,
-            hasFeedback: !!r.aiFeedback,
-            overallTag: r.aiFeedback?.overallTag,
-        })),
-        stats: {
-            totalTests,
-            avgScore: Math.round(avgScore * 100) / 100,
-            bestScore: Math.round(bestScore * 100) / 100,
-        },
-        batches: enrollments.map((e) => ({
-            id: e.batchId,
-            name: e.batch.name,
-            code: e.batch.code,
-        })),
-    }
-}
-
-// ── Assigned Tests ──
-export async function getAssignedTests(studentId: string) {
-    const enrollments = await prisma.batchStudent.findMany({
-        where: { studentId },
-        select: { batchId: true },
-    })
-    const batchIds = enrollments.map((e) => e.batchId)
+    const batchIds = enrollments.map((enrollment) => enrollment.batchId)
+    const assignmentFilters = batchIds.length > 0
+        ? [
+            { batchId: { in: batchIds } },
+            { studentId },
+        ]
+        : [
+            { studentId },
+        ]
 
     const tests = await prisma.test.findMany({
         where: {
             status: 'PUBLISHED',
             assignments: {
                 some: {
-                    OR: [
-                        { batchId: { in: batchIds.length > 0 ? batchIds : ['none'] } },
-                        { studentId },
-                    ],
+                    OR: assignmentFilters,
                 },
             },
         },
@@ -143,77 +140,197 @@ export async function getAssignedTests(studentId: string) {
             title: true,
             description: true,
             durationMinutes: true,
-            scheduledAt: true,
-            teacher: { select: { name: true } },
             _count: { select: { questions: true } },
             sessions: {
                 where: { studentId },
-                select: { id: true, status: true, score: true, percentage: true, submittedAt: true },
+                orderBy: { attemptNumber: 'asc' },
+                select: {
+                    id: true,
+                    attemptNumber: true,
+                    status: true,
+                    score: true,
+                    totalMarks: true,
+                    percentage: true,
+                    startedAt: true,
+                    submittedAt: true,
+                },
             },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { updatedAt: 'desc' },
     })
 
     return {
-        tests: tests.map((t) => {
-            const lifecycle = getScheduledTestLifecycle(t)
-            const session = t.sessions[0]
-            return {
-                id: t.id,
-                title: t.title,
-                description: t.description,
-                durationMinutes: t.durationMinutes,
-                scheduledAt: t.scheduledAt,
-                teacherName: t.teacher.name,
-                questionCount: t._count.questions,
-                attempted: !!session,
-                isFinished: lifecycle.isFinished,
-                session: session
-                    ? {
-                        id: session.id,
-                        status: session.status,
-                        score: session.score,
-                        percentage: session.percentage,
-                        submittedAt: session.submittedAt,
-                    }
-                    : null,
-            }
-        }).filter((t) => !t.isFinished),
+        tests: tests.map(toStudentTestCard),
+        batches: enrollments.map((enrollment) => ({
+            id: enrollment.batchId,
+            name: enrollment.batch.name,
+            code: enrollment.batch.code,
+        })),
     }
+}
+
+// ── Dashboard Data ──
+export async function getDashboard(studentId: string) {
+    const [{ tests, batches }, recentAttempts, scoreHistory] = await Promise.all([
+        getAssignedTestsWithBatches(studentId),
+        prisma.testSession.findMany({
+            where: {
+                studentId,
+                status: { in: [...COMPLETED_SESSION_STATUSES] },
+            },
+            select: {
+                id: true,
+                attemptNumber: true,
+                status: true,
+                score: true,
+                totalMarks: true,
+                percentage: true,
+                submittedAt: true,
+                test: { select: { id: true, title: true } },
+                aiFeedback: { select: { id: true, overallTag: true } },
+            },
+            orderBy: [
+                { submittedAt: 'desc' },
+                { attemptNumber: 'desc' },
+            ],
+            take: 5,
+        }),
+        prisma.testSession.findMany({
+            where: {
+                studentId,
+                status: { in: [...COMPLETED_SESSION_STATUSES] },
+            },
+            select: { percentage: true },
+        }),
+    ])
+
+    const completedAttempts = scoreHistory.length
+    const avgScore = completedAttempts > 0
+        ? scoreHistory.reduce((sum, session) => sum + (session.percentage ?? 0), 0) / completedAttempts
+        : 0
+    const bestScore = completedAttempts > 0
+        ? Math.max(...scoreHistory.map((session) => session.percentage ?? 0))
+        : 0
+
+    return {
+        tests,
+        recentAttempts: recentAttempts.map((attempt) => ({
+            sessionId: attempt.id,
+            testId: attempt.test.id,
+            testTitle: attempt.test.title,
+            attemptNumber: attempt.attemptNumber,
+            status: attempt.status,
+            score: attempt.score,
+            totalMarks: attempt.totalMarks,
+            percentage: attempt.percentage,
+            submittedAt: attempt.submittedAt,
+            hasFeedback: !!attempt.aiFeedback,
+            overallTag: attempt.aiFeedback?.overallTag,
+        })),
+        stats: {
+            completedAttempts,
+            avgScore: Math.round(avgScore * 100) / 100,
+            bestScore: Math.round(bestScore * 100) / 100,
+            activeAssignments: tests.filter((test) => test.canStartAttempt).length,
+        },
+        batches,
+    }
+}
+
+// ── Assigned Tests ──
+export async function getAssignedTests(studentId: string) {
+    const { tests } = await getAssignedTestsWithBatches(studentId)
+
+    return { tests }
 }
 
 // ── Get Result (ownership-verified) ──
 export async function getResult(studentId: string, sessionId: string) {
     const session = await prisma.testSession.findUnique({
         where: { id: sessionId },
-        include: {
+        select: {
+            id: true,
+            studentId: true,
+            attemptNumber: true,
+            status: true,
+            score: true,
+            totalMarks: true,
+            percentage: true,
+            answers: true,
+            submittedAt: true,
+            startedAt: true,
+            tabSwitchCount: true,
             test: {
                 select: {
                     id: true,
                     title: true,
                     durationMinutes: true,
-                    questions: { orderBy: { order: 'asc' } },
+                    questions: {
+                        orderBy: { order: 'asc' },
+                        select: {
+                            id: true,
+                            order: true,
+                            stem: true,
+                            options: true,
+                            explanation: true,
+                            difficulty: true,
+                            topic: true,
+                        },
+                    },
+                    sessions: {
+                        where: { studentId },
+                        orderBy: { attemptNumber: 'asc' },
+                        select: {
+                            id: true,
+                            attemptNumber: true,
+                            status: true,
+                            score: true,
+                            totalMarks: true,
+                            percentage: true,
+                            startedAt: true,
+                            submittedAt: true,
+                        },
+                    },
                 },
             },
-            aiFeedback: true,
+            aiFeedback: {
+                select: {
+                    strengths: true,
+                    weaknesses: true,
+                    actionPlan: true,
+                    questionExplanations: true,
+                    overallTag: true,
+                    generatedAt: true,
+                },
+            },
         },
     })
 
     if (!session) return { error: true, code: 'NOT_FOUND', message: 'Test session not found' }
     if (session.studentId !== studentId) return { error: true, code: 'FORBIDDEN', message: 'Access denied' }
 
+    const attemptSummary = buildAttemptSummary(session.test.sessions)
+
     return {
         session: {
             id: session.id,
+            attemptNumber: session.attemptNumber,
             status: session.status,
             score: session.score,
             totalMarks: session.totalMarks,
             percentage: session.percentage,
             answers: session.answers,
             submittedAt: session.submittedAt,
+            startedAt: session.startedAt,
             tabSwitchCount: session.tabSwitchCount,
         },
-        test: session.test,
+        test: {
+            id: session.test.id,
+            title: session.test.title,
+            durationMinutes: session.test.durationMinutes,
+            questions: session.test.questions,
+        },
+        attemptSummary,
         feedback: session.aiFeedback
             ? {
                 strengths: session.aiFeedback.strengths,

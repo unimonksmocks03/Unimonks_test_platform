@@ -77,6 +77,8 @@ UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 JWT_SECRET=
 JWT_REFRESH_SECRET=
+OWNER_ADMIN_EMAIL=
+OWNER_ADMIN_NAME=
 NEXT_PUBLIC_APP_URL=
 GMAIL_USER=
 GMAIL_APP_PASSWORD=
@@ -89,6 +91,11 @@ Optional but recommended:
 
 ```env
 OPENAI_API_KEY=
+```
+
+Required for production cron authorization:
+
+```env
 CRON_SECRET=
 ```
 
@@ -100,9 +107,20 @@ Before first live use:
 
 ```bash
 npm run db:migrate:deploy
+npm run db:bootstrap:owner-admin
 ```
 
-If this is the first deployment and you are not using migrations yet, use `npx prisma db push` only for non-production setup. For client production, prefer real migrations.
+Do not use `db push` for Preview or Production. This codebase relies on committed migrations, and schema drift can cause runtime role/enum mismatches even when the app still builds.
+
+The bootstrap command is idempotent and is the production-safe way to create the single owner admin plus the protected `FREE-Batch`. Do not run `npm run db:seed` in production.
+
+For Vercel, set the Build Command to:
+
+```bash
+npm run vercel-build
+```
+
+That command applies migrations, bootstraps the owner admin, and then runs the production build.
 
 ## 5. Deploy Preview First
 
@@ -111,15 +129,19 @@ Use Preview before Production and test these flows end-to-end:
 - send OTP
 - verify OTP
 - logout
+- owner admin can log in with the bootstrapped email
 - create test
 - import test from document
 - assign test to batch
+- publish a free mock to `FREE-Batch`
+- publish a paid mock to a standard batch
 - start test
 - autosave answers
 - submit test
 - AI feedback generation
-- teacher analytics
+- admin analytics
 - admin impersonation
+- sub-admin creation and owner-only protections
 
 ## 6. Verify Background Jobs
 
@@ -129,11 +151,9 @@ The repo already includes:
 - `/api/webhooks/force-submit`
 - `/api/webhooks/qstash-dlq`
 - `/api/cron/reconcile-jobs`
-- `/api/cron/tests-retention`
 
 On Vercel, cron schedules come from [vercel.json](./vercel.json). After deploy, confirm that:
 
-- finished tests are being cleaned up
 - expired `IN_PROGRESS` sessions get reconciled
 - missing AI feedback gets re-enqueued
 
@@ -155,6 +175,7 @@ Expected result:
 - Production env vars are set
 - `DATABASE_URL` uses Neon pooled host
 - `DIRECT_URL` uses Neon direct host
+- owner admin bootstrap has been run exactly once
 - OTP mail delivery works with real credentials
 - OpenAI features are either enabled with a valid key or intentionally hidden
 - Vercel cron jobs are enabled
@@ -179,7 +200,7 @@ For local development:
 ```bash
 docker compose up -d postgres redis
 npx @upstash/qstash-cli@latest dev
-npm run db:push
+npm run db:migrate:deploy
 npm run db:seed
 npm run dev
 ```

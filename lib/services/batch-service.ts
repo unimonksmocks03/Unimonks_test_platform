@@ -1,10 +1,24 @@
 import { prisma } from '@/lib/prisma'
+import {
+    FREE_BATCH_CODE,
+    FREE_BATCH_KIND,
+    FREE_BATCH_NAME,
+} from '@/lib/config/platform-policy'
 import type { CreateBatchInput, UpdateBatchInput, BatchQueryInput, EnrollStudentsInput } from '@/lib/validations/batch.schema'
 import { BatchStatus, Prisma } from '@prisma/client'
 
 /**
  * Admin-level batch management service.
  */
+
+function isProtectedSystemBatch(batch: { kind: string }) {
+    return batch.kind === FREE_BATCH_KIND
+}
+
+function isReservedSystemBatchInput(data: { name?: string; code?: string }) {
+    return data.code?.trim().toUpperCase() === FREE_BATCH_CODE
+        || data.name?.trim() === FREE_BATCH_NAME
+}
 
 // ── List Batches (paginated, searchable, filterable) ──
 export async function listBatches(query: BatchQueryInput) {
@@ -25,7 +39,6 @@ export async function listBatches(query: BatchQueryInput) {
         prisma.batch.findMany({
             where,
             include: {
-                teacher: { select: { id: true, name: true, email: true } },
                 _count: { select: { students: true } },
             },
             orderBy: { createdAt: 'desc' },
@@ -40,8 +53,8 @@ export async function listBatches(query: BatchQueryInput) {
             id: b.id,
             name: b.name,
             code: b.code,
+            kind: b.kind,
             status: b.status,
-            teacher: b.teacher,
             studentCount: b._count.students,
             createdAt: b.createdAt,
         })),
@@ -56,7 +69,6 @@ export async function getBatch(id: string) {
     const batch = await prisma.batch.findUnique({
         where: { id },
         include: {
-            teacher: { select: { id: true, name: true, email: true } },
             students: {
                 include: {
                     student: { select: { id: true, name: true, email: true, status: true } },
@@ -80,8 +92,8 @@ export async function getBatch(id: string) {
             id: batch.id,
             name: batch.name,
             code: batch.code,
+            kind: batch.kind,
             status: batch.status,
-            teacher: batch.teacher,
             students: batch.students.map((bs) => bs.student),
             assignments: batch.assignments.map((a) => ({
                 id: a.id,
@@ -103,20 +115,19 @@ export async function createBatch(data: CreateBatchInput) {
         return { error: true, code: 'DUPLICATE_CODE', message: 'A batch with this code already exists' }
     }
 
-    // Validate teacher exists and is a TEACHER
-    const teacher = await prisma.user.findUnique({ where: { id: data.teacherId } })
-    if (!teacher || teacher.role !== 'TEACHER') {
-        return { error: true, code: 'INVALID_TEACHER', message: 'The specified teacher ID is invalid or not a teacher' }
+    if (isReservedSystemBatchInput(data)) {
+        return {
+            error: true,
+            code: 'SYSTEM_BATCH_PROTECTED',
+            message: 'The system free-mock batch is created automatically and cannot be created manually',
+        }
     }
 
     const batch = await prisma.batch.create({
         data: {
             name: data.name,
             code: data.code,
-            teacherId: data.teacherId,
-        },
-        include: {
-            teacher: { select: { id: true, name: true, email: true } },
+            kind: 'STANDARD',
         },
     })
 
@@ -138,25 +149,33 @@ export async function updateBatch(id: string, data: UpdateBatchInput) {
         }
     }
 
-    // If teacher is being changed, validate
-    if (data.teacherId) {
-        const teacher = await prisma.user.findUnique({ where: { id: data.teacherId } })
-        if (!teacher || teacher.role !== 'TEACHER') {
-            return { error: true, code: 'INVALID_TEACHER', message: 'Invalid teacher ID' }
+    if (!isProtectedSystemBatch(existing) && isReservedSystemBatchInput(data)) {
+        return {
+            error: true,
+            code: 'SYSTEM_BATCH_PROTECTED',
+            message: 'The system free-mock batch identifiers are reserved',
+        }
+    }
+
+    if (isProtectedSystemBatch(existing)) {
+        if (data.name || data.code || data.status) {
+            return {
+                error: true,
+                code: 'SYSTEM_BATCH_PROTECTED',
+                message: 'The system free-mock batch cannot be renamed, disabled, or deleted',
+            }
         }
     }
 
     const updateData: Prisma.BatchUpdateInput = {}
     if (data.name) updateData.name = data.name
     if (data.code) updateData.code = data.code
-    if (data.teacherId) updateData.teacher = { connect: { id: data.teacherId } }
     if (data.status) updateData.status = data.status as BatchStatus
 
     const batch = await prisma.batch.update({
         where: { id },
         data: updateData,
         include: {
-            teacher: { select: { id: true, name: true, email: true } },
             _count: { select: { students: true } },
         },
     })
@@ -179,6 +198,14 @@ export async function deleteBatch(id: string, permanent: boolean = false) {
         return { error: true, code: 'NOT_FOUND', message: 'Batch not found' }
     }
 
+    if (isProtectedSystemBatch(existing)) {
+        return {
+            error: true,
+            code: 'SYSTEM_BATCH_PROTECTED',
+            message: 'The system free-mock batch cannot be renamed, disabled, or deleted',
+        }
+    }
+
     if (permanent) {
         // Cascade: remove enrollments, assignments, then delete batch
         await prisma.$transaction([
@@ -199,6 +226,14 @@ export async function enrollStudents(batchId: string, data: EnrollStudentsInput)
     const batch = await prisma.batch.findUnique({ where: { id: batchId } })
     if (!batch) {
         return { error: true, code: 'NOT_FOUND', message: 'Batch not found' }
+    }
+
+    if (isProtectedSystemBatch(batch)) {
+        return {
+            error: true,
+            code: 'SYSTEM_BATCH_PROTECTED',
+            message: 'The system free-mock batch is reserved for public leads and cannot enroll students',
+        }
     }
 
     // Validate all student IDs exist and are STUDENT role
@@ -234,6 +269,19 @@ export async function enrollStudents(batchId: string, data: EnrollStudentsInput)
 
 // ── Unenroll Student ──
 export async function unenrollStudent(batchId: string, studentId: string) {
+    const batch = await prisma.batch.findUnique({ where: { id: batchId }, select: { kind: true } })
+    if (!batch) {
+        return { error: true, code: 'NOT_FOUND', message: 'Batch not found' }
+    }
+
+    if (isProtectedSystemBatch(batch)) {
+        return {
+            error: true,
+            code: 'SYSTEM_BATCH_PROTECTED',
+            message: 'The system free-mock batch is reserved for public leads and cannot enroll students',
+        }
+    }
+
     try {
         await prisma.batchStudent.delete({
             where: { batchId_studentId: { batchId, studentId } },

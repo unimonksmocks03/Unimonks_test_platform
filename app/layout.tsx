@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Sora, Fraunces } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import { UNIMONKS_BRAND } from "@/lib/config/unimonks";
 import NextTopLoader from "nextjs-toploader";
 import { ThemeProvider } from "next-themes";
 
@@ -15,9 +16,42 @@ const fraunces = Fraunces({
   subsets: ["latin"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+
 export const metadata: Metadata = {
-  title: "Unimonk Test Platform",
-  description: "EdTech MCQ Test Platform — Powered by Unimonk",
+  metadataBase: new URL(siteUrl),
+  title: UNIMONKS_BRAND.displayName,
+  description:
+    "UNIMONKS CUET Coaching offers a public free mock catalog, lead-capture based practice, and premium batch-assigned mock tests for enrolled students.",
+  applicationName: UNIMONKS_BRAND.displayName,
+  icons: {
+    icon: UNIMONKS_BRAND.logoPath,
+    apple: UNIMONKS_BRAND.logoPath,
+  },
+  keywords: [
+    UNIMONKS_BRAND.shortName,
+    "CUET coaching",
+    "CUET mock tests",
+    "free CUET mock test",
+    "premium CUET practice",
+    "CUET preparation",
+  ],
+  category: "education",
+  openGraph: {
+    type: "website",
+    locale: "en_IN",
+    siteName: UNIMONKS_BRAND.displayName,
+    title: UNIMONKS_BRAND.displayName,
+    description:
+      "Start with a free public CUET mock, then move into the premium batch-based practice flow when you are ready.",
+    url: "/",
+  },
+  twitter: {
+    card: "summary",
+    title: UNIMONKS_BRAND.displayName,
+    description:
+      "Public CUET mock tests with lead capture, instant score summaries, and a premium batch-only mock lane for enrolled students.",
+  },
 };
 
 export default function RootLayout({
@@ -39,4 +73,3 @@ export default function RootLayout({
     </html>
   );
 }
-

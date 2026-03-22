@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Lightbulb, CheckCircle2, XCircle, TrendingUp, Target, ShieldAlert, Loader2, ArrowLeft, AlertTriangle, RefreshCw } from "lucide-react";
+import { Lightbulb, CheckCircle2, XCircle, TrendingUp, Target, ShieldAlert, Loader2, ArrowLeft, AlertTriangle, RefreshCw, Repeat, Play } from "lucide-react";
 import Link from "next/link";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
+import { PLATFORM_POLICY } from "@/lib/config/platform-policy";
 import { useEvents } from "@/lib/hooks/use-events";
 
 // ── Types ──
@@ -36,13 +37,26 @@ interface Question {
 
 interface SessionData {
     id: string;
+    attemptNumber: number;
     status: string;
     score: number | null;
     totalMarks: number;
     percentage: number | null;
     answers: AnswerEntry[];
     submittedAt: string | null;
+    startedAt: string;
     tabSwitchCount: number;
+}
+
+interface AttemptSummary {
+    id: string;
+    attemptNumber: number;
+    status: "IN_PROGRESS" | "SUBMITTED" | "TIMED_OUT" | "FORCE_SUBMITTED";
+    score: number | null;
+    totalMarks: number;
+    percentage: number | null;
+    startedAt: string;
+    submittedAt: string | null;
 }
 
 interface FeedbackData {
@@ -57,6 +71,15 @@ interface FeedbackData {
 interface ResultResponse {
     session: SessionData;
     test: { id: string; title: string; durationMinutes: number; questions: Question[] };
+    attemptSummary: {
+        attemptsUsed: number;
+        attemptsRemaining: number;
+        canStartAttempt: boolean;
+        hasInProgressSession: boolean;
+        latestAttempt: AttemptSummary | null;
+        bestAttempt: AttemptSummary | null;
+        attemptHistory: AttemptSummary[];
+    };
     feedback: FeedbackData | null;
 }
 
@@ -86,6 +109,20 @@ function normalizeOptions(opts: unknown): QuestionOption[] {
 
 function getCorrectOption(opts: QuestionOption[]): QuestionOption | undefined {
     return opts.find(o => o.isCorrect);
+}
+
+function attemptStatusBadgeClass(status: AttemptSummary["status"]) {
+    if (status === "IN_PROGRESS") return "bg-indigo-50 text-indigo-700 border-none";
+    if (status === "SUBMITTED") return "bg-emerald-50 text-emerald-700 border-none";
+    if (status === "FORCE_SUBMITTED") return "bg-amber-50 text-amber-700 border-none";
+    return "bg-rose-50 text-rose-700 border-none";
+}
+
+function attemptStatusLabel(status: AttemptSummary["status"]) {
+    if (status === "IN_PROGRESS") return "In Progress";
+    if (status === "FORCE_SUBMITTED") return "Force Submitted";
+    if (status === "TIMED_OUT") return "Timed Out";
+    return "Submitted";
 }
 
 // ── Progressive AI Feedback Loading ──
@@ -255,16 +292,25 @@ export default function ResultsPage() {
         );
     }
 
-    const { session, test, feedback } = data;
+    const { session, test, attemptSummary, feedback } = data;
     const questions = test.questions;
     const answers = session.answers || [];
     const pct = session.percentage ?? 0;
     const score = session.score ?? 0;
+    const latestAttempt = attemptSummary.latestAttempt;
+    const bestAttempt = attemptSummary.bestAttempt;
+    const latestInProgressAttempt = attemptSummary.hasInProgressSession && latestAttempt?.status === "IN_PROGRESS"
+        ? latestAttempt
+        : null;
+    const nextActionLabel = latestInProgressAttempt
+        ? `Resume Attempt ${latestInProgressAttempt.attemptNumber}`
+        : attemptSummary.attemptsRemaining > 0
+            ? "Start Reattempt"
+            : null;
 
     // Compute time taken
     const timeTakenLabel = (() => {
         if (!session.submittedAt) return "—";
-        // We don't have startedAt here, just show submittedAt date
         return new Date(session.submittedAt).toLocaleString();
     })();
 
@@ -282,7 +328,9 @@ export default function ResultsPage() {
             <div className="flex items-center justify-between border-b pb-6" style={{ borderColor: "var(--border-soft)" }}>
                 <div>
                     <h1 className="text-3xl font-serif font-bold text-slate-900 tracking-tight">{test.title} — Results</h1>
-                    <p className="text-sm text-slate-500 mt-1">Submitted {timeTakenLabel}</p>
+                    <p className="text-sm text-slate-500 mt-1">
+                        Attempt {session.attemptNumber} of {PLATFORM_POLICY.maxPaidTotalAttempts} · Submitted {timeTakenLabel}
+                    </p>
                 </div>
                 <Button asChild variant="outline" className="rounded-xl">
                     <Link href="/student/dashboard"><ArrowLeft className="h-4 w-4 mr-2" /> Dashboard</Link>
@@ -318,6 +366,131 @@ export default function ResultsPage() {
                                 {session.tabSwitchCount}
                             </span>
                         </div>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card className="bg-white rounded-3xl border-0 overflow-hidden shadow-sm">
+                <CardContent className="p-6 md:p-8">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Current Attempt</div>
+                            <div className="mt-2 text-2xl font-serif font-bold text-slate-900">
+                                Attempt {session.attemptNumber} of {PLATFORM_POLICY.maxPaidTotalAttempts}
+                            </div>
+                            <p className="mt-2 text-sm text-slate-500">
+                                {attemptSummary.attemptsRemaining} remaining after this attempt.
+                            </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Latest Attempt</div>
+                            <div className="mt-2 text-2xl font-serif font-bold text-slate-900">
+                                {latestAttempt
+                                    ? latestAttempt.status === "IN_PROGRESS"
+                                        ? `Attempt ${latestAttempt.attemptNumber}`
+                                        : `${Math.round(latestAttempt.percentage ?? 0)}%`
+                                    : "—"}
+                            </div>
+                            <p className="mt-2 text-sm text-slate-500">
+                                {latestAttempt
+                                    ? latestAttempt.status === "IN_PROGRESS"
+                                        ? "Currently in progress"
+                                        : `Attempt ${latestAttempt.attemptNumber}`
+                                    : "No attempts recorded"}
+                            </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Best Attempt</div>
+                            <div className="mt-2 text-2xl font-serif font-bold text-slate-900">
+                                {bestAttempt ? `${Math.round(bestAttempt.percentage ?? 0)}%` : "—"}
+                            </div>
+                            <p className="mt-2 text-sm text-slate-500">
+                                {bestAttempt ? `Attempt ${bestAttempt.attemptNumber}` : "No completed attempts yet"}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap items-center gap-3">
+                        <Badge className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${attemptStatusBadgeClass(session.status as AttemptSummary["status"])}`}>
+                            {attemptStatusLabel(session.status as AttemptSummary["status"])}
+                        </Badge>
+                        {nextActionLabel ? (
+                            <Button asChild className="rounded-xl bg-slate-900 text-white hover:bg-black">
+                                <Link href={`/arena/${test.id}`}>
+                                    {latestInProgressAttempt ? <Repeat className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
+                                    {nextActionLabel}
+                                </Link>
+                            </Button>
+                        ) : (
+                            <Badge className="rounded-full bg-rose-50 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-rose-700 border-none">
+                                Attempt limit reached
+                            </Badge>
+                        )}
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card className="bg-white rounded-3xl border-0 overflow-hidden shadow-sm">
+                <CardHeader className="border-b bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
+                    <CardTitle className="font-serif text-xl text-slate-900">Attempt History</CardTitle>
+                </CardHeader>
+                <CardContent className="p-6">
+                    <div className="flex flex-col gap-3">
+                        {attemptSummary.attemptHistory.map((attempt) => {
+                            const isCurrentAttempt = attempt.id === session.id;
+                            const href = attempt.status === "IN_PROGRESS" ? `/arena/${test.id}` : `/student/results/${attempt.id}`;
+
+                            return (
+                                <div
+                                    key={attempt.id}
+                                    className={`flex flex-col gap-3 rounded-2xl border p-4 md:flex-row md:items-center md:justify-between ${
+                                        isCurrentAttempt
+                                            ? "border-indigo-200 bg-indigo-50/70"
+                                            : "border-slate-200 bg-slate-50/70"
+                                    }`}
+                                >
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-semibold text-slate-900">Attempt {attempt.attemptNumber}</span>
+                                            <Badge className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${attemptStatusBadgeClass(attempt.status)}`}>
+                                                {attemptStatusLabel(attempt.status)}
+                                            </Badge>
+                                            {isCurrentAttempt && (
+                                                <Badge className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-indigo-700 border-none">
+                                                    Current
+                                                </Badge>
+                                            )}
+                                            {bestAttempt?.id === attempt.id && (
+                                                <Badge className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 border-none">
+                                                    Best
+                                                </Badge>
+                                            )}
+                                        </div>
+                                        <span className="text-sm text-slate-500">
+                                            {attempt.submittedAt
+                                                ? `Submitted ${new Date(attempt.submittedAt).toLocaleString()}`
+                                                : `Started ${new Date(attempt.startedAt).toLocaleString()}`}
+                                        </span>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600">
+                                        {attempt.status !== "IN_PROGRESS" && (
+                                            <span className="font-semibold text-slate-900">
+                                                {Math.round(attempt.percentage ?? 0)}%
+                                            </span>
+                                        )}
+                                        {attempt.status !== "IN_PROGRESS" && (
+                                            <span>{attempt.score ?? 0}/{attempt.totalMarks}</span>
+                                        )}
+                                        <Link href={href} className="font-semibold text-indigo-600 hover:text-indigo-800">
+                                            {attempt.status === "IN_PROGRESS" ? "Resume" : isCurrentAttempt ? "Viewing" : "Open"}
+                                        </Link>
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
                 </CardContent>
             </Card>

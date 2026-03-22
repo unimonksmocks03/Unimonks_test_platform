@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { dbUuid } from '@/lib/validations/db-id.schema'
+
 // ── Create Batch ──
 export const CreateBatchSchema = z.object({
     name: z.string().min(2, 'Name must be at least 2 characters').max(100, 'Name must be at most 100 characters'),
@@ -7,14 +9,12 @@ export const CreateBatchSchema = z.object({
         .min(3, 'Code must be at least 3 characters')
         .max(20, 'Code must be at most 20 characters')
         .regex(/^[A-Z0-9\-]+$/, 'Code must be uppercase letters, numbers, and dashes only'),
-    teacherId: z.string().uuid('Valid teacher ID is required'),
 })
 
 // ── Update Batch ──
 export const UpdateBatchSchema = z.object({
     name: z.string().min(2).max(100).optional(),
     code: z.string().min(3).max(20).regex(/^[A-Z0-9\-]+$/, 'Code must be uppercase letters, numbers, and dashes only').optional(),
-    teacherId: z.string().uuid().optional(),
     status: z.enum(['ACTIVE', 'UPCOMING', 'COMPLETED']).optional(),
 }).refine((data) => Object.keys(data).length > 0, {
     message: 'At least one field must be provided for update',
@@ -30,7 +30,7 @@ export const BatchQuerySchema = z.object({
 
 // ── Enroll Students ──
 export const EnrollStudentsSchema = z.object({
-    studentIds: z.array(z.string().uuid('Each student ID must be a valid UUID'))
+    studentIds: z.array(dbUuid('Each student ID must be a valid ID'))
         .min(1, 'At least one student ID is required')
         .max(200, 'Cannot enroll more than 200 students at once'),
 })

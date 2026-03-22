@@ -22,8 +22,8 @@ type BatchItem = {
     id: string;
     name: string;
     code: string;
+    kind: "FREE_SYSTEM" | "STANDARD";
     status: string;
-    teacher: { id: string; name: string; email: string };
     studentCount: number;
     createdAt: string;
 };
@@ -35,8 +35,6 @@ type BatchesResponse = {
     totalPages: number;
 };
 
-type TeacherOption = { id: string; name: string; email: string };
-
 export default function AdminBatchesPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [batches, setBatches] = useState<BatchItem[]>([]);
@@ -45,7 +43,6 @@ export default function AdminBatchesPage() {
     const [statusFilter, setStatusFilter] = useState("all");
     const [createSheetOpen, setCreateSheetOpen] = useState(false);
     const [creating, setCreating] = useState(false);
-    const [teachers, setTeachers] = useState<TeacherOption[]>([]);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
     const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -68,9 +65,6 @@ export default function AdminBatchesPage() {
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional initial data fetch on mount
         fetchBatches();
-        // Load teachers for create form
-        apiClient.get<{ users: TeacherOption[] }>("/api/admin/users", { role: "TEACHER", limit: 100 })
-            .then(res => { if (res.ok) setTeachers(res.data.users); });
     }, [fetchBatches]);
 
     useEffect(() => {
@@ -88,7 +82,6 @@ export default function AdminBatchesPage() {
         const body = {
             name: fd.get("batch-name") as string,
             code: (fd.get("batch-code") as string).toUpperCase(),
-            teacherId: fd.get("batch-teacher") as string,
         };
 
         const res = await apiClient.post("/api/admin/batches", body);
@@ -131,6 +124,13 @@ export default function AdminBatchesPage() {
         return "bg-amber-50 text-amber-700";
     };
 
+    const kindBadge = (kind: BatchItem["kind"]) => {
+        if (kind === "FREE_SYSTEM") {
+            return "bg-emerald-50 text-emerald-700";
+        }
+        return "bg-slate-100 text-slate-700";
+    };
+
     return (
         <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto pb-10">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b pb-6 gap-4" style={{ borderColor: "var(--border-soft)" }}>
@@ -162,19 +162,9 @@ export default function AdminBatchesPage() {
                                     <Label className="font-bold text-slate-700">Batch Code</Label>
                                     <Input name="batch-code" placeholder="e.g. PHY-101-E (uppercase)" required className="rounded-xl h-11 bg-surface-2 border-transparent" />
                                 </div>
-                                <div className="grid gap-2">
-                                    <Label className="font-bold text-slate-700">Primary Teacher</Label>
-                                    <Select name="batch-teacher" required>
-                                        <SelectTrigger className="rounded-xl h-11 bg-surface-2 border-transparent">
-                                            <SelectValue placeholder="Select a teacher" />
-                                        </SelectTrigger>
-                                        <SelectContent className="rounded-xl">
-                                            {teachers.map(t => (
-                                                <SelectItem key={t.id} value={t.id}>{t.name} ({t.email})</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                                <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+                                    New batches are standard paid batches. The protected free-mock system batch is managed automatically.
+                                </p>
                             </div>
                             <div className="p-6 border-t bg-surface-2 flex gap-2 justify-end" style={{ borderColor: 'var(--border-soft)' }}>
                                 <SheetClose asChild>
@@ -221,7 +211,7 @@ export default function AdminBatchesPage() {
                             <tr>
                                 <th className="px-6 py-4 font-bold text-slate-800">Batch Name</th>
                                 <th className="px-6 py-4 font-bold text-slate-800">Batch Code</th>
-                                <th className="px-6 py-4 font-bold text-slate-800">Primary Teacher</th>
+                                <th className="px-6 py-4 font-bold text-slate-800">Batch Type</th>
                                 <th className="px-6 py-4 font-bold text-slate-800 text-center">Students</th>
                                 <th className="px-6 py-4 font-bold text-slate-800">Status</th>
                                 <th className="px-6 py-4 font-bold text-slate-800 text-right">Actions</th>
@@ -256,8 +246,10 @@ export default function AdminBatchesPage() {
                                         <td className="px-6 py-5 font-mono text-xs text-slate-500 font-medium tracking-wide">
                                             {batch.code}
                                         </td>
-                                        <td className="px-6 py-5 font-medium text-slate-700">
-                                            {batch.teacher.name}
+                                        <td className="px-6 py-5">
+                                            <Badge variant="outline" className={`border-none font-bold uppercase tracking-wider text-[10px] px-2.5 py-1 ${kindBadge(batch.kind)}`}>
+                                                {batch.kind === "FREE_SYSTEM" ? "Free System" : "Paid Batch"}
+                                            </Badge>
                                         </td>
                                         <td className="px-6 py-5 text-center">
                                             <div className="inline-flex items-center justify-center bg-slate-100 text-slate-800 font-bold px-3 py-1 rounded-xl shadow-inner gap-2">
@@ -276,9 +268,11 @@ export default function AdminBatchesPage() {
                                                     <Edit className="h-4 w-4" />
                                                 </Button>
                                             </Link>
-                                            <Button variant="ghost" size="icon" onClick={() => setDeleteTarget({ id: batch.id, name: batch.name })} className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl ml-1">
-                                                <Trash className="h-4 w-4" />
-                                            </Button>
+                                            {batch.kind === "FREE_SYSTEM" ? null : (
+                                                <Button variant="ghost" size="icon" onClick={() => setDeleteTarget({ id: batch.id, name: batch.name })} className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl ml-1">
+                                                    <Trash className="h-4 w-4" />
+                                                </Button>
+                                            )}
                                         </td>
                                     </tr>
                                 ))

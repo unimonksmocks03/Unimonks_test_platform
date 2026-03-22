@@ -3,13 +3,14 @@ export const dynamic = 'force-dynamic'
 import { prisma } from '@/lib/prisma'
 import { redis } from '@/lib/redis'
 import { verifyOTP } from '@/lib/auth'
-import { createSession, setAuthCookies, storeUserRole } from '@/lib/session'
+import { createSession, setAuthCookies } from '@/lib/session'
 import { VerifyOTPSchema } from '@/lib/validations/auth.schema'
 import { withErrorHandler } from '@/lib/middleware/error-handler'
 import { verifyOTPRateLimit } from '@/lib/middleware/rate-limiter'
 
 const LOCKOUT_MAX = 5
 const LOCKOUT_DURATION = 900 // 15 minutes in seconds
+const AUTHENTICATED_ROLES = new Set(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
 
 async function verifyOTPHandler(req: NextRequest): Promise<NextResponse> {
     const body = await req.json()
@@ -39,7 +40,7 @@ async function verifyOTPHandler(req: NextRequest): Promise<NextResponse> {
     const user = await prisma.user.findUnique({ where: { email } })
 
     // Generic error — no user enumeration
-    if (!user || user.status !== 'ACTIVE') {
+    if (!user || user.status !== 'ACTIVE' || !AUTHENTICATED_ROLES.has(user.role)) {
         return NextResponse.json(
             { error: true, code: 'INVALID_OTP', message: 'Invalid or expired OTP' },
             { status: 401 }
@@ -78,7 +79,6 @@ async function verifyOTPHandler(req: NextRequest): Promise<NextResponse> {
 
     // Create 24hr session
     const { accessToken, refreshToken } = await createSession(user.id, user.role)
-    await storeUserRole(user.id, user.role)
 
     // Audit log
     await prisma.auditLog.create({

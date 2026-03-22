@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
 import { withAuth } from '@/lib/middleware/auth-guard'
 import { prisma } from '@/lib/prisma'
-import { redis } from '@/lib/redis'
 import { createSession, setAuthCookies } from '@/lib/session'
+import {
+    setImpersonationContext,
+    validateImpersonationTarget,
+} from '@/lib/services/impersonation-service'
 import { Role } from '@prisma/client'
 
 // POST /api/admin/impersonate/[userId] — start impersonation
@@ -29,27 +32,21 @@ async function postHandler(
         return NextResponse.json({ error: true, code: 'NOT_FOUND', message: 'Target user not found' }, { status: 404 })
     }
 
-    // Store original admin session in Redis for restoration
-    // Forward key: impersonation:{adminId} → full context
-    // Reverse key: impersonation-reverse:{targetId} → adminId (for O(1) stop lookup)
-    const pipeline = redis.pipeline()
-    pipeline.set(
-        `impersonation:${ctx.userId}`,
-        JSON.stringify({
-            originalUserId: ctx.userId,
-            originalRole: ctx.role,
-            impersonatedUserId: targetUser.id,
-        }),
-        'EX',
-        86400
+    const guardResult = validateImpersonationTarget(
+        { userId: ctx.userId, role: ctx.role },
+        targetUser,
     )
-    pipeline.set(
-        `impersonation-reverse:${targetUser.id}`,
-        ctx.userId,
-        'EX',
-        86400
-    )
-    await pipeline.exec()
+
+    if (!guardResult.allowed) {
+        return NextResponse.json(
+            {
+                error: true,
+                code: guardResult.code,
+                message: guardResult.message,
+            },
+            { status: guardResult.status },
+        )
+    }
 
     // Create new session as target user
     const { accessToken, refreshToken } = await createSession(targetUser.id, targetUser.role)
@@ -70,6 +67,12 @@ async function postHandler(
         impersonating: true,
     })
 
+    await setImpersonationContext(response, {
+        originalUserId: ctx.userId,
+        originalRole: ctx.role,
+        impersonatedUserId: targetUser.id,
+        impersonatedUserRole: targetUser.role,
+    })
     setAuthCookies(response, accessToken, refreshToken)
     return response
 }

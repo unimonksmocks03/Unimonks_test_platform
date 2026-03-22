@@ -40,10 +40,15 @@ async function postHandler(req: NextRequest, ctx: { userId: string; role: Role }
         )
     }
 
-    const result = await createUser(parsed.data)
+    const result = await createUser(ctx.role, parsed.data)
 
     if ('error' in result) {
-        const statusCode = result.code === 'DUPLICATE_EMAIL' ? 409 : 400
+        const statusCode =
+            result.code === 'DUPLICATE_EMAIL'
+                ? 409
+                : result.code === 'OWNER_ADMIN_REQUIRED'
+                    ? 403
+                    : 400
         return NextResponse.json(result, { status: statusCode })
     }
 

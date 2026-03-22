@@ -6,19 +6,18 @@ import { useEffect } from "react";
 
 /**
  * Route access rules per role.
- * Admin can access everything.
- * Teacher can access /teacher/* and /arena/*.
+ * Admin can access /admin/*.
  * Student can access /student/* and /arena/*.
  */
 const ROLE_ALLOWED_PREFIXES: Record<UserRole, string[]> = {
-    admin: ["/admin", "/teacher", "/student", "/arena"],
-    teacher: ["/teacher", "/arena"],
+    admin: ["/admin"],
+    sub_admin: ["/admin"],
     student: ["/student", "/arena"],
 };
 
 const ROLE_HOME: Record<UserRole, string> = {
     admin: "/admin/dashboard",
-    teacher: "/teacher/dashboard",
+    sub_admin: "/admin/dashboard",
     student: "/student/dashboard",
 };
 

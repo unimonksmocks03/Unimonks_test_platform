@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Role } from '@prisma/client'
+import { prisma } from '@/lib/prisma'
 import { redis } from '@/lib/redis'
 import {
     generateAccessToken,
@@ -9,6 +10,7 @@ import {
 } from '@/lib/auth'
 
 const SESSION_TTL = 24 * 60 * 60 // 24 hours in seconds
+const APP_SESSION_ROLES = new Set<Role>(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
 
 function refreshKey(token: string) {
     return `refresh:${token}`
@@ -46,12 +48,23 @@ export async function refreshSession(
     const userId = await redis.get(refreshKey(oldRefreshToken))
     if (!userId) return null
 
-    // We need the role — re-derive from a short lookup (stored alongside userId)
-    const roleKey = `role:${userId}`
-    const role = (await redis.get(roleKey)) as Role | null
-    if (!role) return null
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+            role: true,
+            status: true,
+        },
+    })
 
-    const accessToken = generateAccessToken(userId, role)
+    if (!user || user.status !== 'ACTIVE' || !APP_SESSION_ROLES.has(user.role)) {
+        const pipeline = redis.pipeline()
+        pipeline.del(refreshKey(oldRefreshToken))
+        pipeline.srem(userSessionsKey(userId), oldRefreshToken)
+        await pipeline.exec()
+        return null
+    }
+
+    const accessToken = generateAccessToken(userId, user.role)
     const refreshToken = generateRefreshToken()
 
     // Atomic: delete old, create new, update session set
@@ -64,11 +77,6 @@ export async function refreshSession(
     await pipeline.exec()
 
     return { accessToken, refreshToken, userId }
-}
-
-// Store the role alongside so refresh doesn't need DB hit
-export async function storeUserRole(userId: string, role: Role) {
-    await redis.set(`role:${userId}`, role, 'EX', SESSION_TTL)
 }
 
 /**
@@ -85,6 +93,7 @@ export async function destroySession(userId: string) {
             pipeline.del(refreshKey(token))
         }
         pipeline.del(sessionSetKey)
+        pipeline.del(`role:${userId}`)
         await pipeline.exec()
     }
 }

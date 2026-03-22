@@ -12,7 +12,8 @@ import {
     SidebarMenuItem,
     SidebarFooter,
 } from "@/components/ui/sidebar";
-import { BookOpen, Users, LayoutDashboard, FileText, GraduationCap, FolderOpen, BarChart3, PlusCircle } from "lucide-react";
+import { UnimonksBrand } from "@/components/branding/unimonks-brand";
+import { Users, LayoutDashboard, FileText, FolderOpen, BarChart3 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth, UserRole } from "@/lib/auth-context";
@@ -30,44 +31,25 @@ const items: NavItem[] = [
         title: "Dashboard",
         url: "/admin/dashboard",
         icon: LayoutDashboard,
-        roles: ["admin"],
+        roles: ["admin", "sub_admin"],
     },
     {
         title: "User Management",
         url: "/admin/users",
         icon: Users,
-        roles: ["admin"],
+        roles: ["admin", "sub_admin"],
     },
     {
         title: "Batch Management",
         url: "/admin/batches",
         icon: FolderOpen,
-        roles: ["admin"],
+        roles: ["admin", "sub_admin"],
     },
     {
         title: "Test Management",
         url: "/admin/tests",
         icon: FileText,
-        roles: ["admin"],
-    },
-    // Teacher
-    {
-        title: "Dashboard",
-        url: "/teacher/dashboard",
-        icon: LayoutDashboard,
-        roles: ["teacher"],
-    },
-    {
-        title: "My Tests",
-        url: "/teacher/tests",
-        icon: BookOpen,
-        roles: ["teacher"],
-    },
-    {
-        title: "Create Test",
-        url: "/teacher/tests/create",
-        icon: PlusCircle,
-        roles: ["teacher"],
+        roles: ["admin", "sub_admin"],
     },
     // Student
     {
@@ -86,9 +68,14 @@ const items: NavItem[] = [
 
 const roleLabels: Record<UserRole, string> = {
     admin: "Administration",
-    teacher: "Teaching",
+    sub_admin: "Administration",
     student: "Learning",
 };
+
+function formatRoleLabel(role: UserRole) {
+    if (role === "sub_admin") return "Sub-admin";
+    return role.charAt(0).toUpperCase() + role.slice(1);
+}
 
 export function AppSidebar() {
     const pathname = usePathname();
@@ -101,9 +88,14 @@ export function AppSidebar() {
     return (
         <Sidebar variant="inset">
             <SidebarHeader className="p-4 border-b h-16 flex items-center justify-center">
-                <Link href="/" className="flex items-center gap-2 font-bold text-xl text-primary">
-                    <GraduationCap className="h-6 w-6" />
-                    <span>Unimonk</span>
+                <Link href="/" className="flex items-center justify-center">
+                    <UnimonksBrand
+                        className="gap-2"
+                        imageClassName="h-10 w-auto"
+                        titleClassName="text-[1.1rem]"
+                        cuetClassName="text-[1.1rem]"
+                        underlineClassName="mt-1 h-[3px] w-[92%]"
+                    />
                 </Link>
             </SidebarHeader>
             <SidebarContent>
@@ -129,7 +121,7 @@ export function AppSidebar() {
                 </SidebarGroup>
             </SidebarContent>
             <SidebarFooter className="p-4 border-t text-xs text-slate-400 text-center">
-                <span>Logged in as <span className="font-bold text-slate-600 capitalize">{user.role}</span></span>
+                <span>Logged in as <span className="font-bold text-slate-600">{formatRoleLabel(user.role)}</span></span>
             </SidebarFooter>
         </Sidebar>
     );

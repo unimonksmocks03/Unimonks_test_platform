@@ -10,6 +10,7 @@ import { sendOTPRateLimit } from '@/lib/middleware/rate-limiter'
 
 const OTP_EXPIRY_MINUTES = 5
 const GENERIC_SUCCESS_MESSAGE = 'If the email is registered and active, a login code has been sent.'
+const AUTHENTICATED_ROLES = new Set(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
 
 async function sendOTPHandler(req: NextRequest): Promise<NextResponse> {
     const body = await req.json()
@@ -26,7 +27,7 @@ async function sendOTPHandler(req: NextRequest): Promise<NextResponse> {
 
     const user = await prisma.user.findUnique({ where: { email } })
 
-    if (!user || user.status !== 'ACTIVE') {
+    if (!user || user.status !== 'ACTIVE' || !AUTHENTICATED_ROLES.has(user.role)) {
         return NextResponse.json({ message: GENERIC_SUCCESS_MESSAGE })
     }
 

@@ -4,6 +4,8 @@ import { prisma } from '@/lib/prisma'
 import { clearAuthCookies, destroySession, getSessionFromRequest } from '@/lib/session'
 import { withErrorHandler } from '@/lib/middleware/error-handler'
 
+const AUTHENTICATED_ROLES = new Set(['ADMIN', 'SUB_ADMIN', 'STUDENT'])
+
 async function getSessionHandler(req: NextRequest): Promise<NextResponse> {
     const session = getSessionFromRequest(req)
 
@@ -26,7 +28,7 @@ async function getSessionHandler(req: NextRequest): Promise<NextResponse> {
         },
     })
 
-    if (!user || user.status !== 'ACTIVE') {
+    if (!user || user.status !== 'ACTIVE' || !AUTHENTICATED_ROLES.has(user.role)) {
         await destroySession(session.userId)
         const response = NextResponse.json(
             { error: true, code: 'UNAUTHORIZED', message: 'Authentication required' },

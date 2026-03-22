@@ -32,7 +32,7 @@ import { useState } from "react";
 const ROUTE_GROUP_SEGMENTS = new Set(["(auth)", "(public)"]);
 
 // Known top-level route parents that don't have their own page
-const NO_PAGE_SEGMENTS = new Set(["admin", "teacher", "student"]);
+const NO_PAGE_SEGMENTS = new Set(["admin", "student"]);
 
 export function TopHeader() {
     const pathname = usePathname();

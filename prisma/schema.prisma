@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
   engineType = "client"
 }
 
@@ -11,7 +11,7 @@ datasource db {
 
 enum Role {
   ADMIN
-  TEACHER
+  SUB_ADMIN
   STUDENT
 }
 
@@ -25,6 +25,11 @@ enum BatchStatus {
   ACTIVE
   UPCOMING
   COMPLETED
+}
+
+enum BatchKind {
+  FREE_SYSTEM
+  STANDARD
 }
 
 enum TestStatus {
@@ -52,65 +57,71 @@ enum Difficulty {
 }
 
 model User {
-  id                 String       @id @default(uuid()) @db.Uuid
-  email              String       @unique
-  name               String
-  role               Role         @default(STUDENT)
-  status             UserStatus   @default(ACTIVE)
-  otp                String?
-  otpExpiry          DateTime?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  id              String     @id @default(uuid()) @db.Uuid
+  email           String     @unique
+  name            String
+  phone           String?
+  phoneNormalized String?
+  role            Role       @default(STUDENT)
+  status          UserStatus @default(ACTIVE)
+  otp             String?
+  otpExpiry       DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
-  taughtBatches      Batch[]          @relation("TeacherBatches")
-  batchEnrollments   BatchStudent[]
-  createdTests       Test[]           @relation("TeacherTests")
-  testSessions       TestSession[]
-  auditLogs          AuditLog[]
-  testAssignments    TestAssignment[] @relation("StudentAssignments")
+  batchEnrollments BatchStudent[]
+  testsCreatedBy   Test[]           @relation("TestCreatedBy")
+  testSessions     TestSession[]
+  auditLogs        AuditLog[]
+  testAssignments  TestAssignment[] @relation("StudentAssignments")
+
+  @@index([phoneNormalized])
 }
 
 model Batch {
-  id          String           @id @default(uuid()) @db.Uuid
-  name        String
-  code        String           @unique
-  teacherId   String           @db.Uuid
-  status      BatchStatus      @default(ACTIVE)
-  createdAt   DateTime         @default(now())
+  id        String      @id @default(uuid()) @db.Uuid
+  name      String
+  code      String      @unique
+  kind      BatchKind   @default(STANDARD)
+  status    BatchStatus @default(ACTIVE)
+  createdAt DateTime    @default(now())
 
-  teacher     User             @relation("TeacherBatches", fields: [teacherId], references: [id])
   students    BatchStudent[]
   assignments TestAssignment[]
+
+  @@index([kind])
 }
 
 model BatchStudent {
-  batchId     String @db.Uuid
-  studentId   String @db.Uuid
+  batchId   String @db.Uuid
+  studentId String @db.Uuid
 
-  batch       Batch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  student     User   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@id([batchId, studentId])
   @@index([studentId]) // Student-centric lookups ("my batches")
 }
 
 model Test {
-  id              String           @id @default(uuid()) @db.Uuid
-  teacherId       String           @db.Uuid
+  id              String     @id @default(uuid()) @db.Uuid
+  createdById     String     @db.Uuid
   title           String
-  description     String?          @db.Text
+  description     String?    @db.Text
   durationMinutes Int
-  status          TestStatus       @default(DRAFT)
-  source          TestSource       @default(MANUAL)
-  settings        Json             @default("{}")
-  scheduledAt     DateTime?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  status          TestStatus @default(DRAFT)
+  source          TestSource @default(MANUAL)
+  settings        Json       @default("{}")
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
-  teacher         User             @relation("TeacherTests", fields: [teacherId], references: [id])
-  questions       Question[]
-  assignments     TestAssignment[]
-  sessions        TestSession[]
+  createdBy    User              @relation("TestCreatedBy", fields: [createdById], references: [id])
+  questions    Question[]
+  assignments  TestAssignment[]
+  sessions     TestSession[]
+  leadSessions LeadTestSession[]
+
+  @@index([createdById])
 }
 
 model Question {
@@ -118,75 +129,116 @@ model Question {
   testId      String     @db.Uuid
   order       Int
   stem        String     @db.Text
-  options     Json       
+  options     Json
   explanation String?    @db.Text
   difficulty  Difficulty @default(MEDIUM)
-  topic       String?    
+  topic       String?
 
-  test        Test       @relation(fields: [testId], references: [id], onDelete: Cascade)
+  test Test @relation(fields: [testId], references: [id], onDelete: Cascade)
 
   @@index([testId, order]) // Ordered question fetches
 }
 
 model TestAssignment {
-  id          String    @id @default(uuid()) @db.Uuid
-  testId      String    @db.Uuid
-  batchId     String?   @db.Uuid
-  studentId   String?   @db.Uuid
-  assignedAt  DateTime  @default(now())
+  id         String   @id @default(uuid()) @db.Uuid
+  testId     String   @db.Uuid
+  batchId    String?  @db.Uuid
+  studentId  String?  @db.Uuid
+  assignedAt DateTime @default(now())
 
-  test        Test      @relation(fields: [testId], references: [id], onDelete: Cascade)
-  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  student     User?     @relation("StudentAssignments", fields: [studentId], references: [id], onDelete: Cascade)
+  test    Test   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  batch   Batch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  student User?  @relation("StudentAssignments", fields: [studentId], references: [id], onDelete: Cascade)
 
   @@index([testId, batchId])
   @@index([studentId]) // Student assignment lookups
 }
 
 model TestSession {
-  id              String        @id @default(uuid()) @db.Uuid
-  testId          String        @db.Uuid
-  studentId       String        @db.Uuid
-  status          SessionStatus @default(IN_PROGRESS)
-  startedAt       DateTime      @default(now())
-  serverDeadline  DateTime      
-  submittedAt     DateTime?
-  answers         Json?         
-  tabSwitchCount  Int           @default(0)
-  score           Int?          
-  totalMarks      Int
-  percentage      Float?
+  id             String        @id @default(uuid()) @db.Uuid
+  testId         String        @db.Uuid
+  studentId      String        @db.Uuid
+  attemptNumber  Int           @default(1)
+  status         SessionStatus @default(IN_PROGRESS)
+  startedAt      DateTime      @default(now())
+  serverDeadline DateTime
+  submittedAt    DateTime?
+  answers        Json?
+  tabSwitchCount Int           @default(0)
+  score          Int?
+  totalMarks     Int
+  percentage     Float?
 
-  test            Test          @relation(fields: [testId], references: [id], onDelete: Cascade)
-  student         User          @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  aiFeedback      AIFeedback?
+  test       Test        @relation(fields: [testId], references: [id], onDelete: Cascade)
+  student    User        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  aiFeedback AIFeedback?
 
+  @@unique([testId, studentId, attemptNumber])
   @@index([testId, studentId])
   @@index([studentId, status]) // Student dashboard queries
 }
 
-model AIFeedback {
-  id                   String      @id @default(uuid()) @db.Uuid
-  testSessionId        String      @unique @db.Uuid
-  strengths            Json        
-  weaknesses           Json        
-  actionPlan           Json        
-  questionExplanations Json        
-  overallTag           String?     
-  generatedAt          DateTime    @default(now())
+model Lead {
+  id              String    @id @default(uuid()) @db.Uuid
+  name            String
+  email           String?
+  emailNormalized String?
+  phone           String?
+  phoneNormalized String?
+  isReviewed      Boolean   @default(false)
+  reviewedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  testSession          TestSession @relation(fields: [testSessionId], references: [id], onDelete: Cascade)
+  testSessions LeadTestSession[]
+
+  @@index([emailNormalized])
+  @@index([phoneNormalized])
+  @@index([isReviewed, createdAt])
+}
+
+model LeadTestSession {
+  id             String        @id @default(uuid()) @db.Uuid
+  testId         String        @db.Uuid
+  leadId         String        @db.Uuid
+  status         SessionStatus @default(IN_PROGRESS)
+  startedAt      DateTime      @default(now())
+  serverDeadline DateTime
+  submittedAt    DateTime?
+  answers        Json?
+  score          Int?
+  totalMarks     Int
+  percentage     Float?
+
+  test Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, leadId])
+  @@index([leadId, status])
+}
+
+model AIFeedback {
+  id                   String   @id @default(uuid()) @db.Uuid
+  testSessionId        String   @unique @db.Uuid
+  strengths            Json
+  weaknesses           Json
+  actionPlan           Json
+  questionExplanations Json
+  overallTag           String?
+  generatedAt          DateTime @default(now())
+
+  testSession TestSession @relation(fields: [testSessionId], references: [id], onDelete: Cascade)
 }
 
 model AuditLog {
-  id          String    @id @default(uuid()) @db.Uuid
-  userId      String    @db.Uuid
-  action      String
-  metadata    Json?
-  ipAddress   String?
-  createdAt   DateTime  @default(now())
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  action    String
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
 
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
 }

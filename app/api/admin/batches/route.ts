@@ -42,7 +42,7 @@ async function postHandler(req: NextRequest, ctx: { userId: string; role: Role }
     const result = await createBatch(parsed.data)
 
     if ('error' in result) {
-        const statusCode = result.code === 'DUPLICATE_CODE' ? 409 : result.code === 'INVALID_TEACHER' ? 400 : 400
+        const statusCode = result.code === 'DUPLICATE_CODE' ? 409 : 400
         return NextResponse.json(result, { status: statusCode })
     }
 

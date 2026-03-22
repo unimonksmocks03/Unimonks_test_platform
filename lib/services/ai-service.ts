@@ -72,13 +72,81 @@ interface CostInfo {
     costUSD: number
 }
 
-export type DocumentQuestionStrategy = 'EXTRACTED' | 'AI_GENERATED'
+type AIChunkFailure = {
+    code?: string
+    message: string
+    retryable: boolean
+}
+
+const PDF_VISION_PAGE_CHUNK_SIZE = 3
+const PDF_VISION_DESIRED_WIDTH = 1024
+
+export type DocumentQuestionStrategy = 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
+export type PdfImportFallbackMode = 'EXTRACTED' | 'GENERATED'
 
 export interface ExtractedQuestionAnalysis {
     detectedAsMcqDocument: boolean
     answerHintCount: number
     candidateBlockCount: number
     questions: GeneratedQuestion[]
+    expectedQuestionCount: number | null
+    exactMatchAchieved: boolean
+    invalidQuestionNumbers: number[]
+    missingQuestionNumbers: number[]
+    duplicateQuestionNumbers: number[]
+}
+
+type StructuredAnswerDetail = {
+    correctOptionId: string | null
+    explanation: string | null
+}
+
+type StructuredQuestionBlock = {
+    questionNumber: number
+    rawLines: string[]
+    blockText: string
+}
+
+type ParsedStructuredQuestion = {
+    questionNumber: number
+    answerHintUsed: boolean
+    blockText: string
+    optionCount: number
+    valid: boolean
+    question: GeneratedQuestion | null
+}
+
+type StructuredExtractionContext = {
+    analysis: ExtractedQuestionAnalysis
+    answerSection: string
+    questionBlocks: Map<number, StructuredQuestionBlock>
+    parsedQuestions: Map<number, ParsedStructuredQuestion>
+}
+
+export interface PreciseDocumentQuestionAnalysis extends ExtractedQuestionAnalysis {
+    aiRepairUsed: boolean
+    cost?: CostInfo
+    error?: boolean
+    message?: string
+}
+
+export interface DocumentMetadataEnrichmentResult {
+    questions: GeneratedQuestion[]
+    description: string
+    aiUsed: boolean
+    cost?: CostInfo
+    warning?: string
+}
+
+export interface PdfVisionFallbackResult {
+    mode: PdfImportFallbackMode
+    questions?: GeneratedQuestion[]
+    failedCount?: number
+    cost?: CostInfo
+    error?: boolean
+    message?: string
+    pageCount: number
+    chunkCount: number
 }
 
 // ── Cost Tracking Helper ──
@@ -115,25 +183,56 @@ async function logCostToAudit(userId: string, action: string, cost: CostInfo) {
 
 // ── Text Chunker ──
 // Splits large text into ~4000-token chunks (≈16000 chars) with overlap
-function chunkText(text: string, maxChars = 16000, overlap = 500): string[] {
+export function chunkDocumentTextForGeneration(text: string, maxChars = 16000, overlap = 500): string[] {
     if (text.length <= maxChars) return [text]
+
+    const safeOverlap = Math.max(0, Math.min(overlap, maxChars - 1))
+    const stepSize = Math.max(1, maxChars - safeOverlap)
     const chunks: string[] = []
-    let start = 0
-    while (start < text.length) {
+    for (let start = 0; start < text.length; start += stepSize) {
         const end = Math.min(start + maxChars, text.length)
         chunks.push(text.slice(start, end))
-        start = end - overlap
-        if (start >= text.length) break
+        if (end >= text.length) {
+            break
+        }
+    }
+    return chunks
+}
+
+function chunkArray<T>(items: T[], size: number): T[][]
+function chunkArray<T>(items: T[], size: number): T[][] {
+    if (size <= 0) return [items]
+
+    const chunks: T[][] = []
+    for (let index = 0; index < items.length; index += size) {
+        chunks.push(items.slice(index, index + size))
     }
     return chunks
 }
 
 function normalizeDocumentText(text: string): string {
-    return text
+    const normalized = text
         .replace(/\r\n?/g, '\n')
+        .replace(/\f/g, '\n')
         .replace(/\u00a0/g, ' ')
+        .replace(/[\u200b-\u200d\uFEFF]/g, '')
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, '\'')
         .replace(/[ \t]+\n/g, '\n')
         .replace(/[ \t]+/g, ' ')
+        .replace(/(?:^|\n)\s*--\s*\d+\s*of\s*\d+\s*--\s*(?=\n|$)/gi, '\n')
+        .replace(/\bDi\s+culty\b/gi, 'Difficulty')
+
+    const cleanedLines = normalized
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .filter(line => !/^(?:ffi|ff|fi|fl){1,4}$/i.test(line))
+        .filter(line => !/^[-–—_=*.]{3,}$/.test(line))
+        .filter(line => !/^(?:page\s*)?\d+\s*(?:of|\/)\s*\d+$/i.test(line))
+
+    return cleanedLines
+        .join('\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
 }
@@ -169,16 +268,63 @@ function detectTopic(stem: string): string {
     return words.slice(0, 3).join(' ')
 }
 
-function stripQuestionLabel(line: string): { questionNumber: number | null; stem: string } | null {
-    const questionStartMatch = line.match(
-        /^(?:question\s*|ques(?:tion)?\s*|q\s*)?(\d+)\s*(?:[.)\-:]|\b)\s*(.+)$/i
+function isLikelyQuestionStemNoise(questionNumber: number, stem: string, explicitPrefix: boolean) {
+    if (!stem) return true
+
+    if (/^[–-]\s*\d+/.test(stem)) return true
+
+    const lowerStem = stem.toLowerCase()
+    if (
+        /^(?:minutes?|marks?|mcqs?|questions?|question\s*paper|section\b|general instructions?\b|answer key\b|detailed answers?\b|quick answer grid\b|color guide\b|time allowed\b|duration\b)/i.test(lowerStem)
+    ) {
+        return true
+    }
+
+    if (!explicitPrefix) {
+        const headerCandidate = `${questionNumber} ${stem}`.toLowerCase()
+        if (/^\d+\s+(?:minutes?|marks?|mcqs?|questions?)\b/.test(headerCandidate)) {
+            return true
+        }
+    }
+
+    return false
+}
+
+function stripQuestionLabel(line: string): { questionNumber: number; stem: string; explicitPrefix: boolean } | null {
+    const trimmedLine = line.trim()
+    if (!trimmedLine) return null
+
+    const prefixedQuestionMatch = trimmedLine.match(
+        /^(question\s*|ques(?:tion)?\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.+)$/i
     )
 
-    if (!questionStartMatch) return null
+    if (prefixedQuestionMatch) {
+        const questionNumber = Number.parseInt(prefixedQuestionMatch[2], 10)
+        const stem = normalizeStem(prefixedQuestionMatch[3])
+        if (isLikelyQuestionStemNoise(questionNumber, stem, true)) {
+            return null
+        }
+
+        return {
+            questionNumber,
+            stem,
+            explicitPrefix: true,
+        }
+    }
+
+    const bareQuestionMatch = trimmedLine.match(/^(\d+)\s*(?:[.)\-:])\s*(.+)$/)
+    if (!bareQuestionMatch) return null
+
+    const questionNumber = Number.parseInt(bareQuestionMatch[1], 10)
+    const stem = normalizeStem(bareQuestionMatch[2])
+    if (isLikelyQuestionStemNoise(questionNumber, stem, false)) {
+        return null
+    }
 
     return {
-        questionNumber: Number.parseInt(questionStartMatch[1], 10),
-        stem: normalizeStem(questionStartMatch[2]),
+        questionNumber,
+        stem,
+        explicitPrefix: false,
     }
 }
 
@@ -186,101 +332,435 @@ function looksLikeQuestionStart(line: string): boolean {
     return stripQuestionLabel(line) !== null
 }
 
-function extractAnswerKey(text: string): Map<number, string> {
+const OPTION_LETTER_REGEX = /^\(?([A-D])\)?\s*[.)\-:]?\s*(.+)$/i
+const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?\s*[.)\-:]?\s*(.+)$/i
+const ANSWER_LINE_REGEX =
+    /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?=\s|$)/i
+const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
+const DIFFICULTY_LINE_REGEX = /^difficulty\s*[:\-]?\s*(easy|medium|hard)\b/i
+const TOPIC_LINE_REGEX = /^topic\s*[:\-]?\s*(.+)$/i
+
+const NUMERIC_TO_LETTER: Record<string, string> = { '1': 'A', '2': 'B', '3': 'C', '4': 'D' }
+
+function matchOptionLine(line: string): { optionId: string; text: string; sourceType: 'LETTER' | 'NUMBER' } | null {
+    const letterMatch = line.match(OPTION_LETTER_REGEX)
+    if (letterMatch) {
+        return { optionId: letterMatch[1].toUpperCase(), text: letterMatch[2], sourceType: 'LETTER' }
+    }
+
+    const numberMatch = line.match(OPTION_NUMBER_REGEX)
+    if (numberMatch) {
+        const mapped = NUMERIC_TO_LETTER[numberMatch[1]]
+        if (mapped) {
+            return { optionId: mapped, text: numberMatch[2], sourceType: 'NUMBER' }
+        }
+    }
+
+    return null
+}
+
+function isSelectionPromptLine(line: string) {
+    const normalizedLine = line
+        .replace(/^\(?([Cc])\)?\s+hoose\b/, '$1hoose')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+    return /^(?:choose|select|pick)\s+(?:the\s+)?correct\s+(?:answer|option|choice)\s*:?\s*$/i.test(normalizedLine)
+        || /^(?:which|what)\s+(?:of\s+the\s+following\s+)?(?:is|are)\s+correct\??\s*$/i.test(normalizedLine)
+        || /^correct\s+(?:option|answer)\s*:?\s*$/i.test(normalizedLine)
+}
+
+function normalizeSelectionPromptLine(line: string) {
+    return line
+        .replace(/^\(?([Cc])\)?\s+hoose\b/, '$1hoose')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+function normalizeAnswerIdent(raw: string): string {
+    const upper = raw.toUpperCase()
+    if (/^[A-D]$/.test(upper)) return upper
+    return NUMERIC_TO_LETTER[raw] || upper
+}
+
+function findAnswerSectionIndex(text: string) {
+    const markers = [
+        /(?:^|\n)\s*ANSWER\s*KEY(?:\s+WITH\s+EXPLANATIONS)?\b/i,
+        /(?:^|\n)\s*DETAILED\s*ANSWERS?(?:\s+AND\s+EXPLANATIONS)?\b/i,
+        /(?:^|\n)\s*ANSWERS\b/i,
+    ]
+
+    let earliestIndex = -1
+    for (const marker of markers) {
+        const index = text.search(marker)
+        if (index >= 0 && (earliestIndex === -1 || index < earliestIndex)) {
+            earliestIndex = index
+        }
+    }
+
+    return earliestIndex
+}
+
+function splitDocumentSections(text: string) {
+    const answerSectionIndex = findAnswerSectionIndex(text)
+    if (answerSectionIndex < 0) {
+        return {
+            questionSection: text,
+            answerSection: '',
+        }
+    }
+
+    return {
+        questionSection: text.slice(0, answerSectionIndex).trim(),
+        answerSection: text.slice(answerSectionIndex).trim(),
+    }
+}
+
+function collectStructuredQuestionBlocks(questionSection: string): StructuredQuestionBlock[] {
+    const lines = questionSection
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+
+    const blocks: StructuredQuestionBlock[] = []
+    let currentBlock: StructuredQuestionBlock | null = null
+
+    for (const line of lines) {
+        const questionLabel = stripQuestionLabel(line)
+        if (questionLabel) {
+            if (currentBlock) {
+                currentBlock.blockText = currentBlock.rawLines.join('\n')
+                blocks.push(currentBlock)
+            }
+
+            currentBlock = {
+                questionNumber: questionLabel.questionNumber,
+                rawLines: [line],
+                blockText: line,
+            }
+            continue
+        }
+
+        if (currentBlock) {
+            currentBlock.rawLines.push(line)
+        }
+    }
+
+    if (currentBlock) {
+        currentBlock.blockText = currentBlock.rawLines.join('\n')
+        blocks.push(currentBlock)
+    }
+
+    return blocks
+}
+
+function extractAnswerKey(answerSection: string): Map<number, string> {
     const answerKey = new Map<number, string>()
-    const answerSectionMatch = text.match(
-        /(?:^|\n)(?:answer\s*key|answers?|correct\s*answers?)\s*[:\-]?\s*([\s\S]{0,4000})$/i
+    if (!answerSection) return answerKey
+
+    const fallbackMatch = answerSection.match(
+        /(?:^|\n)(?:answer\s*key|answers?|correct\s*answers?)\s*[:\-]?\s*([\s\S]{0,10000})$/i
     )
 
-    const searchArea = answerSectionMatch?.[1] ?? ''
+    const searchArea = fallbackMatch?.[1] ?? answerSection
     if (!searchArea) return answerKey
 
-    const pairRegex = /(\d{1,4})\s*[\).:\-]?\s*(?:option\s*)?([A-D])\b/gi
+    const pairRegex = /(?:^|\n)\s*(\d{1,4})\s*[\).:\-]?\s*(?:option\s*)?\(?([A-Da-d])\)?(?=\s|$)/gi
     let match: RegExpExecArray | null
     while ((match = pairRegex.exec(searchArea)) !== null) {
-        answerKey.set(Number.parseInt(match[1], 10), match[2].toUpperCase())
+        answerKey.set(Number.parseInt(match[1], 10), normalizeAnswerIdent(match[2]))
+    }
+
+    const lines = searchArea.split('\n').map(line => line.trim()).filter(Boolean)
+    let pendingQNumbers: number[] = []
+    for (const line of lines) {
+        const qMatches = [...line.matchAll(/Q(\d+)/gi)]
+        if (qMatches.length >= 2) {
+            pendingQNumbers = qMatches.map(qMatch => Number.parseInt(qMatch[1], 10))
+            continue
+        }
+
+        const singleQuestionMatch = line.match(/^Q(\d+)$/i)
+        if (singleQuestionMatch) {
+            pendingQNumbers.push(Number.parseInt(singleQuestionMatch[1], 10))
+            continue
+        }
+
+        const answerMatches = [...line.matchAll(/([1-4A-Da-d])\)/g)]
+        if (answerMatches.length >= 2 && pendingQNumbers.length > 0) {
+            for (let index = 0; index < Math.min(answerMatches.length, pendingQNumbers.length); index++) {
+                answerKey.set(
+                    pendingQNumbers[index],
+                    normalizeAnswerIdent(answerMatches[index][1]),
+                )
+            }
+            pendingQNumbers = []
+            continue
+        }
+
+        const singleAnswerMatch = line.match(/^([1-4A-Da-d])\)$/)
+        if (singleAnswerMatch && pendingQNumbers.length > 0) {
+            const questionNumber = pendingQNumbers.shift()
+            if (questionNumber !== undefined) {
+                answerKey.set(questionNumber, normalizeAnswerIdent(singleAnswerMatch[1]))
+            }
+            continue
+        }
+
+        if (!/^Q\d/i.test(line) && !/^[1-4A-Da-d]\)$/.test(line)) {
+            pendingQNumbers = []
+        }
+    }
+
+    let currentQuestionNumber: number | null = null
+    for (const line of lines) {
+        const questionMatch = line.match(/^Q(\d+)\b/i)
+        if (questionMatch) {
+            currentQuestionNumber = Number.parseInt(questionMatch[1], 10)
+        }
+
+        const correctAnswerMatch = line.match(/^(?:correct\s*answer|answer)\s*:\s*\(?([1-4A-Da-d])\)?/i)
+        if (correctAnswerMatch && currentQuestionNumber !== null) {
+            answerKey.set(currentQuestionNumber, normalizeAnswerIdent(correctAnswerMatch[1]))
+        }
     }
 
     return answerKey
 }
 
-function parseQuestionBlock(block: string, answerKey: Map<number, string>): {
-    answerHintUsed: boolean
-    candidate: boolean
-    question: GeneratedQuestion | null
-} {
-    const rawLines = block
-        .split('\n')
+function extractDetailedAnswerRecords(answerSection: string): Map<number, StructuredAnswerDetail> {
+    const detailedAnswers = new Map<number, StructuredAnswerDetail>()
+    if (!answerSection) return detailedAnswers
+
+    const blocks = answerSection
+        .split(/\n(?=Q\d+\b)/i)
+        .map(block => block.trim())
+        .filter(Boolean)
+
+    for (const block of blocks) {
+        const lines = block
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean)
+
+        const firstQuestionLine = lines[0]?.match(/^Q(\d+)\b/i)
+        if (!firstQuestionLine) continue
+
+        const questionNumber = Number.parseInt(firstQuestionLine[1], 10)
+        let correctOptionId: string | null = null
+        let explanation: string | null = null
+        let collectingExplanation = false
+
+        for (const line of lines.slice(1)) {
+            const correctAnswerMatch = line.match(/^(?:correct\s*answer|answer)\s*:\s*\(?([1-4A-Da-d])\)?/i)
+            if (correctAnswerMatch) {
+                correctOptionId = normalizeAnswerIdent(correctAnswerMatch[1])
+                collectingExplanation = false
+                continue
+            }
+
+            const explanationMatch = line.match(EXPLANATION_LINE_REGEX)
+            if (explanationMatch) {
+                explanation = normalizeStem(explanationMatch[1])
+                collectingExplanation = true
+                continue
+            }
+
+            if (collectingExplanation) {
+                if (/^(?:difficulty|topic|correct\s*answer|answer)\b/i.test(line)) {
+                    collectingExplanation = false
+                    continue
+                }
+
+                explanation = `${explanation ?? ''} ${normalizeStem(line)}`.trim()
+            }
+        }
+
+        if (correctOptionId || explanation) {
+            detailedAnswers.set(questionNumber, {
+                correctOptionId,
+                explanation,
+            })
+        }
+    }
+
+    return detailedAnswers
+}
+
+function parseQuestionBlock(
+    block: StructuredQuestionBlock,
+    answerKey: Map<number, string>,
+    detailedAnswers: Map<number, StructuredAnswerDetail>,
+): ParsedStructuredQuestion {
+    const rawLines = block.rawLines
         .map(line => line.trim())
         .filter(Boolean)
 
     if (rawLines.length === 0) {
-        return { answerHintUsed: false, candidate: false, question: null }
+        return {
+            questionNumber: block.questionNumber,
+            answerHintUsed: false,
+            blockText: block.blockText,
+            optionCount: 0,
+            valid: false,
+            question: null,
+        }
     }
 
     const firstLine = stripQuestionLabel(rawLines[0])
     if (!firstLine || !firstLine.stem) {
-        return { answerHintUsed: false, candidate: false, question: null }
+        return {
+            questionNumber: block.questionNumber,
+            answerHintUsed: false,
+            blockText: block.blockText,
+            optionCount: 0,
+            valid: false,
+            question: null,
+        }
     }
 
     const stemParts = [firstLine.stem]
     const options = new Map<string, string>()
     let activeOption: string | null = null
+    let activeSection: 'stem' | 'option' | 'explanation' | 'statement' = 'stem'
     let correctOptionId: string | null = null
     let explanation = ''
+    let difficulty: GeneratedQuestion['difficulty'] | null = null
+    let topic: string | null = null
     let answerHintUsed = false
+    let answerSeen = false
+    let activeStatement = false
+
+    const optionCandidates = rawLines
+        .slice(1)
+        .map((line, index) => ({ index, line, option: matchOptionLine(line) }))
+        .filter((entry): entry is { index: number; line: string; option: { optionId: string; text: string; sourceType: 'LETTER' | 'NUMBER' } } => entry.option !== null)
+
+    const numericOptionEntries = optionCandidates.filter(entry => entry.option.sourceType === 'NUMBER')
+    const firstNumericOptionIndex = numericOptionEntries[0]?.index ?? -1
+    const leadingLetterOptionCount = optionCandidates.filter(
+        entry => entry.option.sourceType === 'LETTER' && (firstNumericOptionIndex === -1 || entry.index < firstNumericOptionIndex),
+    ).length
+    const useStatementStyleOptions = numericOptionEntries.length >= 4 && leadingLetterOptionCount >= 2
 
     for (const line of rawLines.slice(1)) {
         if (looksLikeQuestionStart(line)) break
 
-        const answerMatch = line.match(
-            /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*[:\-]?\s*(?:option\s*)?([A-D])\b/i
-        )
+        const answerMatch = line.match(ANSWER_LINE_REGEX)
         if (answerMatch) {
-            correctOptionId = answerMatch[1].toUpperCase()
+            correctOptionId = normalizeAnswerIdent(answerMatch[1])
             answerHintUsed = true
+            answerSeen = true
             activeOption = null
+            activeSection = 'stem'
             continue
         }
 
-        const explanationMatch = line.match(/^(?:explanation|reason)\s*[:\-]?\s*(.+)$/i)
+        const explanationMatch = line.match(EXPLANATION_LINE_REGEX)
         if (explanationMatch) {
             explanation = explanationMatch[1].trim()
             activeOption = null
+            activeSection = 'explanation'
             continue
         }
 
-        const optionMatch = line.match(/^\(?([A-D])\)?\s*[.)\-:]?\s+(.+)$/i)
-        if (optionMatch) {
-            const optionId = optionMatch[1].toUpperCase()
-            const optionText = normalizeOptionText(optionMatch[2])
+        const difficultyMatch = line.match(DIFFICULTY_LINE_REGEX)
+        if (difficultyMatch) {
+            difficulty = difficultyMatch[1].toUpperCase() as GeneratedQuestion['difficulty']
+            activeOption = null
+            activeSection = 'stem'
+            continue
+        }
 
-            if (!optionText) continue
+        const topicMatch = line.match(TOPIC_LINE_REGEX)
+        if (topicMatch) {
+            topic = normalizeStem(topicMatch[1])
+            activeOption = null
+            activeSection = 'stem'
+            activeStatement = false
+            continue
+        }
 
-            if (/\((?:correct)\)|\[(?:correct)\]|✓|✅/i.test(optionMatch[2])) {
-                correctOptionId = optionId
-                answerHintUsed = true
+        if (!answerSeen && useStatementStyleOptions && isSelectionPromptLine(line)) {
+            stemParts.push(normalizeSelectionPromptLine(line))
+            activeOption = null
+            activeSection = 'stem'
+            activeStatement = false
+            continue
+        }
+
+        if (!answerSeen) {
+            const optionResult = matchOptionLine(line)
+            if (optionResult) {
+                const optionText = normalizeOptionText(optionResult.text)
+
+                if (!optionText) continue
+
+                if (useStatementStyleOptions && optionResult.sourceType === 'LETTER') {
+                    stemParts.push(`(${optionResult.optionId}) ${optionText}`)
+                    activeOption = null
+                    activeSection = 'statement'
+                    activeStatement = true
+                    continue
+                }
+
+                if (/\((?:correct)\)|\[(?:correct)\]|✓|✅/i.test(optionResult.text)) {
+                    correctOptionId = optionResult.optionId
+                    answerHintUsed = true
+                }
+
+                options.set(optionResult.optionId, optionText)
+                activeOption = optionResult.optionId
+                activeSection = 'option'
+                activeStatement = false
+                continue
             }
-
-            options.set(optionId, optionText)
-            activeOption = optionId
-            continue
         }
 
-        if (activeOption && options.has(activeOption)) {
+        if (!answerSeen && activeOption && options.has(activeOption)) {
             options.set(activeOption, `${options.get(activeOption)} ${normalizeOptionText(line)}`.trim())
             continue
         }
 
+        if (!answerSeen && useStatementStyleOptions && activeStatement) {
+            if (isSelectionPromptLine(line)) {
+                stemParts.push(normalizeStem(line))
+                activeSection = 'stem'
+                activeStatement = false
+                continue
+            }
+
+            const previousStemPart = stemParts.pop() ?? ''
+            stemParts.push(`${previousStemPart} ${normalizeOptionText(line)}`.trim())
+            continue
+        }
+
+        if (activeSection === 'explanation' && explanation) {
+            explanation = `${explanation} ${normalizeOptionText(line)}`.trim()
+            continue
+        }
+
+        if (answerSeen) {
+            continue
+        }
+
         stemParts.push(line)
+        activeSection = 'stem'
+        activeStatement = false
     }
 
-    if (!correctOptionId && firstLine.questionNumber !== null) {
-        const keyedAnswer = answerKey.get(firstLine.questionNumber)
+    const detailedAnswer = detailedAnswers.get(firstLine.questionNumber)
+    if (!correctOptionId) {
+        const detailedCorrectOptionId = detailedAnswer?.correctOptionId
+        const keyedAnswer = detailedCorrectOptionId || answerKey.get(firstLine.questionNumber)
         if (keyedAnswer) {
             correctOptionId = keyedAnswer
             answerHintUsed = true
         }
+    }
+
+    if (!explanation && detailedAnswer?.explanation) {
+        explanation = detailedAnswer.explanation
     }
 
     const optionEntries = ['A', 'B', 'C', 'D']
@@ -295,51 +775,588 @@ function parseQuestionBlock(block: string, answerKey: Map<number, string>): {
         stem: normalizeStem(stemParts.join(' ')),
         options: optionEntries,
         explanation: explanation || 'Imported from structured MCQ document.',
-        difficulty: guessDifficulty(stemParts.join(' ')),
-        topic: detectTopic(stemParts.join(' ')),
+        difficulty: difficulty || guessDifficulty(stemParts.join(' ')),
+        topic: topic || detectTopic(stemParts.join(' ')),
     }
 
     return {
+        questionNumber: firstLine.questionNumber,
         answerHintUsed,
-        candidate: true,
+        blockText: block.blockText,
+        optionCount: optionEntries.length,
+        valid: validateQuestion(question),
         question: validateQuestion(question) ? question : null,
     }
 }
 
-export function extractQuestionsFromDocumentText(text: string): ExtractedQuestionAnalysis {
-    const structuredText = normalizeDocumentText(text)
-        .replace(/\n(?=\d+\s*[.)])/g, '\n')
-        .replace(/([^\n])\s+(?=(?:question\s*\d+|ques(?:tion)?\s*\d+|q\s*\d+|\d+\s*[.)-])\s)/gi, '$1\n')
-        .replace(/([^\n])\s+(?=(?:\(?[A-D]\)?\s*[.)\-:])\s+)/g, '$1\n')
-        .replace(/([^\n])\s+(?=(?:answer|ans(?:wer)?|correct\s*answer|explanation)\s*[:\-])/gi, '$1\n')
+function buildExpectedQuestionSequence(questionNumbers: number[]) {
+    if (questionNumbers.length < 5) return null
 
-    const answerKey = extractAnswerKey(structuredText)
-    const blocks = structuredText
-        .split(/\n(?=(?:question\s*|ques(?:tion)?\s*|q\s*)?\d+\s*(?:[.)\-:]|\b)\s+)/i)
-        .map(block => block.trim())
-        .filter(Boolean)
+    const uniqueQuestionNumbers = [...new Set(questionNumbers)].sort((left, right) => left - right)
+    if (uniqueQuestionNumbers[0] !== 1) return null
 
-    const questions: GeneratedQuestion[] = []
-    let candidateBlockCount = 0
-    let answerHintCount = 0
+    const maxQuestionNumber = uniqueQuestionNumbers.at(-1) ?? 0
+    const missingQuestionNumbers: number[] = []
+    const seenNumbers = new Set(uniqueQuestionNumbers)
 
-    for (const block of blocks) {
-        const parsed = parseQuestionBlock(block, answerKey)
-        if (!parsed.candidate) continue
-
-        candidateBlockCount++
-        if (parsed.answerHintUsed) answerHintCount++
-        if (parsed.question) questions.push(parsed.question)
+    for (let questionNumber = 1; questionNumber <= maxQuestionNumber; questionNumber++) {
+        if (!seenNumbers.has(questionNumber)) {
+            missingQuestionNumbers.push(questionNumber)
+        }
     }
 
-    const detectedAsMcqDocument =
-        questions.length >= 5 || (questions.length >= 3 && answerHintCount >= Math.ceil(questions.length / 2))
+    const maxAllowedMissingQuestions = Math.max(3, Math.floor(maxQuestionNumber * 0.1))
+    if (missingQuestionNumbers.length > maxAllowedMissingQuestions) {
+        return null
+    }
+
+    return Array.from({ length: maxQuestionNumber }, (_, index) => index + 1)
+}
+
+function buildStructuredExtractionContext(text: string): StructuredExtractionContext {
+    const normalizedText = normalizeDocumentText(text)
+    const { questionSection, answerSection } = splitDocumentSections(normalizedText)
+    const collectedBlocks = collectStructuredQuestionBlocks(questionSection)
+    const answerKey = extractAnswerKey(answerSection)
+    const detailedAnswers = extractDetailedAnswerRecords(answerSection)
+
+    const questionBlocks = new Map<number, StructuredQuestionBlock>()
+    const duplicateQuestionNumbers = new Set<number>()
+    for (const block of collectedBlocks) {
+        const existing = questionBlocks.get(block.questionNumber)
+        if (!existing || block.blockText.length > existing.blockText.length) {
+            questionBlocks.set(block.questionNumber, block)
+        }
+        if (existing) {
+            duplicateQuestionNumbers.add(block.questionNumber)
+        }
+    }
+
+    const parsedQuestions = new Map<number, ParsedStructuredQuestion>()
+    const invalidQuestionNumbers = new Set<number>()
+    let answerHintCount = 0
+
+    for (const block of questionBlocks.values()) {
+        const parsedQuestion = parseQuestionBlock(block, answerKey, detailedAnswers)
+        if (parsedQuestion.answerHintUsed) {
+            answerHintCount++
+        }
+
+        parsedQuestions.set(parsedQuestion.questionNumber, parsedQuestion)
+        if (!parsedQuestion.valid || parsedQuestion.question === null) {
+            invalidQuestionNumbers.add(parsedQuestion.questionNumber)
+        }
+    }
+
+    const questionNumbers = [...questionBlocks.keys()].sort((left, right) => left - right)
+    const expectedQuestionSequence = buildExpectedQuestionSequence(questionNumbers)
+    const validQuestionsByNumber = new Map<number, GeneratedQuestion>()
+    for (const parsedQuestion of parsedQuestions.values()) {
+        if (parsedQuestion.valid && parsedQuestion.question) {
+            validQuestionsByNumber.set(parsedQuestion.questionNumber, parsedQuestion.question)
+        }
+    }
+
+    const missingQuestionNumbers = expectedQuestionSequence
+        ? expectedQuestionSequence.filter(questionNumber => !validQuestionsByNumber.has(questionNumber))
+        : []
+
+    const orderedQuestions = expectedQuestionSequence
+        ? expectedQuestionSequence
+            .map(questionNumber => validQuestionsByNumber.get(questionNumber))
+            .filter((question): question is GeneratedQuestion => question !== undefined)
+        : [...validQuestionsByNumber.entries()]
+            .sort((left, right) => left[0] - right[0])
+            .map(([, question]) => question)
+
+    const detectedAsMcqDocument = expectedQuestionSequence !== null
+        && (
+            questionBlocks.size >= 5
+            || answerKey.size >= 5
+            || answerHintCount >= Math.max(3, Math.floor(questionBlocks.size * 0.5))
+        )
+
+    const exactMatchAchieved = expectedQuestionSequence !== null
+        ? missingQuestionNumbers.length === 0 && duplicateQuestionNumbers.size === 0
+        : orderedQuestions.length > 0
 
     return {
-        detectedAsMcqDocument,
-        answerHintCount,
-        candidateBlockCount,
-        questions: deduplicateQuestions(questions),
+        answerSection,
+        questionBlocks,
+        parsedQuestions,
+        analysis: {
+            detectedAsMcqDocument,
+            answerHintCount,
+            candidateBlockCount: questionBlocks.size,
+            questions: orderedQuestions,
+            expectedQuestionCount: expectedQuestionSequence?.length ?? null,
+            exactMatchAchieved,
+            invalidQuestionNumbers: [...invalidQuestionNumbers].sort((left, right) => left - right),
+            missingQuestionNumbers,
+            duplicateQuestionNumbers: [...duplicateQuestionNumbers].sort((left, right) => left - right),
+        },
+    }
+}
+
+export function extractQuestionsFromDocumentText(text: string): ExtractedQuestionAnalysis {
+    return buildStructuredExtractionContext(text).analysis
+}
+
+function buildAnswerContextSnippet(answerSection: string, questionNumber: number) {
+    if (!answerSection) return null
+
+    const directQuestionMatch = answerSection.match(
+        new RegExp(`(?:^|\\n)Q${questionNumber}\\b[\\s\\S]{0,1200}`, 'i')
+    )
+    if (directQuestionMatch) {
+        return directQuestionMatch[0].trim()
+    }
+
+    const gridMatch = answerSection.match(
+        new RegExp(`Q${questionNumber}\\b[\\s\\S]{0,300}`, 'i')
+    )
+    return gridMatch?.[0]?.trim() ?? null
+}
+
+async function repairStructuredQuestionSetWithAI(
+    context: StructuredExtractionContext,
+    auditUserId?: string,
+): Promise<{ questions: Map<number, GeneratedQuestion>; cost?: CostInfo; error?: boolean; message?: string }> {
+    const expectedQuestionCount = context.analysis.expectedQuestionCount
+    if (expectedQuestionCount === null) {
+        return { questions: new Map() }
+    }
+
+    const repairQuestionNumbers = [...new Set([
+        ...context.analysis.invalidQuestionNumbers,
+        ...context.analysis.missingQuestionNumbers,
+    ])].sort((left, right) => left - right)
+
+    if (repairQuestionNumbers.length === 0) {
+        return { questions: new Map() }
+    }
+
+    if (!openai) {
+        return {
+            questions: new Map(),
+            error: true,
+            message: `Detected ${expectedQuestionCount} numbered MCQs but could not recover them exactly. OpenAI repair is unavailable because OPENAI_API_KEY is not configured.`,
+        }
+    }
+
+    const model = 'gpt-4o-mini'
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+    const repairedQuestions = new Map<number, GeneratedQuestion>()
+    const repairBatches = chunkArray(repairQuestionNumbers, 8)
+
+    for (const repairBatch of repairBatches) {
+        const batchContext = repairBatch.map(questionNumber => {
+            const questionBlock = context.questionBlocks.get(questionNumber)
+            const parsedQuestion = context.parsedQuestions.get(questionNumber)
+            const parserIssue = parsedQuestion
+                ? (
+                    parsedQuestion.valid
+                        ? 'Missing from final exact set.'
+                        : `Parser could not validate this block (optionCount=${parsedQuestion.optionCount}).`
+                )
+                : 'Question block was missing from the parser output.'
+
+            return [
+                `Question ${questionNumber}`,
+                `Parser issue: ${parserIssue}`,
+                'Question block:',
+                questionBlock?.blockText ?? '[missing]',
+                'Answer context:',
+                buildAnswerContextSnippet(context.answerSection, questionNumber) ?? '[none]',
+            ].join('\n')
+        }).join('\n\n---\n\n')
+
+        const prompt = `You are repairing MCQ extraction from a text-only coaching document.
+
+Extract only the requested numbered questions and return strict JSON:
+{
+  "questions": [
+    {
+      "questionNumber": 1,
+      "stem": "question text",
+      "options": [
+        {"id": "A", "text": "option text", "isCorrect": false},
+        {"id": "B", "text": "option text", "isCorrect": true},
+        {"id": "C", "text": "option text", "isCorrect": false},
+        {"id": "D", "text": "option text", "isCorrect": false}
+      ],
+      "explanation": "brief explanation",
+      "difficulty": "EASY" | "MEDIUM" | "HARD",
+      "topic": "short topic tag"
+    }
+  ]
+}
+
+Rules:
+- Return only these question numbers: ${repairBatch.join(', ')}.
+- Use only the provided text. Do not invent extra facts or renumber questions.
+- Exactly 4 options, labeled A-D.
+- Exactly 1 correct option.
+- If the answer context gives 1/2/3/4, map it to A/B/C/D.
+- Ignore instructions, headers, color guides, and answer-key-only lines.
+- If a question cannot be recovered with confidence, omit it entirely from the JSON.
+
+Repair targets:
+${batchContext}`
+
+        try {
+            const response = await openai.chat.completions.create({
+                model,
+                temperature: 0,
+                max_tokens: 4000,
+                response_format: { type: 'json_object' },
+                messages: [{ role: 'user', content: prompt }],
+            })
+
+            const content = response.choices[0]?.message?.content
+            if (!content) {
+                continue
+            }
+
+            const parsed = JSON.parse(content) as {
+                questions?: Array<GeneratedQuestion & { questionNumber?: number }>
+            }
+
+            const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : []
+            for (const rawQuestion of rawQuestions) {
+                const questionNumber = Number(rawQuestion.questionNumber)
+                if (!Number.isInteger(questionNumber) || !repairBatch.includes(questionNumber)) {
+                    continue
+                }
+
+                if (validateQuestion(rawQuestion)) {
+                    repairedQuestions.set(questionNumber, rawQuestion)
+                }
+            }
+
+            const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
+            totalCost.inputTokens += cost.inputTokens
+            totalCost.outputTokens += cost.outputTokens
+            totalCost.costUSD += cost.costUSD
+        } catch (error) {
+            const failure = toAIChunkFailure(error)
+            return {
+                questions: repairedQuestions,
+                cost: totalCost,
+                error: true,
+                message: failure.message,
+            }
+        }
+    }
+
+    if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
+        await logCostToAudit(auditUserId, 'AI_DOC_REPAIR', totalCost)
+    }
+
+    return {
+        questions: repairedQuestions,
+        cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+    }
+}
+
+export async function extractQuestionsFromDocumentTextPrecisely(
+    text: string,
+    auditUserId?: string,
+): Promise<PreciseDocumentQuestionAnalysis> {
+    const context = buildStructuredExtractionContext(text)
+    if (!context.analysis.detectedAsMcqDocument || context.analysis.expectedQuestionCount === null) {
+        return {
+            ...context.analysis,
+            aiRepairUsed: false,
+        }
+    }
+
+    if (context.analysis.exactMatchAchieved) {
+        return {
+            ...context.analysis,
+            aiRepairUsed: false,
+        }
+    }
+
+    const repairResult = await repairStructuredQuestionSetWithAI(context, auditUserId)
+    const repairedQuestionsByNumber = new Map<number, GeneratedQuestion>()
+
+    for (const parsedQuestion of context.parsedQuestions.values()) {
+        if (parsedQuestion.valid && parsedQuestion.question) {
+            repairedQuestionsByNumber.set(parsedQuestion.questionNumber, parsedQuestion.question)
+        }
+    }
+
+    for (const [questionNumber, repairedQuestion] of repairResult.questions.entries()) {
+        repairedQuestionsByNumber.set(questionNumber, repairedQuestion)
+    }
+
+    const expectedQuestionNumbers = Array.from(
+        { length: context.analysis.expectedQuestionCount },
+        (_, index) => index + 1,
+    )
+    const missingQuestionNumbers = expectedQuestionNumbers.filter(
+        questionNumber => !repairedQuestionsByNumber.has(questionNumber),
+    )
+    const exactMatchAchieved = missingQuestionNumbers.length === 0
+    const questions = expectedQuestionNumbers
+        .map(questionNumber => repairedQuestionsByNumber.get(questionNumber))
+        .filter((question): question is GeneratedQuestion => question !== undefined)
+
+    const message = exactMatchAchieved
+        ? undefined
+        : (
+            repairResult.message
+            || `Detected ${context.analysis.expectedQuestionCount} numbered MCQs, but only recovered ${questions.length}. Missing question numbers: ${missingQuestionNumbers.join(', ')}.`
+        )
+
+    return {
+        ...context.analysis,
+        questions,
+        exactMatchAchieved,
+        missingQuestionNumbers,
+        invalidQuestionNumbers: exactMatchAchieved
+            ? []
+            : context.analysis.invalidQuestionNumbers.filter(questionNumber => missingQuestionNumbers.includes(questionNumber)),
+        aiRepairUsed: repairResult.questions.size > 0,
+        cost: repairResult.cost,
+        error: repairResult.error || !exactMatchAchieved,
+        message,
+    }
+}
+
+async function classifyQuestionMetadataBatchWithAI(
+    questions: GeneratedQuestion[],
+): Promise<{ questions: Array<{ questionNumber: number; difficulty: GeneratedQuestion['difficulty']; topic: string }>; cost?: CostInfo; error?: boolean; message?: string }> {
+    if (!openai) {
+        return {
+            questions: [],
+            error: true,
+            message: 'OpenAI API key not configured. Metadata enrichment is unavailable.',
+        }
+    }
+
+    const model = 'gpt-4o-mini'
+    const prompt = `You are reviewing extracted CUET-style MCQs.
+
+For each question, assign:
+- difficulty: EASY, MEDIUM, or HARD
+- topic: a concise syllabus-aligned topic tag (2-6 words)
+
+Difficulty rubric:
+- EASY: direct recall, one-step identification, simple fact or formula recognition
+- MEDIUM: two linked ideas, conceptual interpretation, elimination between close options, moderate calculation
+- HARD: multi-step reasoning, match-the-following, assertion-reason, statement-combination, or higher cognitive discrimination
+
+Return strict JSON:
+{
+  "questions": [
+    {
+      "questionNumber": 1,
+      "difficulty": "MEDIUM",
+      "topic": "Electrostatics Basics"
+    }
+  ]
+}
+
+Rules:
+- Keep the original question numbering.
+- Do not rewrite the question or options.
+- Topic must stay short, specific, and curriculum-friendly.
+- Classify all provided questions.
+
+Questions:
+${questions.map((question, index) => `${index + 1}. ${question.stem}
+A. ${question.options[0]?.text ?? ''}
+B. ${question.options[1]?.text ?? ''}
+C. ${question.options[2]?.text ?? ''}
+D. ${question.options[3]?.text ?? ''}
+Current topic hint: ${normalizeTopicLabel(question.topic, question.stem)}
+Current difficulty hint: ${normalizeDifficultyLabel(question.difficulty)}`).join('\n\n')}`
+
+    try {
+        const response = await openai.chat.completions.create({
+            model,
+            temperature: 0,
+            max_tokens: 2500,
+            response_format: { type: 'json_object' },
+            messages: [{ role: 'user', content: prompt }],
+        })
+
+        const content = response.choices[0]?.message?.content
+        if (!content) {
+            return { questions: [], error: true, message: 'OpenAI returned an empty metadata response.' }
+        }
+
+        const parsed = JSON.parse(content) as {
+            questions?: Array<{ questionNumber?: number; difficulty?: string; topic?: string }>
+        }
+        const normalizedQuestions = Array.isArray(parsed.questions)
+            ? parsed.questions
+                .map(question => {
+                    const questionNumber = Number(question.questionNumber)
+                    if (!Number.isInteger(questionNumber) || questionNumber < 1 || questionNumber > questions.length) {
+                        return null
+                    }
+
+                    return {
+                        questionNumber,
+                        difficulty: normalizeDifficultyLabel(question.difficulty),
+                        topic: normalizeTopicLabel(question.topic, questions[questionNumber - 1]?.stem),
+                    }
+                })
+                .filter((question): question is { questionNumber: number; difficulty: GeneratedQuestion['difficulty']; topic: string } => question !== null)
+            : []
+
+        return {
+            questions: normalizedQuestions,
+            cost: calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number }),
+        }
+    } catch (error) {
+        const failure = toAIChunkFailure(error)
+        return {
+            questions: [],
+            error: true,
+            message: failure.message,
+        }
+    }
+}
+
+async function summarizeDocumentQuestionSetWithAI(
+    questions: GeneratedQuestion[],
+    sourceLabel?: string,
+): Promise<{ description?: string; cost?: CostInfo; error?: boolean; message?: string }> {
+    if (!openai) {
+        return {
+            description: buildFallbackDocumentDescription(questions, sourceLabel),
+            error: true,
+            message: 'OpenAI API key not configured. Using fallback document description.',
+        }
+    }
+
+    const model = 'gpt-4o-mini'
+    const prompt = `You are writing a concise admin-facing description for a generated CUET mock test.
+
+Write 2 short sentences, under 280 characters total, that summarize:
+- the overall syllabus coverage
+- the question style or difficulty profile
+
+Return strict JSON:
+{
+  "description": "..."
+}
+
+Rules:
+- Mention CUET naturally when appropriate.
+- Be specific, not generic marketing copy.
+- Do not mention parsing, AI, uploads, or engineering.
+- Focus on what the test covers.
+
+Source label: ${sourceLabel ?? 'uploaded document'}
+Questions:
+${questions.map((question, index) => `${index + 1}. [${normalizeDifficultyLabel(question.difficulty)}] ${normalizeTopicLabel(question.topic, question.stem)} — ${question.stem}`).join('\n')}`
+
+    try {
+        const response = await openai.chat.completions.create({
+            model,
+            temperature: 0.2,
+            max_tokens: 220,
+            response_format: { type: 'json_object' },
+            messages: [{ role: 'user', content: prompt }],
+        })
+
+        const content = response.choices[0]?.message?.content
+        if (!content) {
+            return { description: buildFallbackDocumentDescription(questions, sourceLabel), error: true, message: 'OpenAI returned an empty document summary response.' }
+        }
+
+        const parsed = JSON.parse(content) as { description?: string }
+        const description = parsed.description
+            ?.replace(/\s+/g, ' ')
+            .trim()
+
+        return {
+            description: description && description.length > 0
+                ? description.slice(0, 280)
+                : buildFallbackDocumentDescription(questions, sourceLabel),
+            cost: calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number }),
+        }
+    } catch (error) {
+        const failure = toAIChunkFailure(error)
+        return {
+            description: buildFallbackDocumentDescription(questions, sourceLabel),
+            error: true,
+            message: failure.message,
+        }
+    }
+}
+
+export async function enrichGeneratedQuestionsMetadata(input: {
+    questions: GeneratedQuestion[]
+    auditUserId?: string
+    sourceLabel?: string
+}): Promise<DocumentMetadataEnrichmentResult> {
+    if (input.questions.length === 0) {
+        return {
+            questions: [],
+            description: buildFallbackDocumentDescription([], input.sourceLabel),
+            aiUsed: false,
+        }
+    }
+
+    const metadataBatches = chunkArray(input.questions, 12)
+    let metadataWarning: string | undefined
+    const metadataCosts: Array<CostInfo | undefined> = []
+    const metadataOverrides = new Map<number, { difficulty: GeneratedQuestion['difficulty']; topic: string }>()
+
+    for (let batchIndex = 0; batchIndex < metadataBatches.length; batchIndex++) {
+        const batch = metadataBatches[batchIndex]
+        const batchResult = await classifyQuestionMetadataBatchWithAI(batch)
+        if (batchResult.cost) {
+            metadataCosts.push(batchResult.cost)
+        }
+
+        if (batchResult.error) {
+            metadataWarning = batchResult.message
+            break
+        }
+
+        for (const override of batchResult.questions) {
+            metadataOverrides.set((batchIndex * 12) + override.questionNumber, {
+                difficulty: override.difficulty,
+                topic: override.topic,
+            })
+        }
+    }
+
+    const questions = input.questions.map((question, index) => {
+        const override = metadataOverrides.get(index + 1)
+        return {
+            ...question,
+            difficulty: override?.difficulty ?? normalizeDifficultyLabel(question.difficulty, guessDifficulty(question.stem)),
+            topic: override?.topic ?? normalizeTopicLabel(question.topic, question.stem),
+        }
+    })
+
+    const descriptionResult = await summarizeDocumentQuestionSetWithAI(questions, input.sourceLabel)
+    if (descriptionResult.cost) {
+        metadataCosts.push(descriptionResult.cost)
+    }
+    if (descriptionResult.error && metadataWarning === undefined) {
+        metadataWarning = descriptionResult.message
+    }
+
+    const totalCost = mergeCosts(...metadataCosts)
+    if (input.auditUserId && totalCost) {
+        await logCostToAudit(input.auditUserId, 'AI_DOC_METADATA', totalCost)
+    }
+
+    return {
+        questions,
+        description: descriptionResult.description ?? buildFallbackDocumentDescription(questions, input.sourceLabel),
+        aiUsed: metadataOverrides.size > 0 || Boolean(descriptionResult.cost),
+        cost: totalCost,
+        warning: metadataWarning,
     }
 }
 
@@ -347,7 +1364,7 @@ export function extractQuestionsFromDocumentText(text: string): ExtractedQuestio
 export async function generatePersonalizedFeedback(
     session: SessionData,
     questions: QuestionData[],
-    teacherId?: string
+    auditUserId?: string
 ): Promise<FeedbackResult> {
     const answers = (session.answers as AnswerEntry[] | null) || []
 
@@ -441,7 +1458,7 @@ Focus especially on ${wrongAnswers.length > 0 ? 'the topics they got wrong' : 'm
 
         // Log cost
         const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
-        if (teacherId) await logCostToAudit(teacherId, 'AI_FEEDBACK', cost)
+        if (auditUserId) await logCostToAudit(auditUserId, 'AI_FEEDBACK', cost)
 
         const parsed = JSON.parse(content)
 
@@ -541,21 +1558,161 @@ function deduplicateQuestions(questions: GeneratedQuestion[]): GeneratedQuestion
     })
 }
 
+function mergeCosts(...costs: Array<CostInfo | undefined>) {
+    const validCosts = costs.filter((cost): cost is CostInfo => cost !== undefined)
+    if (validCosts.length === 0) return undefined
+
+    return validCosts.reduce<CostInfo>((totalCost, cost, index) => ({
+        model: index === 0 ? cost.model : `${totalCost.model} + ${cost.model}`,
+        inputTokens: totalCost.inputTokens + cost.inputTokens,
+        outputTokens: totalCost.outputTokens + cost.outputTokens,
+        costUSD: totalCost.costUSD + cost.costUSD,
+    }), {
+        model: validCosts[0].model,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUSD: 0,
+    })
+}
+
+function normalizeDifficultyLabel(
+    difficulty: string | null | undefined,
+    fallback: GeneratedQuestion['difficulty'] = 'MEDIUM',
+): GeneratedQuestion['difficulty'] {
+    const normalizedDifficulty = difficulty?.trim().toUpperCase()
+    if (normalizedDifficulty === 'EASY' || normalizedDifficulty === 'MEDIUM' || normalizedDifficulty === 'HARD') {
+        return normalizedDifficulty
+    }
+
+    return fallback
+}
+
+function normalizeTopicLabel(topic: string | null | undefined, fallbackStem?: string) {
+    const normalizedTopic = topic
+        ?.replace(/\s+/g, ' ')
+        .trim()
+        .replace(/^[.:)\]-]+\s*/, '')
+
+    if (normalizedTopic && normalizedTopic.length >= 2) {
+        return normalizedTopic.slice(0, 80)
+    }
+
+    return fallbackStem ? detectTopic(fallbackStem) : 'General'
+}
+
+function countByLabel(values: string[]) {
+    const counts = new Map<string, number>()
+    for (const value of values) {
+        counts.set(value, (counts.get(value) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort((left, right) => right[1] - left[1])
+}
+
+function buildFallbackDocumentDescription(
+    questions: GeneratedQuestion[],
+    sourceLabel?: string,
+) {
+    if (questions.length === 0) {
+        const normalizedLabel = sourceLabel
+            ?.replace(/\.(docx|pdf)$/i, '')
+            .replace(/[-_]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+
+        return normalizedLabel
+            ? `${normalizedLabel} mock test generated from the uploaded document.`
+            : 'Auto-generated mock test from the uploaded document.'
+    }
+
+    const normalizedLabel = sourceLabel
+        ?.replace(/\.(docx|pdf)$/i, '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+    const topTopics = countByLabel(questions.map(question => normalizeTopicLabel(question.topic, question.stem)))
+        .slice(0, 3)
+        .map(([topic]) => topic)
+    const difficultyMix = countByLabel(questions.map(question => normalizeDifficultyLabel(question.difficulty)))
+    const difficultySummary = difficultyMix
+        .map(([difficulty, count]) => `${count} ${difficulty.toLowerCase()}`)
+        .join(', ')
+
+    const statementHeavyCount = questions.filter(question => /(assertion|reason|consider statements|choose the correct answer)/i.test(question.stem)).length
+    const formatLine = statementHeavyCount > 0
+        ? `Includes ${statementHeavyCount} statement-based or assertion-style questions alongside standard MCQs.`
+        : 'Includes standard CUET-style MCQs with a balanced concept-checking format.'
+
+    const coverageLine = topTopics.length > 0
+        ? `Covers ${topTopics.join(', ')} across ${questions.length} questions.`
+        : `Covers ${questions.length} CUET-style questions from the uploaded source.`
+
+    const labelPrefix = normalizedLabel ? `${normalizedLabel} mock test.` : 'Auto-generated mock test.'
+
+    return `${labelPrefix} ${coverageLine} Difficulty mix: ${difficultySummary}. ${formatLine}`.trim()
+}
+
+function toAIChunkFailure(error: unknown): AIChunkFailure {
+    if (error && typeof error === 'object') {
+        const status = 'status' in error && typeof error.status === 'number' ? error.status : undefined
+        const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined
+        const nestedMessage = 'error' in error
+            && error.error
+            && typeof error.error === 'object'
+            && 'message' in error.error
+            && typeof error.error.message === 'string'
+            ? error.error.message
+            : undefined
+        const rootMessage = 'message' in error && typeof error.message === 'string'
+            ? error.message
+            : undefined
+        const message = nestedMessage || rootMessage || 'OpenAI request failed.'
+
+        if (status === 401 || code === 'invalid_api_key') {
+            return {
+                code: code || 'invalid_api_key',
+                message: 'OpenAI API key is invalid. Update OPENAI_API_KEY before using AI document generation.',
+                retryable: false,
+            }
+        }
+
+        if (status === 429 || code === 'rate_limit_exceeded') {
+            return {
+                code: code || 'rate_limit_exceeded',
+                message: 'OpenAI rate limit reached. Please try again shortly.',
+                retryable: true,
+            }
+        }
+
+        return {
+            code,
+            message,
+            retryable: status !== 400,
+        }
+    }
+
+    return {
+        message: 'OpenAI request failed.',
+        retryable: true,
+    }
+}
+
 // ── Generate MCQs from Document Text (with chunking + retry) ──
 export async function generateQuestionsFromText(
     text: string,
     count: number = 10,
-    teacherId?: string
+    auditUserId?: string
 ): Promise<{ questions?: GeneratedQuestion[]; failedCount?: number; cost?: CostInfo; error?: boolean; message?: string }> {
     if (!openai) {
         return { error: true, message: 'OpenAI API key not configured. Please set OPENAI_API_KEY.' }
     }
 
-    const chunks = chunkText(text)
+    const chunks = chunkDocumentTextForGeneration(text)
     const questionsPerChunk = Math.ceil(count / chunks.length)
     let allQuestions: GeneratedQuestion[] = []
     const totalCost: CostInfo = { model: 'gpt-4o-mini', inputTokens: 0, outputTokens: 0, costUSD: 0 }
     let failedCount = 0
+    let lastFailure: AIChunkFailure | null = null
 
     for (const chunk of chunks) {
         const result = await generateFromChunk(chunk, questionsPerChunk, 'gpt-4o-mini')
@@ -570,6 +1727,17 @@ export async function generateQuestionsFromText(
             allQuestions.push(...result.questions)
         }
         failedCount += result.failedCount
+        if (result.failure) {
+            lastFailure = result.failure
+            if (!result.failure.retryable) {
+                return {
+                    error: true,
+                    message: result.failure.message,
+                    failedCount,
+                    cost: totalCost,
+                }
+            }
+        }
 
         // If gpt-4o-mini failed entirely on this chunk, retry with gpt-4o
         if (result.questions.length === 0 && result.failedCount > 0) {
@@ -584,6 +1752,17 @@ export async function generateQuestionsFromText(
             if (retry.questions.length > 0) {
                 allQuestions.push(...retry.questions)
                 failedCount -= retry.questions.length // recovered some
+                lastFailure = null
+            } else if (retry.failure) {
+                lastFailure = retry.failure
+                if (!retry.failure.retryable) {
+                    return {
+                        error: true,
+                        message: retry.failure.message,
+                        failedCount,
+                        cost: totalCost,
+                    }
+                }
             }
         }
     }
@@ -596,10 +1775,253 @@ export async function generateQuestionsFromText(
         allQuestions = allQuestions.slice(0, count)
     }
 
-    // Log cost to AuditLog if we have a teacherId
-    if (teacherId) await logCostToAudit(teacherId, 'AI_GENERATE', totalCost)
+    if (auditUserId) await logCostToAudit(auditUserId, 'AI_GENERATE', totalCost)
+
+    if (allQuestions.length === 0 && lastFailure) {
+        return {
+            error: true,
+            message: lastFailure.message,
+            failedCount,
+            cost: totalCost,
+        }
+    }
 
     return { questions: allQuestions, failedCount: Math.max(0, failedCount), cost: totalCost }
+}
+
+// Vision rendering via PDF page screenshots is disabled because it requires @napi-rs/canvas
+// (a native module) which is not available on serverless platforms like Vercel.
+// When this returns empty, the vision fallback in generateQuestionsFromPdfVisionFallback
+// falls through to text-based extraction + AI generation instead.
+async function renderPdfPageChunkAsImages(
+    _pdfProxy: { numPages: number },
+    _pageNumbers: number[],
+): Promise<string[]> {
+    return []
+}
+
+export async function generateQuestionsFromPdfVisionFallback(
+    buffer: Buffer,
+    count: number = 30,
+    auditUserId?: string,
+): Promise<PdfVisionFallbackResult> {
+    if (!openai) {
+        return {
+            error: true,
+            message: 'OpenAI API key not configured. Please set OPENAI_API_KEY.',
+            pageCount: 0,
+            chunkCount: 0,
+            mode: 'GENERATED',
+        }
+    }
+
+    const { getDocumentProxy, extractText } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(buffer))
+
+    const model = 'gpt-4o'
+    let overallMode: PdfImportFallbackMode = 'GENERATED'
+    let allQuestions: GeneratedQuestion[] = []
+    let failedCount = 0
+    let lastFailure: AIChunkFailure | null = null
+    let pageCount = 0
+    let chunkCount = 0
+    const totalCost: CostInfo = {
+        model,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUSD: 0,
+    }
+
+    try {
+        pageCount = pdf.numPages
+        const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
+        const pageChunks = chunkArray(pageNumbers, PDF_VISION_PAGE_CHUNK_SIZE)
+        chunkCount = pageChunks.length
+
+        if (pageCount === 0) {
+            return {
+                error: true,
+                message: 'Could not render PDF pages for AI fallback.',
+                pageCount: 0,
+                chunkCount: 0,
+                mode: 'GENERATED',
+            }
+        }
+
+        for (const [chunkIndex, pageNumberChunk] of pageChunks.entries()) {
+            // For vision fallback, we try to send text from pages as context
+            // Since unpdf may not support page rendering without canvas, extract per-page text
+            let imageChunk: string[] = []
+            try {
+                imageChunk = await renderPdfPageChunkAsImages(pdf, pageNumberChunk)
+            } catch {
+                // If image rendering fails, fall back to text-only extraction for this chunk
+                const chunkResult = await extractText(pdf, { mergePages: false })
+                const pageTexts = Array.isArray(chunkResult.text) ? chunkResult.text : []
+                const textForChunk = pageNumberChunk
+                    .map(pn => pageTexts[pn - 1] || '')
+                    .join('\n')
+                if (textForChunk.trim()) {
+                    // Use text-based generation instead of vision for this chunk
+                    const textResult = await generateFromChunk(
+                        textForChunk,
+                        Math.max(8, Math.ceil((count / pageCount) * pageNumberChunk.length)),
+                        model,
+                    )
+                    if (textResult.questions.length > 0) {
+                        allQuestions.push(...textResult.questions)
+                    }
+                    if (textResult.cost) {
+                        totalCost.inputTokens += textResult.cost.inputTokens
+                        totalCost.outputTokens += textResult.cost.outputTokens
+                        totalCost.costUSD += textResult.cost.costUSD
+                    }
+                    failedCount += textResult.failedCount
+                }
+                continue
+            }
+            if (imageChunk.length === 0) {
+                continue
+            }
+
+            const approximateChunkTarget = Math.max(
+                8,
+                Math.ceil((count / pageCount) * imageChunk.length),
+            )
+            const prompt = `You are extracting or generating CUET-style multiple-choice questions from PDF page screenshots.
+
+Priority:
+1. If the pages already contain MCQs with options and answers, extract those MCQs faithfully. Do not invent new facts or rewrite the question meaning.
+2. If the pages are notes or theory without explicit MCQs, generate up to ${approximateChunkTarget} CUET-style MCQs strictly from the visible content.
+
+Return strict JSON:
+{
+  "mode": "EXTRACTED" | "GENERATED",
+  "questions": [
+    {
+      "stem": "question text",
+      "options": [
+        {"id": "A", "text": "option text", "isCorrect": false},
+        {"id": "B", "text": "option text", "isCorrect": true},
+        {"id": "C", "text": "option text", "isCorrect": false},
+        {"id": "D", "text": "option text", "isCorrect": false}
+      ],
+      "explanation": "brief explanation",
+      "difficulty": "EASY" | "MEDIUM" | "HARD",
+      "topic": "short topic tag"
+    }
+  ]
+}
+
+Rules:
+- Exactly 4 options.
+- Exactly 1 correct option.
+- Preserve visible answer keys when extracting existing MCQs.
+- Preserve the visible explanation if present; otherwise give a concise explanation.
+- Do not include page numbers, headers, footers, or formatting artifacts.
+- If a question is cut off across page boundaries, include it only when enough content is visible to produce a valid MCQ.
+- Focus only on the pages in this chunk (${chunkIndex + 1}/${pageChunks.length}), covering PDF pages ${pageNumberChunk.join(', ')}.`
+
+            try {
+                const response = await openai.chat.completions.create({
+                    model,
+                    temperature: 0.1,
+                    max_tokens: 4000,
+                    response_format: { type: 'json_object' },
+                    messages: [
+                        {
+                            role: 'user',
+                            content: [
+                                { type: 'text', text: prompt },
+                                ...imageChunk.map((imageUrl) => ({
+                                    type: 'image_url' as const,
+                                    image_url: { url: imageUrl },
+                                })),
+                            ],
+                        },
+                    ],
+                })
+
+                const content = response.choices[0]?.message?.content
+                if (!content) {
+                    failedCount += approximateChunkTarget
+                    continue
+                }
+
+                const parsed = JSON.parse(content) as {
+                    mode?: PdfImportFallbackMode
+                    questions?: GeneratedQuestion[]
+                }
+
+                if (parsed.mode === 'EXTRACTED') {
+                    overallMode = 'EXTRACTED'
+                }
+
+                const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : []
+                const validQuestions: GeneratedQuestion[] = []
+                for (const question of rawQuestions) {
+                    if (validateQuestion(question)) {
+                        validQuestions.push(question)
+                    } else {
+                        failedCount += 1
+                    }
+                }
+
+                allQuestions.push(...validQuestions)
+
+                const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
+                totalCost.inputTokens += cost.inputTokens
+                totalCost.outputTokens += cost.outputTokens
+                totalCost.costUSD += cost.costUSD
+            } catch (err) {
+                lastFailure = toAIChunkFailure(err)
+                console.error('[AI] PDF vision fallback failed on chunk:', err)
+                failedCount += approximateChunkTarget
+                if (!lastFailure.retryable) {
+                    return {
+                        mode: overallMode,
+                        error: true,
+                        message: lastFailure.message,
+                        pageCount,
+                        chunkCount,
+                        questions: [],
+                        failedCount,
+                        cost: totalCost,
+                    }
+                }
+            }
+        }
+
+        allQuestions = deduplicateQuestions(allQuestions)
+
+        if (auditUserId) {
+            await logCostToAudit(auditUserId, 'AI_DOC_PARSE_FALLBACK', totalCost)
+        }
+
+        if (allQuestions.length === 0 && lastFailure) {
+            return {
+                mode: overallMode,
+                error: true,
+                message: lastFailure.message,
+                pageCount,
+                chunkCount,
+                questions: [],
+                failedCount,
+                cost: totalCost,
+            }
+        }
+
+        return {
+            mode: overallMode,
+            questions: allQuestions,
+            failedCount,
+            cost: totalCost,
+            pageCount,
+            chunkCount,
+        }
+    } finally {
+        await pdf.cleanup()
+    }
 }
 
 // ── Single-Chunk Generation ──
@@ -607,7 +2029,7 @@ async function generateFromChunk(
     chunk: string,
     count: number,
     model: string
-): Promise<{ questions: GeneratedQuestion[]; failedCount: number; cost?: CostInfo }> {
+): Promise<{ questions: GeneratedQuestion[]; failedCount: number; cost?: CostInfo; failure?: AIChunkFailure }> {
     const prompt = `You are an expert test creator. Generate ${count} multiple-choice questions from the following educational content. Cover as many major sections, subtopics, definitions, formulas, and examples from the source as possible. Do not produce random trivia or repetitive paraphrases. Each question MUST have:
 - A clear, unambiguous stem
 - Exactly 4 options labeled A-D
@@ -667,7 +2089,7 @@ Respond in JSON format:
         return { questions: valid, failedCount: failed, cost }
     } catch (err) {
         console.error(`[AI] Question generation failed with ${model}:`, err)
-        return { questions: [], failedCount: count }
+        return { questions: [], failedCount: count, failure: toAIChunkFailure(err) }
     }
 }
 
@@ -680,14 +2102,15 @@ export async function parseDocxToText(buffer: Buffer): Promise<string> {
 }
 
 export async function parsePdfToText(buffer: Buffer): Promise<string> {
-    const { PDFParse } = await import('pdf-parse')
-    const parser = new PDFParse({ data: buffer })
+    const { getDocumentProxy, extractText } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(buffer))
 
     try {
-        const result = await parser.getText()
-        return normalizeDocumentText(result.text)
+        const result = await extractText(pdf, { mergePages: false })
+        const pages = Array.isArray(result.text) ? result.text : [result.text]
+        return normalizeDocumentText(pages.join('\n'))
     } finally {
-        await parser.destroy()
+        await pdf.cleanup()
     }
 }
 

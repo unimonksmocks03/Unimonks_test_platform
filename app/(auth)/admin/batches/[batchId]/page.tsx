@@ -29,12 +29,6 @@ interface StudentItem {
     status: string;
 }
 
-interface TeacherItem {
-    id: string;
-    name: string;
-    email: string;
-}
-
 interface AssignmentItem {
     id: string;
     testId: string;
@@ -45,8 +39,8 @@ interface BatchData {
     id: string;
     name: string;
     code: string;
+    kind: "FREE_SYSTEM" | "STANDARD";
     status: string;
-    teacher: TeacherItem;
     students: StudentItem[];
     assignments: AssignmentItem[];
     studentCount: number;
@@ -63,10 +57,8 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
     // Settings sheet
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [teachers, setTeachers] = useState<TeacherItem[]>([]);
     const [editName, setEditName] = useState("");
     const [editCode, setEditCode] = useState("");
-    const [editTeacher, setEditTeacher] = useState("");
     const [editStatus, setEditStatus] = useState("");
 
     // Add student sheet — paginated + debounced server-side search
@@ -98,9 +90,6 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional initial data fetch
         fetchBatch();
-        // Load teachers for settings
-        apiClient.get<{ users: TeacherItem[] }>("/api/admin/users", { role: "TEACHER", limit: 100 })
-            .then(res => { if (res.ok) setTeachers(res.data.users); });
     }, [fetchBatch]);
 
     // Populate edit form when settings opens
@@ -109,7 +98,6 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
             // eslint-disable-next-line react-hooks/set-state-in-effect -- sync form state with batch data
             setEditName(batch.name);
             setEditCode(batch.code);
-            setEditTeacher(batch.teacher.id);
             setEditStatus(batch.status);
         }
     }, [settingsOpen, batch]);
@@ -167,11 +155,15 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
 
     // ── Handlers ──
     const handleSaveSettings = async () => {
+        if (batch?.kind === "FREE_SYSTEM") {
+            toast.info("System Batch Locked", { description: "The free-mock system batch cannot be renamed or disabled." });
+            return;
+        }
+
         setSaving(true);
         const body: Record<string, string> = {};
         if (editName !== batch?.name) body.name = editName;
         if (editCode !== batch?.code) body.code = editCode.toUpperCase();
-        if (editTeacher !== batch?.teacher.id) body.teacherId = editTeacher;
         if (editStatus !== batch?.status) body.status = editStatus;
 
         if (Object.keys(body).length === 0) {
@@ -284,6 +276,8 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
         );
     }
 
+    const isSystemBatch = batch.kind === "FREE_SYSTEM";
+
     return (
         <div className="flex flex-col gap-6 w-full max-w-6xl mx-auto pb-10">
             {/* Header */}
@@ -295,11 +289,16 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
                     <div className="flex items-center gap-3 flex-wrap">
                         <h1 className="text-3xl font-serif font-bold text-slate-900 tracking-tight">{batch.name}</h1>
                         <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-none px-2 py-0.5 text-xs">{batch.code}</Badge>
+                        <Badge variant="outline" className={`border-none px-2 py-0.5 text-xs ${isSystemBatch ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                            {isSystemBatch ? "Free System Batch" : "Paid Batch"}
+                        </Badge>
                         <Badge variant="outline" className={`border-none font-bold uppercase tracking-wider text-[10px] px-2.5 py-1 ${statusBadge(batch.status)}`}>
                             {batch.status}
                         </Badge>
                     </div>
-                    <p className="text-slate-500 mt-1 font-medium">{batch.teacher.name} • {batch.studentCount} Students Enrolled</p>
+                    <p className="text-slate-500 mt-1 font-medium">
+                        {isSystemBatch ? "Reserved for public free mocks and lead capture" : `${batch.studentCount} Students Enrolled`}
+                    </p>
                 </div>
                 <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
                     <SheetTrigger asChild>
@@ -311,34 +310,25 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
                         <div className="p-6 border-b" style={{ borderColor: "var(--border-soft)" }}>
                             <SheetHeader>
                                 <SheetTitle className="font-serif text-2xl text-slate-900">Batch Settings</SheetTitle>
-                                <SheetDescription>Edit batch name, code, teacher, and status.</SheetDescription>
+                                <SheetDescription>
+                                    {isSystemBatch
+                                        ? "The free-mock system batch is locked to protect public test routing."
+                                        : "Edit batch name, code, and status."}
+                                </SheetDescription>
                             </SheetHeader>
                         </div>
                         <div className="p-6 flex-1 overflow-auto grid gap-6 content-start">
                             <div className="grid gap-2">
                                 <Label className="font-bold text-slate-700">Batch Name</Label>
-                                <Input value={editName} onChange={e => setEditName(e.target.value)} className="rounded-xl h-11 bg-surface-2 border-transparent" />
+                                <Input value={editName} onChange={e => setEditName(e.target.value)} disabled={isSystemBatch} className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100" />
                             </div>
                             <div className="grid gap-2">
                                 <Label className="font-bold text-slate-700">Batch Code</Label>
-                                <Input value={editCode} onChange={e => setEditCode(e.target.value)} className="rounded-xl h-11 bg-surface-2 border-transparent" />
-                            </div>
-                            <div className="grid gap-2">
-                                <Label className="font-bold text-slate-700">Primary Teacher</Label>
-                                <Select value={editTeacher} onValueChange={setEditTeacher}>
-                                    <SelectTrigger className="rounded-xl h-11 bg-surface-2 border-transparent">
-                                        <SelectValue placeholder="Select teacher" />
-                                    </SelectTrigger>
-                                    <SelectContent className="rounded-xl">
-                                        {teachers.map(t => (
-                                            <SelectItem key={t.id} value={t.id}>{t.name} ({t.email})</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                                <Input value={editCode} onChange={e => setEditCode(e.target.value)} disabled={isSystemBatch} className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100" />
                             </div>
                             <div className="grid gap-2">
                                 <Label className="font-bold text-slate-700">Status</Label>
-                                <Select value={editStatus} onValueChange={setEditStatus}>
+                                <Select value={editStatus} onValueChange={setEditStatus} disabled={isSystemBatch}>
                                     <SelectTrigger className="rounded-xl h-11 bg-surface-2 border-transparent">
                                         <SelectValue />
                                     </SelectTrigger>
@@ -349,19 +339,21 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div className="border-t pt-6 mt-4" style={{ borderColor: "var(--border-soft)" }}>
-                                <h3 className="text-sm font-bold text-rose-600 uppercase tracking-wider mb-3">Danger Zone</h3>
-                                <Button variant="outline" onClick={() => { setSettingsOpen(false); setDeleteOpen(true); }}
-                                    className="w-full border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl">
-                                    <Trash className="w-4 h-4 mr-2" /> Delete Batch
-                                </Button>
-                            </div>
+                            {isSystemBatch ? null : (
+                                <div className="border-t pt-6 mt-4" style={{ borderColor: "var(--border-soft)" }}>
+                                    <h3 className="text-sm font-bold text-rose-600 uppercase tracking-wider mb-3">Danger Zone</h3>
+                                    <Button variant="outline" onClick={() => { setSettingsOpen(false); setDeleteOpen(true); }}
+                                        className="w-full border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl">
+                                        <Trash className="w-4 h-4 mr-2" /> Delete Batch
+                                    </Button>
+                                </div>
+                            )}
                         </div>
                         <div className="p-6 border-t bg-surface-2 flex gap-2 justify-end" style={{ borderColor: "var(--border-soft)" }}>
                             <SheetClose asChild>
                                 <Button type="button" variant="outline" className="rounded-xl h-12 border-transparent shadow-sm bg-white">Cancel</Button>
                             </SheetClose>
-                            <Button onClick={handleSaveSettings} disabled={saving} className="rounded-xl h-12 bg-primary text-white font-bold shadow-clay-inner">
+                            <Button onClick={handleSaveSettings} disabled={saving || isSystemBatch} className="rounded-xl h-12 bg-primary text-white font-bold shadow-clay-inner">
                                 {saving ? "Saving..." : "Save Changes"}
                             </Button>
                         </div>
@@ -418,85 +410,91 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
                     <Card className="bg-white border-0 rounded-3xl shadow-clay-outer overflow-hidden">
                         <div className="flex items-center justify-between p-6 border-b" style={{ borderColor: "var(--border-soft)" }}>
                             <h2 className="text-xl font-serif font-bold text-slate-900">Enrolled Students</h2>
-                            <Sheet open={addStudentOpen} onOpenChange={setAddStudentOpen}>
-                                <SheetTrigger asChild>
-                                    <Button size="sm" className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold shadow-none border-none rounded-lg h-9">
-                                        <Plus className="w-4 h-4 mr-2" /> Add Student
-                                    </Button>
-                                </SheetTrigger>
-                                <SheetContent className="border-l-0 shadow-clay-outer p-0 sm:max-w-md w-full flex flex-col">
-                                    <div className="p-6 border-b" style={{ borderColor: "var(--border-soft)" }}>
-                                        <SheetHeader>
-                                            <SheetTitle className="font-serif text-2xl text-slate-900">Add Students</SheetTitle>
-                                            <SheetDescription>Select students to enroll in {batch.name}.</SheetDescription>
-                                        </SheetHeader>
-                                    </div>
-                                    <div className="p-4 border-b" style={{ borderColor: "var(--border-soft)" }}>
-                                        <div className="relative">
-                                            <Search className="h-4 w-4 absolute left-3 top-3 text-slate-400" />
-                                            <Input
-                                                placeholder="Search by name or email..."
-                                                value={studentSearch}
-                                                onChange={e => handleStudentSearch(e.target.value)}
-                                                className="pl-9 h-10 bg-surface-2 border-transparent rounded-xl"
-                                            />
-                                        </div>
-                                        <p className="text-[11px] text-slate-400 mt-1.5 px-1">
-                                            Showing {availableStudents.length} of {totalAvailable} students • Page {studentPage}
-                                        </p>
-                                    </div>
-                                    <div className="flex-1 overflow-auto p-2">
-                                        {loadingStudents && availableStudents.length === 0 ? (
-                                            <div className="flex items-center justify-center py-12">
-                                                <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
-                                            </div>
-                                        ) : availableStudents.length === 0 ? (
-                                            <div className="text-center text-slate-400 py-12 text-sm">No available students found.</div>
-                                        ) : (
-                                            <>
-                                                {availableStudents.map(s => (
-                                                    <button
-                                                        key={s.id}
-                                                        onClick={() => toggleStudent(s.id)}
-                                                        className={`w-full flex items-center gap-3 p-3 rounded-xl text-left transition-colors ${selectedStudents.has(s.id) ? "bg-emerald-50 border border-emerald-200" : "hover:bg-slate-50 border border-transparent"}`}
-                                                    >
-                                                        <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 ${selectedStudents.has(s.id) ? "border-emerald-500 bg-emerald-500" : "border-slate-300"}`}>
-                                                            {selectedStudents.has(s.id) && <span className="text-white text-xs font-bold">✓</span>}
-                                                        </div>
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="font-bold text-slate-800 text-sm truncate">{s.name}</div>
-                                                            <div className="text-xs text-slate-500 truncate">{s.email}</div>
-                                                        </div>
-                                                    </button>
-                                                ))}
-                                                {hasMoreStudents && (
-                                                    <Button
-                                                        variant="ghost"
-                                                        onClick={loadMoreStudents}
-                                                        disabled={loadingStudents}
-                                                        className="w-full mt-2 text-sm text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-xl"
-                                                    >
-                                                        {loadingStudents ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                                                        Load More Students
-                                                    </Button>
-                                                )}
-                                            </>
-                                        )}
-                                    </div>
-                                    <div className="p-4 border-t bg-surface-2 flex gap-2 justify-between items-center" style={{ borderColor: "var(--border-soft)" }}>
-                                        <span className="text-sm text-slate-500 font-medium">{selectedStudents.size} selected</span>
-                                        <Button onClick={handleEnrollStudents} disabled={enrolling || selectedStudents.size === 0}
-                                            className="rounded-xl h-10 bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
-                                            {enrolling ? "Enrolling..." : `Enroll ${selectedStudents.size} Student(s)`}
+                            {isSystemBatch ? (
+                                <p className="text-sm text-slate-500">Public free mocks use leads instead of enrolled students.</p>
+                            ) : (
+                                <Sheet open={addStudentOpen} onOpenChange={setAddStudentOpen}>
+                                    <SheetTrigger asChild>
+                                        <Button size="sm" className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold shadow-none border-none rounded-lg h-9">
+                                            <Plus className="w-4 h-4 mr-2" /> Add Student
                                         </Button>
-                                    </div>
-                                </SheetContent>
-                            </Sheet>
+                                    </SheetTrigger>
+                                    <SheetContent className="border-l-0 shadow-clay-outer p-0 sm:max-w-md w-full flex flex-col">
+                                        <div className="p-6 border-b" style={{ borderColor: "var(--border-soft)" }}>
+                                            <SheetHeader>
+                                                <SheetTitle className="font-serif text-2xl text-slate-900">Add Students</SheetTitle>
+                                                <SheetDescription>Select students to enroll in {batch.name}.</SheetDescription>
+                                            </SheetHeader>
+                                        </div>
+                                        <div className="p-4 border-b" style={{ borderColor: "var(--border-soft)" }}>
+                                            <div className="relative">
+                                                <Search className="h-4 w-4 absolute left-3 top-3 text-slate-400" />
+                                                <Input
+                                                    placeholder="Search by name or email..."
+                                                    value={studentSearch}
+                                                    onChange={e => handleStudentSearch(e.target.value)}
+                                                    className="pl-9 h-10 bg-surface-2 border-transparent rounded-xl"
+                                                />
+                                            </div>
+                                            <p className="text-[11px] text-slate-400 mt-1.5 px-1">
+                                                Showing {availableStudents.length} of {totalAvailable} students • Page {studentPage}
+                                            </p>
+                                        </div>
+                                        <div className="flex-1 overflow-auto p-2">
+                                            {loadingStudents && availableStudents.length === 0 ? (
+                                                <div className="flex items-center justify-center py-12">
+                                                    <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+                                                </div>
+                                            ) : availableStudents.length === 0 ? (
+                                                <div className="text-center text-slate-400 py-12 text-sm">No available students found.</div>
+                                            ) : (
+                                                <>
+                                                    {availableStudents.map(s => (
+                                                        <button
+                                                            key={s.id}
+                                                            onClick={() => toggleStudent(s.id)}
+                                                            className={`w-full flex items-center gap-3 p-3 rounded-xl text-left transition-colors ${selectedStudents.has(s.id) ? "bg-emerald-50 border border-emerald-200" : "hover:bg-slate-50 border border-transparent"}`}
+                                                        >
+                                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 ${selectedStudents.has(s.id) ? "border-emerald-500 bg-emerald-500" : "border-slate-300"}`}>
+                                                                {selectedStudents.has(s.id) && <span className="text-white text-xs font-bold">✓</span>}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="font-bold text-slate-800 text-sm truncate">{s.name}</div>
+                                                                <div className="text-xs text-slate-500 truncate">{s.email}</div>
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                    {hasMoreStudents && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            onClick={loadMoreStudents}
+                                                            disabled={loadingStudents}
+                                                            className="w-full mt-2 text-sm text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-xl"
+                                                        >
+                                                            {loadingStudents ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                                                            Load More Students
+                                                        </Button>
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                        <div className="p-4 border-t bg-surface-2 flex gap-2 justify-between items-center" style={{ borderColor: "var(--border-soft)" }}>
+                                            <span className="text-sm text-slate-500 font-medium">{selectedStudents.size} selected</span>
+                                            <Button onClick={handleEnrollStudents} disabled={enrolling || selectedStudents.size === 0}
+                                                className="rounded-xl h-10 bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
+                                                {enrolling ? "Enrolling..." : `Enroll ${selectedStudents.size} Student(s)`}
+                                            </Button>
+                                        </div>
+                                    </SheetContent>
+                                </Sheet>
+                            )}
                         </div>
 
                         {batch.students.length === 0 ? (
                             <div className="text-center font-medium text-slate-400 py-12 px-6">
-                                No students enrolled yet. Click &ldquo;Add Student&rdquo; to enroll students.
+                                {isSystemBatch
+                                    ? "This protected system batch does not enroll users. Public free-mock participants are stored as leads."
+                                    : 'No students enrolled yet. Click "Add Student" to enroll students.'}
                             </div>
                         ) : (
                             <Table>
@@ -520,6 +518,7 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
                                             </TableCell>
                                             <TableCell className="text-right pr-6">
                                                 <Button variant="ghost" size="sm" onClick={() => handleUnenroll(student.id, student.name)}
+                                                    disabled={isSystemBatch}
                                                     className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg h-8 px-2">
                                                     <X className="h-4 w-4" />
                                                 </Button>
@@ -540,7 +539,7 @@ export default function BatchDetailsPage({ params }: { params: Promise<{ batchId
                         </div>
                         {batch.assignments.length === 0 ? (
                             <div className="text-center font-medium text-slate-400 py-12 px-6">
-                                No tests assigned to this batch yet. Teachers can assign tests from the Test Management page.
+                                No tests assigned to this batch yet. Admins can assign tests from the Test Management page.
                             </div>
                         ) : (
                             <Table>
