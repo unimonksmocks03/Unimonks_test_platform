@@ -218,9 +218,9 @@ test('chunkDocumentTextForGeneration advances through the tail chunk without rep
 })
 
 test('enrichGeneratedQuestionsMetadata falls back gracefully when OpenAI metadata enrichment is unavailable', async () => {
-    const {
-        enrichGeneratedQuestionsMetadata,
-    } = await aiServicePromise
+    vi.resetModules()
+    vi.stubEnv('OPENAI_API_KEY', '')
+    const { enrichGeneratedQuestionsMetadata } = await import('../../../lib/services/ai-service')
 
     const result = await enrichGeneratedQuestionsMetadata({
         sourceLabel: 'physics-1-mcq.pdf',
@@ -258,4 +258,9 @@ test('enrichGeneratedQuestionsMetadata falls back gracefully when OpenAI metadat
     expect(result.questions[0]?.topic).toBe('Electrostatics')
     expect(result.questions[1]?.difficulty).toBe('HARD')
     expect(result.description).toContain('physics 1 mcq')
+
+    vi.unstubAllEnvs()
+    vi.stubEnv('NODE_ENV', process.env.NODE_ENV ?? 'test')
+    vi.stubEnv('DATABASE_URL', process.env.DATABASE_URL ?? 'postgresql://tester:tester@localhost:5432/unimonk_test')
+    vi.stubEnv('DIRECT_URL', process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? 'postgresql://tester:tester@localhost:5432/unimonk_test')
 })
