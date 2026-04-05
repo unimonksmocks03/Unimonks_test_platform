@@ -37,6 +37,30 @@ test('validateAssignmentEditableStatus allows published batch changes but keeps 
     expect(archivedResult?.code).toBe('NOT_EDITABLE')
 })
 
+test('validatePublishedDurationRepublish allows only duration updates for published tests', async () => {
+    const {
+        validatePublishedDurationRepublish,
+    } = await servicePromise
+
+    expect(validatePublishedDurationRepublish(TestStatus.PUBLISHED, {
+        durationMinutes: 90,
+    })).toBe(true)
+
+    expect(validatePublishedDurationRepublish(TestStatus.PUBLISHED, {
+        durationMinutes: 90,
+        status: TestStatus.PUBLISHED,
+    })).toBe(true)
+
+    expect(validatePublishedDurationRepublish(TestStatus.PUBLISHED, {
+        durationMinutes: 90,
+        title: 'Changed title',
+    })).toBe(false)
+
+    expect(validatePublishedDurationRepublish(TestStatus.DRAFT, {
+        durationMinutes: 90,
+    })).toBe(false)
+})
+
 test('validatePublishDraftState enforces questions and assignments before publish', async () => {
     const {
         validatePublishDraftState,

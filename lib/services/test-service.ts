@@ -181,6 +181,25 @@ function isStatusOnlyArchiveRequest(existingStatus: TestStatus, data: UpdateTest
     return existingStatus === 'PUBLISHED' && data.status === 'ARCHIVED' && nonStatusKeys.length === 0
 }
 
+function isPublishedDurationOnlyUpdate(existingStatus: TestStatus, data: UpdateTestInput) {
+    if (existingStatus !== 'PUBLISHED' || data.durationMinutes === undefined) {
+        return false
+    }
+
+    const allowedKeys = new Set(['durationMinutes', 'status'])
+    const keys = Object.keys(data)
+
+    if (keys.some((key) => !allowedKeys.has(key))) {
+        return false
+    }
+
+    return data.status === undefined || data.status === 'PUBLISHED'
+}
+
+export function validatePublishedDurationRepublish(status: TestStatus, data: UpdateTestInput) {
+    return isPublishedDurationOnlyUpdate(status, data)
+}
+
 function mergeSettings(
     currentSettings: unknown,
     nextSettings: UpdateTestInput['settings'] | CreateTestInput['settings']
@@ -496,6 +515,7 @@ export async function getAdminTest(testId: string) {
         test: {
             ...buildAdminTestListItem(test),
             isEditable: test.status === 'DRAFT',
+            canEditDuration: test.status === 'DRAFT' || test.status === 'PUBLISHED',
             canManageAssignments: test.status !== 'ARCHIVED',
             assignedBatches,
         },
@@ -550,15 +570,16 @@ export async function updateAdminTest(adminId: string, testId: string, data: Upd
         data.description !== undefined ||
         data.durationMinutes !== undefined ||
         data.settings !== undefined
+    const publishedDurationOnlyUpdate = isPublishedDurationOnlyUpdate(existing.status, data)
 
-    if (metadataUpdateRequested) {
+    if (metadataUpdateRequested && !publishedDurationOnlyUpdate) {
         const editableError = ensureDraftEditable(existing.status)
         if (editableError) {
             return editableError
         }
     }
 
-    if (data.status === 'PUBLISHED') {
+    if (data.status === 'PUBLISHED' && !publishedDurationOnlyUpdate) {
         const publishError = validatePublishDraftState({
             currentStatus: existing.status,
             questionCount: existing._count.questions,
@@ -583,7 +604,7 @@ export async function updateAdminTest(adminId: string, testId: string, data: Upd
         return serviceError('INVALID_TRANSITION', 'Published or archived tests cannot return to draft')
     } else if (!metadataUpdateRequested && data.status === undefined) {
         return serviceError('BAD_REQUEST', 'No valid changes were provided')
-    } else if (existing.status !== 'DRAFT' && !isStatusOnlyArchiveRequest(existing.status, data)) {
+    } else if (existing.status !== 'DRAFT' && !isStatusOnlyArchiveRequest(existing.status, data) && !publishedDurationOnlyUpdate) {
         const editableError = ensureDraftEditable(existing.status)
         if (editableError) {
             return editableError

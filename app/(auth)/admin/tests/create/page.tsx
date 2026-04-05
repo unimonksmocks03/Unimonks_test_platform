@@ -58,6 +58,7 @@ type AdminTestResponse = {
         audience: BatchAudience;
         assignedBatches: AssignedBatch[];
         isEditable: boolean;
+        canEditDuration: boolean;
         canManageAssignments: boolean;
     };
 };
@@ -167,12 +168,14 @@ function AdminTestBuilderForm() {
     const [testName, setTestName] = useState("");
     const [description, setDescription] = useState("");
     const [testDuration, setTestDuration] = useState("60");
+    const [savedDuration, setSavedDuration] = useState("60");
     const [testStatus, setTestStatus] = useState<"DRAFT" | "PUBLISHED" | "ARCHIVED">("DRAFT");
     const [savedAudience, setSavedAudience] = useState<BatchAudience>("UNASSIGNED");
 
     const [availableBatches, setAvailableBatches] = useState<Array<{ id: string; name: string; code: string; kind: "FREE_SYSTEM" | "STANDARD" }>>([]);
     const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
     const [isContentLocked, setIsContentLocked] = useState(false);
+    const [canEditDuration, setCanEditDuration] = useState(true);
     const [canManageAssignments, setCanManageAssignments] = useState(true);
 
     const [questions, setQuestions] = useState<Question[]>([emptyQuestion()]);
@@ -207,11 +210,14 @@ function AdminTestBuilderForm() {
         setTestId(test.id);
         setTestName(test.title);
         setDescription(test.description || "");
-        setTestDuration(String(test.durationMinutes));
+        const durationValue = String(test.durationMinutes);
+        setTestDuration(durationValue);
+        setSavedDuration(durationValue);
         setTestStatus(test.status);
         setSavedAudience(test.audience);
         setSelectedBatchIds(test.assignedBatches.map((batch) => batch.id));
         setIsContentLocked(!test.isEditable);
+        setCanEditDuration(test.canEditDuration);
         setCanManageAssignments(test.canManageAssignments);
 
         if (questionsResponse.ok && questionsResponse.data.questions.length > 0) {
@@ -243,6 +249,9 @@ function AdminTestBuilderForm() {
 
     const activeQuestion = questions[activeQIndex] || emptyQuestion();
     const isBusy = isSavingDraft || isAssigning || isPublishing || isGenerating;
+    const isPublishedTest = testStatus === "PUBLISHED";
+    const normalizedDuration = String(Number.parseInt(testDuration, 10) || 60);
+    const hasPublishedDurationChange = isPublishedTest && normalizedDuration !== savedDuration;
 
     const updateActiveQuestion = (updates: Partial<Question>) => {
         setQuestions((currentQuestions) =>
@@ -321,6 +330,7 @@ function AdminTestBuilderForm() {
 
                 currentTestId = createResponse.data.test.id;
                 setTestId(currentTestId);
+                setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             } else {
                 const updateResponse = await apiClient.patch(`/api/admin/tests/${currentTestId}`, {
                     title: testName.trim(),
@@ -331,6 +341,8 @@ function AdminTestBuilderForm() {
                 if (!updateResponse.ok) {
                     throw new Error(updateResponse.message);
                 }
+
+                setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             }
 
             let savedCount = 0;
@@ -408,7 +420,13 @@ function AdminTestBuilderForm() {
 
     const assignSelectedBatches = useCallback(async (options?: AssignOptions) => {
         const showSuccessToast = options?.showSuccessToast ?? true;
-        const currentTestId = options?.testOverrideId || testId || await saveDraft({ showSuccessToast: false });
+        let currentTestId = options?.testOverrideId || testId;
+
+        if (!currentTestId) {
+            currentTestId = await saveDraft({ showSuccessToast: false });
+        } else if (!isPublishedTest) {
+            currentTestId = await saveDraft({ showSuccessToast: false });
+        }
 
         if (!currentTestId) {
             return false;
@@ -448,9 +466,50 @@ function AdminTestBuilderForm() {
         } finally {
             setIsAssigning(false);
         }
-    }, [saveDraft, selectedBatchIds, testId]);
+    }, [isPublishedTest, saveDraft, selectedBatchIds, testId]);
+
+    const handleRepublishDuration = useCallback(async () => {
+        if (!testId) {
+            toast.error("Save the test before updating duration.");
+            return;
+        }
+
+        const nextDuration = Number.parseInt(testDuration, 10) || 60;
+        if (String(nextDuration) === savedDuration) {
+            toast.error("No duration change detected.");
+            return;
+        }
+
+        setIsPublishing(true);
+
+        try {
+            const response = await apiClient.patch<{ test: { durationMinutes: number } }>(`/api/admin/tests/${testId}`, {
+                durationMinutes: nextDuration,
+                status: "PUBLISHED",
+            });
+
+            if (!response.ok) {
+                toast.error("Republish failed", { description: response.message });
+                return;
+            }
+
+            const persistedDuration = String(response.data.test.durationMinutes);
+            setTestDuration(persistedDuration);
+            setSavedDuration(persistedDuration);
+            toast.success("Published duration updated", {
+                description: "The new duration will apply to future attempts. Sessions already in progress keep their current deadlines.",
+            });
+        } finally {
+            setIsPublishing(false);
+        }
+    }, [savedDuration, testDuration, testId]);
 
     const handlePublish = async () => {
+        if (isPublishedTest) {
+            await handleRepublishDuration();
+            return;
+        }
+
         if (selectedBatchIds.length === 0) {
             toast.error("Assign the test to at least one batch before publishing.");
             return;
@@ -479,9 +538,11 @@ function AdminTestBuilderForm() {
 
             setTestStatus("PUBLISHED");
             setIsContentLocked(true);
+            setCanEditDuration(true);
             setCanManageAssignments(true);
+            setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             toast.success("Test published", {
-                description: "The test is now immediately available. Question content is locked, but batch assignment stays open for corrections.",
+                description: "The test is now immediately available. Question content stays locked, while duration and batch assignment remain adjustable for future attempts.",
             });
             router.replace(`/admin/tests/create?edit=${savedId}`);
         } finally {
@@ -589,7 +650,7 @@ function AdminTestBuilderForm() {
                         <h4 className="font-bold text-amber-900">This test is read-only</h4>
                         <p className="mt-1 text-sm font-medium opacity-90">
                             {testStatus === "PUBLISHED"
-                                ? "Published tests keep their content locked, but batch assignment is still open if you need to correct or expand the rollout."
+                                ? "Published tests keep their content locked, but duration and batch assignment stay open if you need to adjust future rollout details."
                                 : "Archived tests stay visible for reference, but they cannot be edited."}
                         </p>
                     </div>
@@ -843,7 +904,7 @@ function AdminTestBuilderForm() {
                             <div className="space-y-3 border-t border-slate-100 pt-4">
                                 <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Duration</Label>
                                 <Input
-                                    disabled={isContentLocked || isBusy}
+                                    disabled={!canEditDuration || isBusy}
                                     type="number"
                                     value={testDuration}
                                     onChange={(event) => setTestDuration(event.target.value)}
@@ -933,11 +994,13 @@ function AdminTestBuilderForm() {
                             </Button>
                             <Button
                                 onClick={handlePublish}
-                                disabled={isContentLocked || isBusy}
+                                disabled={testStatus === "ARCHIVED" || isBusy || (isPublishedTest && !hasPublishedDurationChange)}
                                 className="h-12 w-full rounded-xl bg-indigo-600 text-base font-bold shadow-clay-inner hover:bg-indigo-700 disabled:opacity-60"
                             >
                                 <Send className="mr-2 h-4 w-4" />
-                                {isPublishing ? "Publishing..." : "Publish"}
+                                {isPublishing
+                                    ? (isPublishedTest ? "Republishing..." : "Publishing...")
+                                    : (isPublishedTest ? "Republish Duration" : "Publish")}
                             </Button>
                         </div>
                     </Card>
@@ -968,8 +1031,8 @@ function AdminTestBuilderForm() {
                                 {file.name}
                             </div>
                         )}
-                        <div className="rounded-2xl border border-indigo-100 bg-white px-4 py-3 text-sm font-medium text-slate-600 shadow-sm">
-                            Duration and batch assignment stay on the builder after the questions are imported.
+                                <div className="rounded-2xl border border-indigo-100 bg-white px-4 py-3 text-sm font-medium text-slate-600 shadow-sm">
+                            Duration and batch assignment stay on the builder after the questions are imported, and published tests can republish a new duration for future attempts.
                         </div>
                         <Button
                             onClick={handleAIGenerate}
