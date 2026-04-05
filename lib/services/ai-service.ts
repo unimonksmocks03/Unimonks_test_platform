@@ -336,7 +336,7 @@ function looksLikeQuestionStart(line: string): boolean {
 }
 
 const OPTION_LETTER_REGEX = /^\(?([A-D])\)?\s*[.)\-:]?\s*(.+)$/i
-const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?\s*[.)\-:]?\s*(.+)$/i
+const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?(?:\s*[.)\-:]\s*|\s+)(.+)$/i
 const ANSWER_LINE_REGEX =
     /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
 const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
@@ -361,6 +361,51 @@ function matchOptionLine(line: string): { optionId: string; text: string; source
     }
 
     return null
+}
+
+function isUppercaseLetterOptionLine(line: string) {
+    return /^\(?[A-D]\)?\s*[.)\-:]\s*/.test(line.trim())
+}
+
+function isLowercaseLetterOptionLine(line: string) {
+    return /^\(?[a-d]\)?\s*[.)\-:]\s*/.test(line.trim())
+}
+
+function extractInlineLetterOptions(
+    text: string,
+    { allowEmptyStem = false }: { allowEmptyStem?: boolean } = {},
+): { stem: string; options: Array<{ optionId: string; text: string }> } | null {
+    const matches = [...text.matchAll(/(?<![A-Za-z0-9])\(?([A-Da-d])\)?\s*[.)]\s*/g)]
+    if (matches.length < 4) return null
+
+    const orderedMatches = matches
+        .map((match) => ({
+            optionId: match[1]?.toUpperCase() ?? '',
+            index: match.index ?? -1,
+            marker: match[0],
+        }))
+        .filter(match => match.index >= 0)
+
+    const firstFour = orderedMatches.slice(0, 4)
+    const ids = firstFour.map(match => match.optionId).join('')
+    if (ids !== 'ABCD') return null
+
+    const stem = normalizeStem(text.slice(0, firstFour[0]?.index ?? 0))
+    if (!stem && !allowEmptyStem) return null
+
+    const options = firstFour.map((current, index) => {
+        const next = firstFour[index + 1]
+        const contentStart = current.index + current.marker.length
+        const contentEnd = next?.index ?? text.length
+        return {
+            optionId: current.optionId,
+            text: normalizeOptionText(text.slice(contentStart, contentEnd)),
+        }
+    }).filter(option => option.text.length > 0)
+
+    if (options.length !== 4) return null
+
+    return { stem, options }
 }
 
 function isSelectionPromptLine(line: string) {
@@ -683,7 +728,8 @@ function parseQuestionBlock(
         }
     }
 
-    const stemParts = [firstLine.stem]
+    const inlineOptions = extractInlineLetterOptions(firstLine.stem)
+    const stemParts = [inlineOptions?.stem ?? firstLine.stem]
     const options = new Map<string, string>()
     let activeOption: string | null = null
     let activeSection: 'stem' | 'option' | 'explanation' | 'statement' = 'stem'
@@ -694,6 +740,10 @@ function parseQuestionBlock(
     let answerHintUsed = false
     let answerSeen = false
     let activeStatement = false
+
+    for (const option of inlineOptions?.options ?? []) {
+        options.set(option.optionId, option.text)
+    }
 
     const optionCandidates = rawLines
         .slice(1)
@@ -706,6 +756,16 @@ function parseQuestionBlock(
         entry => entry.option.sourceType === 'LETTER' && (firstNumericOptionIndex === -1 || entry.index < firstNumericOptionIndex),
     ).length
     const useStatementStyleOptions = numericOptionEntries.length >= 4 && leadingLetterOptionCount >= 2
+    const uppercaseLetterOptionEntries = optionCandidates.filter(
+        entry => entry.option.sourceType === 'LETTER' && isUppercaseLetterOptionLine(entry.line),
+    )
+    const firstUppercaseLetterOptionIndex = uppercaseLetterOptionEntries[0]?.index ?? -1
+    const leadingLowercaseLetterOptionCount = optionCandidates.filter(
+        entry => entry.option.sourceType === 'LETTER'
+            && isLowercaseLetterOptionLine(entry.line)
+            && (firstUppercaseLetterOptionIndex === -1 || entry.index < firstUppercaseLetterOptionIndex),
+    ).length
+    const useLowercaseStatementOptions = uppercaseLetterOptionEntries.length >= 4 && leadingLowercaseLetterOptionCount >= 2
 
     for (const line of rawLines.slice(1)) {
         if (looksLikeQuestionStart(line)) break
@@ -754,6 +814,26 @@ function parseQuestionBlock(
         }
 
         if (!answerSeen) {
+            const inlineLineOptions = extractInlineLetterOptions(line, { allowEmptyStem: true })
+            if (inlineLineOptions) {
+                const normalizedInlineStem = inlineLineOptions.stem
+                    ? normalizeSelectionPromptLine(inlineLineOptions.stem)
+                    : ''
+
+                if (normalizedInlineStem) {
+                    stemParts.push(normalizedInlineStem)
+                }
+
+                for (const option of inlineLineOptions.options) {
+                    options.set(option.optionId, option.text)
+                }
+
+                activeOption = null
+                activeSection = 'option'
+                activeStatement = false
+                continue
+            }
+
             const optionResult = matchOptionLine(line)
             if (optionResult) {
                 const optionText = normalizeOptionText(optionResult.text)
@@ -762,6 +842,14 @@ function parseQuestionBlock(
 
                 if (useStatementStyleOptions && optionResult.sourceType === 'LETTER') {
                     stemParts.push(`(${optionResult.optionId}) ${optionText}`)
+                    activeOption = null
+                    activeSection = 'statement'
+                    activeStatement = true
+                    continue
+                }
+
+                if (useLowercaseStatementOptions && optionResult.sourceType === 'LETTER' && isLowercaseLetterOptionLine(line)) {
+                    stemParts.push(normalizeStem(line))
                     activeOption = null
                     activeSection = 'statement'
                     activeStatement = true

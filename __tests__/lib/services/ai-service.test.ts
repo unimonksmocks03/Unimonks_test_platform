@@ -260,6 +260,81 @@ Question: The sale of goods directly to consumers is called:A) Wholesale tradeB)
 Answer: B.
 `
 
+const inlineQNumberMcqText = `
+Q1. Globalisation as a concept fundamentally deals with:(a) Military alliances between nations(b) Flows of ideas, capital, commodities and people(c) Only economic transactions between countries(d) Political dominance of one country over another
+Answer: (b)
+Q2. Which of the following has been a critical factor in causing globalisation?(a) Religion(b) Monarchy(c) Technology(d) Military power
+Answer: (c)
+Q3. The cultural effect of globalisation leads to the fear of:(a) Cultural heterogenisation(b) Cultural homogenisation(c) Cultural isolation(d) Cultural preservation
+Answer: (b)
+Q4. India embarked on a programme of economic reforms in 1991 responding to:(a) A military crisis(b) A financial crisis and desire for higher economic growth(c) Pressure from neighbouring countries(d) A cultural revolution
+Answer: (b)
+Q5. Arrange the following events in correct chronological order:
+India's economic reforms programme
+First WSF meeting in Porto Alegre
+Seattle WTO protests
+Fourth WSF meeting in Mumbai
+(a) 1 → 3 → 2 → 4(b) 3 → 1 → 2 → 4(c) 1 → 2 → 3 → 4(d) 2 → 1 → 3 → 4
+Answer: (a)
+`
+
+const quotedInlineQNumberMcqText = `
+Q1. "The burger is no substitute for a masala dosa." This statement from the chapter implies:(a) American food is superior to Indian food(b) Indian food culture will disappear(c) External influences enlarge choices without replacing traditions(d) Globalisation has no cultural impact
+Answer: (c)
+Q2. Which of the following is a likely cultural outcome of globalisation?(a) Complete isolation(b) Total sameness in all cultures(c) Hybrid cultural combinations(d) No cultural exchange
+Answer: (c)
+Q3. What does cultural heterogenisation most closely describe?(a) One identical global culture(b) Multiple cultures blending in new ways(c) End of all traditions(d) Isolation from global flows
+Answer: (b)
+Q4. Which factor helped accelerate globalisation the most?(a) Technology and communication advances(b) Local village fairs(c) Decline of transport(d) Reduced trade
+Answer: (a)
+Q5. Which statement best reflects the chapter's cultural argument?(a) Foreign influence always erases local culture(b) Local traditions can adapt without disappearing(c) Only food habits change(d) Culture has no relation to globalisation
+Answer: (b)
+`
+
+const lowercaseListStemMcqText = `
+1. Match the Treaties (List I) with their respective years of inception/signing (List II):
+List I:
+a. Montreal Protocol
+b. Earth Summit (Rio)
+c. Kyoto Protocol
+d. Antarctic Environmental Protocol
+List II:
+1991
+1997
+1987
+1992
+A. a-3, b-4, c-2, d-1
+B. a-4, b-3, c-1, d-2
+C. a-3, b-1, c-2, d-4
+D. a-1, b-4, c-2, d-3
+Answer: A
+2. Which country is noted as the single largest producer of oil, holding a quarter of the world's total reserves?
+A. United States
+B. Russia
+C. Iraq
+D. Saudi Arabia
+Answer: D
+3. Assertion (A): The history of petroleum is also the history of war and struggle.
+Reason (R): The immense wealth associated with oil and its indispensability to the global economy generates intense political struggles to control it.
+A. Both A and R are true, and R is the correct explanation of A.
+B. Both A and R are true, but R is NOT the correct explanation of A.
+C. A is true, but R is false.
+D. A is false, but R is true.
+Answer: A
+4. What is the central agenda of the "Agenda 21" document produced at the Rio Summit?
+A. A list of 21 mandatory emission cuts for the North.
+B. A recommended list of development practices to achieve sustainable development.
+C. A charter for the rights of indigenous peoples in 21 countries.
+D. A military alliance treaty to protect global oil reserves.
+Answer: B
+5. The concept of "Res communis humanitatis" is applied to:
+A. Exclusive Economic Zones (EEZ)
+B. National territorial waters
+C. The Global Commons
+D. Indigenous reservation lands
+Answer: C
+`
+
 test('extractQuestionsFromDocumentText parses PDF-like CUET MCQs with parenthesized answers and pdf artifacts', async () => {
     const {
         extractQuestionsFromDocumentText,
@@ -394,6 +469,56 @@ test('extractQuestionsFromDocumentText parses inline Question-prefixed MCQs with
         { id: 'D', text: 'Mining minerals', isCorrect: false },
     ])
     expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+})
+
+test('extractQuestionsFromDocumentText parses Q-numbered MCQs with inline options on the question line', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(inlineQNumberMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+    expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('A')
+})
+
+test('extractQuestionsFromDocumentText ignores word-final punctuation when parsing quoted inline-option stems', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(quotedInlineQNumberMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('C')
+})
+
+test('extractQuestionsFromDocumentText keeps lowercase list markers in the stem when uppercase options appear later', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(lowercaseListStemMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.stem).toContain('a. Montreal Protocol')
+    expect(analysis.questions[0]?.stem).toContain('1991')
+    expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('A')
 })
 
 test('chunkDocumentTextForGeneration advances through the tail chunk without repeating forever', async () => {
