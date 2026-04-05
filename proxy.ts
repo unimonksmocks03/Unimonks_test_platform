@@ -12,8 +12,34 @@ const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET!)
 if (!process.env.JWT_SECRET) {
     throw new Error('JWT_SECRET environment variable is required')
 }
-const ALLOWED_ORIGIN = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 const MAX_JSON_BODY = 100 * 1024 // 100KB
+
+function normalizeOrigin(value: string | null | undefined) {
+    if (!value) return null
+
+    try {
+        return new URL(value).origin
+    } catch {
+        return null
+    }
+}
+
+function getAllowedOrigins(req: NextRequest) {
+    const origins = new Set<string>()
+    const configuredOrigin = normalizeOrigin(process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000')
+    const requestOrigin = normalizeOrigin(req.nextUrl.origin)
+    const forwardedProto = req.headers.get('x-forwarded-proto')
+    const forwardedHost = req.headers.get('x-forwarded-host')
+    const forwardedOrigin = forwardedProto && forwardedHost
+        ? normalizeOrigin(`${forwardedProto}://${forwardedHost}`)
+        : null
+
+    if (configuredOrigin) origins.add(configuredOrigin)
+    if (requestOrigin) origins.add(requestOrigin)
+    if (forwardedOrigin) origins.add(forwardedOrigin)
+
+    return origins
+}
 
 async function verifyToken(token: string): Promise<JWTPayload | null> {
     try {
@@ -57,7 +83,11 @@ export async function proxy(req: NextRequest) {
 
     if (pathname.startsWith('/api/')) {
         const origin = req.headers.get('origin')
-        if (process.env.NODE_ENV === 'production' && origin && origin !== ALLOWED_ORIGIN) {
+        if (process.env.NODE_ENV === 'production' && origin) {
+            const normalizedOrigin = normalizeOrigin(origin)
+            const allowedOrigins = getAllowedOrigins(req)
+
+            if (!normalizedOrigin || !allowedOrigins.has(normalizedOrigin)) {
             return withRequestId(
                 NextResponse.json(
                     { error: true, code: 'CORS_DENIED', message: 'Origin not allowed' },
@@ -65,6 +95,7 @@ export async function proxy(req: NextRequest) {
                 ),
                 requestId
             )
+            }
         }
 
         const contentType = req.headers.get('content-type') || ''
