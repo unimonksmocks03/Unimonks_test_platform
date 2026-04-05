@@ -218,6 +218,8 @@ function normalizeDocumentText(text: string): string {
         .replace(/[\u200b-\u200d\uFEFF]/g, '')
         .replace(/[“”]/g, '"')
         .replace(/[‘’]/g, '\'')
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/__(.+?)__/g, '$1')
         .replace(/[ \t]+\n/g, '\n')
         .replace(/[ \t]+/g, ' ')
         .replace(/(?:^|\n)\s*--\s*\d+\s*of\s*\d+\s*--\s*(?=\n|$)/gi, '\n')
@@ -312,7 +314,7 @@ function stripQuestionLabel(line: string): { questionNumber: number; stem: strin
         }
     }
 
-    const bareQuestionMatch = trimmedLine.match(/^(\d+)\s*(?:[.)\-:])\s*(.+)$/)
+    const bareQuestionMatch = trimmedLine.match(/^(\d+)\s*(?:(?:\.(?!\d))|(?:\)(?!\d))|(?:-(?!\d))|(?::(?!\d)))\s*(.+)$/)
     if (!bareQuestionMatch) return null
 
     const questionNumber = Number.parseInt(bareQuestionMatch[1], 10)

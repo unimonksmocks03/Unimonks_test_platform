@@ -141,6 +141,76 @@ Explanation: Statements A, C and D are correct, while B is not.
 Difficulty: Medium
 `
 
+const markdownStyledPdfMcqText = `
+# CUET MCQs — Chapter 10:
+Wave Optics
+**Q1.** A wavefront is defined as:
+(a) The path along which light energy travels
+(b) A surface of constant phase
+(c) A surface of constant amplitude only
+(d) The direction of propagation of light
+**Answer:** (b)
+**Explanation:** A wavefront is a locus of all points that oscillate in the same phase.
+
+**Q2.** The wavefronts from a point source of light are:
+(a) Plane
+(b) Cylindrical
+(c) Spherical
+(d) Elliptical
+**Answer:** (c)
+**Explanation:** A point source emits waves uniformly in all directions.
+
+**Q3.** At a very large distance from a point source, the wavefront can be approximated as:
+(a) Spherical
+(b) Cylindrical
+(c) Plane
+(d) Conical
+**Answer:** (c)
+**Explanation:** At a large distance, a small portion of the spherical wavefront can be considered as a plane wavefront.
+
+**Q4.** According to Huygens' principle, each point on a wavefront acts as:
+(a) An absorber of waves
+(b) A source of secondary wavelets
+(c) A reflector of waves
+(d) A source of longitudinal waves only
+**Answer:** (b)
+**Explanation:** Each point of the wavefront is the source of secondary disturbance.
+
+**Q5.** The new wavefront at a later time, according to Huygens' construction, is the:
+(a) Backward envelope of secondary wavelets
+(b) Sum of all secondary wavelets
+(c) Forward envelope of secondary wavelets
+(d) Tangent to the incident wavefront
+**Answer:** (c)
+**Explanation:** The new wavefront is the forward envelope of all the secondary wavelets.
+`
+
+const decimalContinuationMcqText = `
+Q29. Two incoherent sources of equal intensity I₀ produce at any point an average intensity of:
+(a) 4I₀
+(b) Zero
+(c) 2I₀
+(d) I₀
+Answer: (c)
+Explanation: For incoherent sources, there is no stable interference pattern.
+Q30. In a Young's double slit experiment, the slits are separated by 0.28 mm and the screen is
+1.4 m away. If the fourth bright fringe is at 1.2 cm from the central fringe, the wavelength of light
+used is:
+(a) 500 nm
+(b) 600 nm
+(c) 700 nm
+(d) 400 nm
+Answer: (b)
+Explanation: Using x₄ = 4λD/d gives 600 nm.
+Q31. Diffraction of light is:
+(a) Bending of light around corners of an obstacle
+(b) Splitting of light into colours
+(c) Reflection from smooth surfaces
+(d) Refraction through a prism
+Answer: (a)
+Explanation: Diffraction is the bending of light around obstacles or apertures.
+`
+
 test('extractQuestionsFromDocumentText parses PDF-like CUET MCQs with parenthesized answers and pdf artifacts', async () => {
     const {
         extractQuestionsFromDocumentText,
@@ -199,6 +269,42 @@ test('extractQuestionsFromDocumentText treats statement blocks as stem content w
         { id: 'C', text: 'All of the above', isCorrect: false },
         { id: 'D', text: '(A) and (B) only', isCorrect: false },
     ])
+})
+
+test('extractQuestionsFromDocumentText parses markdown-styled MCQs with bold Q, Answer, and Explanation labels', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(markdownStyledPdfMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.missingQuestionNumbers).toEqual([])
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]).toMatchObject({
+        stem: 'A wavefront is defined as:',
+    })
+    expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+    expect(analysis.questions[2]?.options.find((option) => option.isCorrect)?.id).toBe('C')
+})
+
+test('extractQuestionsFromDocumentText does not treat decimal continuation lines as new question numbers', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(decimalContinuationMcqText)
+
+    expect(analysis.questions).toHaveLength(3)
+    expect(analysis.detectedAsMcqDocument).toBe(false)
+    expect(analysis.expectedQuestionCount).toBeNull()
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.questions[1]?.stem).toContain("the slits are separated by 0.28 mm")
+    expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('B')
 })
 
 test('chunkDocumentTextForGeneration advances through the tail chunk without repeating forever', async () => {
