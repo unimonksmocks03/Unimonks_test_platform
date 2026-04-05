@@ -83,6 +83,7 @@ export default function UserManagementPage() {
     const [createRole, setCreateRole] = useState<"STUDENT" | "SUB_ADMIN">("STUDENT");
     const [subAdminConfirmOpen, setSubAdminConfirmOpen] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+    const subAdminConfirmAcceptedRef = useRef(false);
 
     const fetchUsers = useCallback(async (search?: string, role?: string, status?: string) => {
         setIsLoading(true);
@@ -202,6 +203,8 @@ export default function UserManagementPage() {
                         setCreateDialogOpen(open);
                         if (!open) {
                             setCreateRole("STUDENT");
+                            setSubAdminConfirmOpen(false);
+                            subAdminConfirmAcceptedRef.current = false;
                         }
                     }}
                 >
@@ -234,6 +237,7 @@ export default function UserManagementPage() {
                                         value={createRole}
                                         onValueChange={(value) => {
                                             if (value === "SUB_ADMIN") {
+                                                subAdminConfirmAcceptedRef.current = false;
                                                 setSubAdminConfirmOpen(true);
                                                 return;
                                             }
@@ -526,8 +530,11 @@ export default function UserManagementPage() {
                 open={subAdminConfirmOpen}
                 onOpenChange={(open) => {
                     setSubAdminConfirmOpen(open);
-                    if (!open && createRole !== "SUB_ADMIN") {
-                        setCreateRole("STUDENT");
+                    if (!open) {
+                        if (!subAdminConfirmAcceptedRef.current) {
+                            setCreateRole("STUDENT");
+                        }
+                        subAdminConfirmAcceptedRef.current = false;
                     }
                 }}
             >
@@ -546,6 +553,7 @@ export default function UserManagementPage() {
                         <AlertDialogAction
                             className="rounded-xl bg-primary text-white hover:bg-primary/90"
                             onClick={() => {
+                                subAdminConfirmAcceptedRef.current = true;
                                 setCreateRole("SUB_ADMIN");
                                 setSubAdminConfirmOpen(false);
                             }}
