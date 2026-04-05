@@ -338,10 +338,11 @@ function looksLikeQuestionStart(line: string): boolean {
 const OPTION_LETTER_REGEX = /^\(?([A-D])\)?\s*[.)\-:]?\s*(.+)$/i
 const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?\s*[.)\-:]?\s*(.+)$/i
 const ANSWER_LINE_REGEX =
-    /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?=\s|$)/i
+    /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
 const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
 const DIFFICULTY_LINE_REGEX = /^difficulty\s*[:\-]?\s*(easy|medium|hard)\b/i
 const TOPIC_LINE_REGEX = /^topic\s*[:\-]?\s*(.+)$/i
+const INLINE_QUESTION_PREFIX_REGEX = /^question\s*:\s*(.+)$/i
 
 const NUMERIC_TO_LETTER: Record<string, string> = { '1': 'A', '2': 'B', '3': 'C', '4': 'D' }
 
@@ -386,6 +387,52 @@ function normalizeAnswerIdent(raw: string): string {
     return NUMERIC_TO_LETTER[raw] || upper
 }
 
+function expandInlineQuestionLine(
+    line: string,
+    questionNumber: number,
+): { questionNumber: number; rawLines: string[]; blockText: string } | null {
+    const questionMatch = line.match(INLINE_QUESTION_PREFIX_REGEX)
+    if (!questionMatch) return null
+
+    const body = questionMatch[1]?.trim()
+    if (!body) return null
+
+    const optionRegex = /([A-D])\)\s*/g
+    const optionMatches = [...body.matchAll(optionRegex)]
+    const rawLines: string[] = []
+
+    if (optionMatches.length === 0) {
+        rawLines.push(`Q${questionNumber}. ${body}`)
+    } else {
+        const firstOptionIndex = optionMatches[0]?.index ?? -1
+        const stem = normalizeStem(body.slice(0, firstOptionIndex))
+        if (!stem) {
+            return null
+        }
+
+        rawLines.push(`Q${questionNumber}. ${stem}`)
+        for (let index = 0; index < optionMatches.length; index++) {
+            const current = optionMatches[index]
+            const next = optionMatches[index + 1]
+            const optionId = current?.[1]?.toUpperCase()
+            if (!optionId) continue
+
+            const contentStart = (current.index ?? 0) + current[0].length
+            const contentEnd = next?.index ?? body.length
+            const optionText = normalizeOptionText(body.slice(contentStart, contentEnd))
+            if (!optionText) continue
+
+            rawLines.push(`(${optionId}) ${optionText}`)
+        }
+    }
+
+    return {
+        questionNumber,
+        rawLines,
+        blockText: rawLines.join('\n'),
+    }
+}
+
 function findAnswerSectionIndex(text: string) {
     const markers = [
         /(?:^|\n)\s*ANSWER\s*KEY(?:\s+WITH\s+EXPLANATIONS)?\b/i,
@@ -427,6 +474,7 @@ function collectStructuredQuestionBlocks(questionSection: string): StructuredQue
 
     const blocks: StructuredQuestionBlock[] = []
     let currentBlock: StructuredQuestionBlock | null = null
+    let implicitQuestionNumber = 0
 
     for (const line of lines) {
         const questionLabel = stripQuestionLabel(line)
@@ -441,6 +489,19 @@ function collectStructuredQuestionBlocks(questionSection: string): StructuredQue
                 rawLines: [line],
                 blockText: line,
             }
+            implicitQuestionNumber = Math.max(implicitQuestionNumber, questionLabel.questionNumber)
+            continue
+        }
+
+        const inlineQuestionBlock = expandInlineQuestionLine(line, implicitQuestionNumber + 1)
+        if (inlineQuestionBlock) {
+            if (currentBlock) {
+                currentBlock.blockText = currentBlock.rawLines.join('\n')
+                blocks.push(currentBlock)
+            }
+
+            currentBlock = inlineQuestionBlock
+            implicitQuestionNumber = inlineQuestionBlock.questionNumber
             continue
         }
 

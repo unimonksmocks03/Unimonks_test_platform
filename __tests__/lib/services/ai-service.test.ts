@@ -246,6 +246,20 @@ Answer: (C)
 Answer: (B)
 `
 
+const inlineQuestionDocxMcqText = `
+Mock Test: Tertiary and Quaternary Activities
+Question: Which of the following best describes tertiary activities?A) Production of raw materialsB) Providing services rather than goodsC) Manufacturing textilesD) Mining minerals
+Answer: B.
+Question: Tertiary sector workers are usually:A) Unskilled laborers in fieldsB) Skilled professionals providing servicesC) Farmer and fishermenD) Factory machine operators
+Answer: B.
+Question: Which of the following is not a tertiary activity?A) Trading agricultural produceB) Telecommunications serviceC) Weaving cotton fabricD) Hospital healthcare service
+Answer: C.
+Question: Which pair of activities is correctly matched to the tertiary sector?A) Fishing – Food processingB) Retail trading – Direct sale to consumersC) Steel production – Coal miningD) Wheat farming – Flour milling
+Answer: B.
+Question: The sale of goods directly to consumers is called:A) Wholesale tradeB) Retail trade[3]C) Import-export businessD) Bartering
+Answer: B.
+`
+
 test('extractQuestionsFromDocumentText parses PDF-like CUET MCQs with parenthesized answers and pdf artifacts', async () => {
     const {
         extractQuestionsFromDocumentText,
@@ -356,6 +370,29 @@ test('extractQuestionsFromDocumentText parses markdown heading numbered MCQs', a
     expect(analysis.invalidQuestionNumbers).toEqual([])
     expect(analysis.duplicateQuestionNumbers).toEqual([])
     expect(analysis.questions[0]?.stem).toBe('The function f(x)=2x+3 is continuous at x=1 because')
+    expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+})
+
+test('extractQuestionsFromDocumentText parses inline Question-prefixed MCQs with inline options and dotted answers', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(inlineQuestionDocxMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.stem).toBe('Which of the following best describes tertiary activities?')
+    expect(analysis.questions[0]?.options).toEqual([
+        { id: 'A', text: 'Production of raw materials', isCorrect: false },
+        { id: 'B', text: 'Providing services rather than goods', isCorrect: true },
+        { id: 'C', text: 'Manufacturing textiles', isCorrect: false },
+        { id: 'D', text: 'Mining minerals', isCorrect: false },
+    ])
     expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
 })
 
