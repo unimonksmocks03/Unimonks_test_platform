@@ -211,6 +211,41 @@ Answer: (a)
 Explanation: Diffraction is the bending of light around obstacles or apertures.
 `
 
+const markdownHeadingMcqText = `
+# CUET MCQs - Chapter 5:
+Continuity and Differentiability
+## 1. The function f(x)=2x+3 is continuous at x=1 because
+(A) f(1)=3
+(B) lim x→1 f(x)=5=f(1)
+(C) f(1)=1
+(D) lim x→1 f(x)=0
+Answer: (B)
+## 2. The function f(x)=x^2 is continuous at x=0 because
+(A) lim x→0 x^2 = 1
+(B) f(0)=1
+(C) lim x→0 x^2 = 0 = f(0)
+(D) f is not defined at 0
+Answer: (C)
+## 3. The modulus function f(x)=|x| is
+(A) discontinuous at x=0
+(B) continuous at x=0
+(C) not defined at x=0
+(D) differentiable at x=0 only
+Answer: (B)
+## 4. The constant function f(x)=k is
+(A) continuous nowhere
+(B) continuous only at x=0
+(C) continuous at every real number
+(D) discontinuous at every real number
+Answer: (C)
+## 5. Every polynomial function is
+(A) discontinuous
+(B) continuous at every real number
+(C) continuous only at x=0
+(D) continuous only for positive x
+Answer: (B)
+`
+
 test('extractQuestionsFromDocumentText parses PDF-like CUET MCQs with parenthesized answers and pdf artifacts', async () => {
     const {
         extractQuestionsFromDocumentText,
@@ -305,6 +340,23 @@ test('extractQuestionsFromDocumentText does not treat decimal continuation lines
     expect(analysis.invalidQuestionNumbers).toEqual([])
     expect(analysis.questions[1]?.stem).toContain("the slits are separated by 0.28 mm")
     expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+})
+
+test('extractQuestionsFromDocumentText parses markdown heading numbered MCQs', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(markdownHeadingMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.stem).toBe('The function f(x)=2x+3 is continuous at x=1 because')
+    expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
 })
 
 test('chunkDocumentTextForGeneration advances through the tail chunk without repeating forever', async () => {

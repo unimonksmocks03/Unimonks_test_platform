@@ -295,8 +295,9 @@ function isLikelyQuestionStemNoise(questionNumber: number, stem: string, explici
 function stripQuestionLabel(line: string): { questionNumber: number; stem: string; explicitPrefix: boolean } | null {
     const trimmedLine = line.trim()
     if (!trimmedLine) return null
+    const normalizedLine = trimmedLine.replace(/^#{1,6}\s*/, '')
 
-    const prefixedQuestionMatch = trimmedLine.match(
+    const prefixedQuestionMatch = normalizedLine.match(
         /^(question\s*|ques(?:tion)?\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.+)$/i
     )
 
@@ -314,7 +315,7 @@ function stripQuestionLabel(line: string): { questionNumber: number; stem: strin
         }
     }
 
-    const bareQuestionMatch = trimmedLine.match(/^(\d+)\s*(?:(?:\.(?!\d))|(?:\)(?!\d))|(?:-(?!\d))|(?::(?!\d)))\s*(.+)$/)
+    const bareQuestionMatch = normalizedLine.match(/^(\d+)\s*(?:(?:\.(?!\d))|(?:\)(?!\d))|(?:-(?!\d))|(?::(?!\d)))\s*(.+)$/)
     if (!bareQuestionMatch) return null
 
     const questionNumber = Number.parseInt(bareQuestionMatch[1], 10)
