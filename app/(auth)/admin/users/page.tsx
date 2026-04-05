@@ -83,7 +83,7 @@ export default function UserManagementPage() {
     const [createRole, setCreateRole] = useState<"STUDENT" | "SUB_ADMIN">("STUDENT");
     const [subAdminConfirmOpen, setSubAdminConfirmOpen] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-    const subAdminConfirmAcceptedRef = useRef(false);
+    const [pendingRoleSelection, setPendingRoleSelection] = useState<"SUB_ADMIN" | null>(null);
 
     const fetchUsers = useCallback(async (search?: string, role?: string, status?: string) => {
         setIsLoading(true);
@@ -204,7 +204,7 @@ export default function UserManagementPage() {
                         if (!open) {
                             setCreateRole("STUDENT");
                             setSubAdminConfirmOpen(false);
-                            subAdminConfirmAcceptedRef.current = false;
+                            setPendingRoleSelection(null);
                         }
                     }}
                 >
@@ -237,11 +237,12 @@ export default function UserManagementPage() {
                                         value={createRole}
                                         onValueChange={(value) => {
                                             if (value === "SUB_ADMIN") {
-                                                subAdminConfirmAcceptedRef.current = false;
+                                                setPendingRoleSelection("SUB_ADMIN");
                                                 setSubAdminConfirmOpen(true);
                                                 return;
                                             }
 
+                                            setPendingRoleSelection(null);
                                             setCreateRole("STUDENT");
                                         }}
                                     >
@@ -268,7 +269,7 @@ export default function UserManagementPage() {
                             </div>
                             <DialogFooter>
                                 <Button type="submit" disabled={creating} className="w-full bg-primary hover:bg-primary/90 rounded-xl h-12 text-base font-bold shadow-clay-inner">
-                                    {creating ? "Creating..." : createRole === "SUB_ADMIN" ? "Continue" : "Create User"}
+                                    {creating ? "Creating..." : createRole === "SUB_ADMIN" ? "Create Sub-admin" : "Create User"}
                                 </Button>
                             </DialogFooter>
                         </form>
@@ -531,10 +532,7 @@ export default function UserManagementPage() {
                 onOpenChange={(open) => {
                     setSubAdminConfirmOpen(open);
                     if (!open) {
-                        if (!subAdminConfirmAcceptedRef.current) {
-                            setCreateRole("STUDENT");
-                        }
-                        subAdminConfirmAcceptedRef.current = false;
+                        setPendingRoleSelection(null);
                     }
                 }}
             >
@@ -549,12 +547,17 @@ export default function UserManagementPage() {
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                        <AlertDialogCancel className="rounded-xl border-slate-200">Cancel</AlertDialogCancel>
+                        <AlertDialogCancel
+                            className="rounded-xl border-slate-200"
+                            onClick={() => setPendingRoleSelection(null)}
+                        >
+                            Cancel
+                        </AlertDialogCancel>
                         <AlertDialogAction
                             className="rounded-xl bg-primary text-white hover:bg-primary/90"
                             onClick={() => {
-                                subAdminConfirmAcceptedRef.current = true;
                                 setCreateRole("SUB_ADMIN");
+                                setPendingRoleSelection(null);
                                 setSubAdminConfirmOpen(false);
                             }}
                         >
