@@ -1,6 +1,32 @@
 import OpenAI from 'openai'
 import { Prisma } from '@prisma/client'
+import { zodTextFormat } from 'openai/helpers/zod'
+
+import {
+    McqExtractionResponseSchema,
+    McqQuestionSchema,
+    type VerificationResult,
+} from '@/lib/services/ai-extraction-schemas'
 import { prisma } from '@/lib/prisma'
+import type {
+    CostInfo,
+    DocumentMetadataEnrichmentResult,
+    ExtractedQuestionAnalysis,
+    GeneratedQuestion,
+    PdfVisionFallbackResult,
+    PreciseDocumentQuestionAnalysis,
+} from '@/lib/services/ai-service.types'
+
+export type {
+    CostInfo,
+    DocumentMetadataEnrichmentResult,
+    DocumentQuestionStrategy,
+    ExtractedQuestionAnalysis,
+    GeneratedQuestion,
+    PdfImportFallbackMode,
+    PdfVisionFallbackResult,
+    PreciseDocumentQuestionAnalysis,
+} from '@/lib/services/ai-service.types'
 
 /**
  * AI Service — OpenAI integration for:
@@ -57,43 +83,10 @@ interface FeedbackResult {
     overallTag: string
 }
 
-export interface GeneratedQuestion {
-    stem: string
-    options: { id: string; text: string; isCorrect: boolean }[]
-    explanation: string
-    difficulty: string
-    topic: string
-}
-
-interface CostInfo {
-    model: string
-    inputTokens: number
-    outputTokens: number
-    costUSD: number
-}
-
 type AIChunkFailure = {
     code?: string
     message: string
     retryable: boolean
-}
-
-const PDF_VISION_PAGE_CHUNK_SIZE = 3
-const PDF_VISION_DESIRED_WIDTH = 1024
-
-export type DocumentQuestionStrategy = 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
-export type PdfImportFallbackMode = 'EXTRACTED' | 'GENERATED'
-
-export interface ExtractedQuestionAnalysis {
-    detectedAsMcqDocument: boolean
-    answerHintCount: number
-    candidateBlockCount: number
-    questions: GeneratedQuestion[]
-    expectedQuestionCount: number | null
-    exactMatchAchieved: boolean
-    invalidQuestionNumbers: number[]
-    missingQuestionNumbers: number[]
-    duplicateQuestionNumbers: number[]
 }
 
 type StructuredAnswerDetail = {
@@ -124,37 +117,20 @@ type StructuredExtractionContext = {
     parsedQuestions: Map<number, ParsedStructuredQuestion>
 }
 
-export interface PreciseDocumentQuestionAnalysis extends ExtractedQuestionAnalysis {
-    aiRepairUsed: boolean
-    cost?: CostInfo
-    error?: boolean
-    message?: string
-}
-
-export interface DocumentMetadataEnrichmentResult {
-    questions: GeneratedQuestion[]
-    description: string
-    aiUsed: boolean
-    cost?: CostInfo
-    warning?: string
-}
-
-export interface PdfVisionFallbackResult {
-    mode: PdfImportFallbackMode
-    questions?: GeneratedQuestion[]
-    failedCount?: number
-    cost?: CostInfo
-    error?: boolean
-    message?: string
-    pageCount: number
-    chunkCount: number
-}
 
 // ── Cost Tracking Helper ──
-function calculateCost(model: string, usage?: { prompt_tokens?: number; completion_tokens?: number }): CostInfo {
+function calculateCost(
+    model: string,
+    usage?: {
+        prompt_tokens?: number
+        completion_tokens?: number
+        input_tokens?: number
+        output_tokens?: number
+    }
+): CostInfo {
     const rates = MODEL_COSTS[model] || MODEL_COSTS['gpt-4o-mini']
-    const inputTokens = usage?.prompt_tokens ?? 0
-    const outputTokens = usage?.completion_tokens ?? 0
+    const inputTokens = usage?.prompt_tokens ?? usage?.input_tokens ?? 0
+    const outputTokens = usage?.completion_tokens ?? usage?.output_tokens ?? 0
     return {
         model,
         inputTokens,
@@ -1317,7 +1293,7 @@ ${batchContext}`
             }
 
             const parsed = JSON.parse(content) as {
-                questions?: Array<GeneratedQuestion & { questionNumber?: number }>
+                questions?: Array<Partial<GeneratedQuestion> & { questionNumber?: number }>
             }
 
             const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : []
@@ -1327,8 +1303,9 @@ ${batchContext}`
                     continue
                 }
 
-                if (validateQuestion(rawQuestion)) {
-                    repairedQuestions.set(questionNumber, rawQuestion)
+                const validatedQuestion = toValidatedGeneratedQuestion(rawQuestion)
+                if (validatedQuestion) {
+                    repairedQuestions.set(questionNumber, validatedQuestion)
                 }
             }
 
@@ -1433,12 +1410,8 @@ ${chunk}`
 
             if (content) {
                 const parsed = JSON.parse(content) as { questions?: GeneratedQuestion[] }
-                const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : []
-                for (const q of rawQuestions) {
-                    if (validateQuestion(q)) {
-                        allQuestions.push(q)
-                    }
-                }
+                const { questions } = coerceGeneratedQuestions(parsed.questions)
+                allQuestions.push(...questions)
             }
         } catch (error) {
             const failure = toAIChunkFailure(error)
@@ -1967,14 +1940,125 @@ function generateRuleBasedFeedback(
     }
 }
 
+function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | null | undefined): GeneratedQuestion | null {
+    if (!question) return null
+
+    const normalizedStem = normalizeStem(question.stem ?? '')
+    const normalizedOptions = Array.isArray(question.options)
+        ? question.options.map((option, index) => ({
+            id: String(option?.id ?? ['A', 'B', 'C', 'D'][index] ?? '').toUpperCase(),
+            text: normalizeOptionText(option?.text ?? ''),
+            isCorrect: Boolean(option?.isCorrect),
+        }))
+        : []
+
+    const normalizedQuestion: GeneratedQuestion = {
+        stem: normalizedStem,
+        options: normalizedOptions,
+        explanation: typeof question.explanation === 'string' ? question.explanation.trim() : '',
+        difficulty: normalizeDifficultyLabel(question.difficulty),
+        topic: normalizeTopicLabel(question.topic, normalizedStem),
+    }
+
+    const parsed = McqQuestionSchema.safeParse(normalizedQuestion)
+    return parsed.success ? parsed.data : null
+}
+
+function coerceGeneratedQuestions(rawQuestions: unknown): { questions: GeneratedQuestion[]; failedCount: number } {
+    if (!Array.isArray(rawQuestions)) {
+        return { questions: [], failedCount: 0 }
+    }
+
+    const questions: GeneratedQuestion[] = []
+    let failedCount = 0
+    for (const rawQuestion of rawQuestions) {
+        const validatedQuestion = toValidatedGeneratedQuestion(rawQuestion as Partial<GeneratedQuestion>)
+        if (validatedQuestion) {
+            questions.push(validatedQuestion)
+        } else {
+            failedCount += 1
+        }
+    }
+
+    return { questions, failedCount }
+}
+
 // ── Zod-style Validation for Generated Questions ──
 function validateQuestion(q: GeneratedQuestion): boolean {
-    if (!q.stem || q.stem.length < 3) return false
-    if (!Array.isArray(q.options) || q.options.length !== 4) return false
-    const correctCount = q.options.filter(o => o.isCorrect).length
-    if (correctCount !== 1) return false
-    if (q.options.some(o => !o.text || !o.id)) return false
-    return true
+    return toValidatedGeneratedQuestion(q) !== null
+}
+
+export function verifyExtractedQuestions(
+    questions: GeneratedQuestion[],
+    expectedCount: number | null,
+): VerificationResult {
+    const issues: VerificationResult['issues'] = []
+    const seenStems = new Map<string, number>()
+    let validQuestions = 0
+
+    if (expectedCount !== null && questions.length !== expectedCount) {
+        issues.push({
+            questionNumber: 0,
+            issue: `Expected ${expectedCount} questions, got ${questions.length} (count mismatch)`,
+        })
+    }
+
+    for (let index = 0; index < questions.length; index += 1) {
+        const question = questions[index]
+        const questionNumber = index + 1
+        let isValid = true
+
+        const rawStemKey = typeof question.stem === 'string'
+            ? question.stem.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 120)
+            : ''
+        const duplicateOf = rawStemKey ? seenStems.get(rawStemKey) : undefined
+        if (duplicateOf) {
+            issues.push({
+                questionNumber,
+                issue: `Duplicate stem (same as question ${duplicateOf})`,
+            })
+            isValid = false
+        } else if (rawStemKey) {
+            seenStems.set(rawStemKey, questionNumber)
+        }
+
+        const validatedQuestion = toValidatedGeneratedQuestion(question)
+        if (!validatedQuestion) {
+            issues.push({
+                questionNumber,
+                issue: 'Question failed structured validation',
+            })
+            continue
+        }
+
+        const correctCount = validatedQuestion.options.filter((option) => option.isCorrect).length
+        if (validatedQuestion.options.length !== 4) {
+            issues.push({
+                questionNumber,
+                issue: `Has ${validatedQuestion.options.length} options instead of 4`,
+            })
+            isValid = false
+        }
+
+        if (correctCount !== 1) {
+            issues.push({
+                questionNumber,
+                issue: `Has ${correctCount} correct options instead of 1`,
+            })
+            isValid = false
+        }
+
+        if (isValid) {
+            validQuestions += 1
+        }
+    }
+
+    return {
+        totalQuestions: questions.length,
+        validQuestions,
+        issues,
+        passed: issues.length === 0,
+    }
 }
 
 // ── Deduplicate questions by stem similarity ──
@@ -2219,21 +2303,11 @@ export async function generateQuestionsFromText(
     return { questions: allQuestions, failedCount: Math.max(0, failedCount), cost: totalCost }
 }
 
-// Vision rendering via PDF page screenshots is disabled because it requires @napi-rs/canvas
-// (a native module) which is not available on serverless platforms like Vercel.
-// When this returns empty, the vision fallback in generateQuestionsFromPdfVisionFallback
-// falls through to text-based extraction + AI generation instead.
-async function renderPdfPageChunkAsImages(
-    _pdfProxy: { numPages: number },
-    _pageNumbers: number[],
-): Promise<string[]> {
-    return []
-}
-
-export async function generateQuestionsFromPdfVisionFallback(
+export async function extractQuestionsFromPdfMultimodal(
     buffer: Buffer,
-    count: number = 30,
+    expectedCount: number = 50,
     auditUserId?: string,
+    fileName: string = 'uploaded.pdf',
 ): Promise<PdfVisionFallbackResult> {
     if (!openai) {
         return {
@@ -2241,216 +2315,160 @@ export async function generateQuestionsFromPdfVisionFallback(
             message: 'OpenAI API key not configured. Please set OPENAI_API_KEY.',
             pageCount: 0,
             chunkCount: 0,
-            mode: 'GENERATED',
+            mode: 'EXTRACTED',
         }
     }
 
-    const { getDocumentProxy, extractText } = await import('unpdf')
+    const { getDocumentProxy } = await import('unpdf')
     const pdf = await getDocumentProxy(new Uint8Array(buffer))
-
     const model = 'gpt-4o'
-    let overallMode: PdfImportFallbackMode = 'GENERATED'
-    let allQuestions: GeneratedQuestion[] = []
-    let failedCount = 0
-    let lastFailure: AIChunkFailure | null = null
-    let pageCount = 0
-    let chunkCount = 0
-    const totalCost: CostInfo = {
-        model,
-        inputTokens: 0,
-        outputTokens: 0,
-        costUSD: 0,
-    }
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
 
     try {
-        pageCount = pdf.numPages
-        const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
-        const pageChunks = chunkArray(pageNumbers, PDF_VISION_PAGE_CHUNK_SIZE)
-        chunkCount = pageChunks.length
-
+        const pageCount = pdf.numPages
         if (pageCount === 0) {
             return {
                 error: true,
-                message: 'Could not render PDF pages for AI fallback.',
+                message: 'PDF has no pages available for multimodal extraction.',
                 pageCount: 0,
                 chunkCount: 0,
-                mode: 'GENERATED',
+                mode: 'EXTRACTED',
             }
         }
 
-        for (const [chunkIndex, pageNumberChunk] of pageChunks.entries()) {
-            // For vision fallback, we try to send text from pages as context
-            // Since unpdf may not support page rendering without canvas, extract per-page text
-            let imageChunk: string[] = []
-            try {
-                imageChunk = await renderPdfPageChunkAsImages(pdf, pageNumberChunk)
-            } catch {
-                // If image rendering fails, fall back to text-only extraction for this chunk
-                const chunkResult = await extractText(pdf, { mergePages: false })
-                const pageTexts = Array.isArray(chunkResult.text) ? chunkResult.text : []
-                const textForChunk = pageNumberChunk
-                    .map(pn => pageTexts[pn - 1] || '')
-                    .join('\n')
-                if (textForChunk.trim()) {
-                    // Use text-based generation instead of vision for this chunk
-                    const textResult = await generateFromChunk(
-                        textForChunk,
-                        Math.max(8, Math.ceil((count / pageCount) * pageNumberChunk.length)),
-                        model,
-                    )
-                    if (textResult.questions.length > 0) {
-                        allQuestions.push(...textResult.questions)
-                    }
-                    if (textResult.cost) {
-                        totalCost.inputTokens += textResult.cost.inputTokens
-                        totalCost.outputTokens += textResult.cost.outputTokens
-                        totalCost.costUSD += textResult.cost.costUSD
-                    }
-                    failedCount += textResult.failedCount
-                }
-                continue
-            }
-            if (imageChunk.length === 0) {
-                continue
-            }
-
-            const approximateChunkTarget = Math.max(
-                8,
-                Math.ceil((count / pageCount) * imageChunk.length),
-            )
-            const prompt = `You are extracting or generating CUET-style multiple-choice questions from PDF page screenshots.
-
-Priority:
-1. If the pages already contain MCQs with options and answers, extract those MCQs faithfully. Do not invent new facts or rewrite the question meaning.
-2. If the pages are notes or theory without explicit MCQs, generate up to ${approximateChunkTarget} CUET-style MCQs strictly from the visible content.
-
-Return strict JSON:
-{
-  "mode": "EXTRACTED" | "GENERATED",
-  "questions": [
-    {
-      "stem": "question text",
-      "options": [
-        {"id": "A", "text": "option text", "isCorrect": false},
-        {"id": "B", "text": "option text", "isCorrect": true},
-        {"id": "C", "text": "option text", "isCorrect": false},
-        {"id": "D", "text": "option text", "isCorrect": false}
-      ],
-      "explanation": "brief explanation",
-      "difficulty": "EASY" | "MEDIUM" | "HARD",
-      "topic": "short topic tag"
-    }
-  ]
-}
+        const response = await openai.responses.parse({
+            model,
+            temperature: 0,
+            max_output_tokens: 12000,
+            input: [
+                {
+                    role: 'system',
+                    content: 'You extract existing CUET-style MCQs from uploaded PDF files with high precision and return only strict structured output.',
+                },
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'input_text',
+                            text: `Extract the existing CUET-style MCQs from this PDF.
 
 Rules:
-- Exactly 4 options.
-- Exactly 1 correct option.
-- Preserve visible answer keys when extracting existing MCQs.
-- Preserve the visible explanation if present; otherwise give a concise explanation.
-- Do not include page numbers, headers, footers, or formatting artifacts.
-- If a question is cut off across page boundaries, include it only when enough content is visible to produce a valid MCQ.
-- Focus only on the pages in this chunk (${chunkIndex + 1}/${pageChunks.length}), covering PDF pages ${pageNumberChunk.join(', ')}.`
+- Return up to ${expectedCount} complete questions.
+- Preserve the stem wording as closely as possible.
+- Normalize answer labels to A, B, C, D in the order they appear.
+- Each question must have exactly 4 options and exactly 1 correct option.
+- Preserve assertion-reason, match-the-following, statement-combination, and answer-key based questions.
+- Ignore headers, footers, decorative text, and page numbers.
+- If a question cannot be recovered confidently, skip it instead of fabricating details.
+- Use a concise explanation when the source does not include one.
+- Assign a short topic tag and EASY/MEDIUM/HARD difficulty.
 
-            try {
-                const response = await openai.chat.completions.create({
-                    model,
-                    temperature: 0.1,
-                    max_tokens: 4000,
-                    response_format: { type: 'json_object' },
-                    messages: [
+Return strict JSON with a top-level "questions" array only.`,
+                        },
                         {
-                            role: 'user',
-                            content: [
-                                { type: 'text', text: prompt },
-                                ...imageChunk.map((imageUrl) => ({
-                                    type: 'image_url' as const,
-                                    image_url: { url: imageUrl },
-                                })),
-                            ],
+                            type: 'input_file',
+                            filename: fileName,
+                            file_data: `data:application/pdf;base64,${buffer.toString('base64')}`,
                         },
                     ],
-                })
+                },
+            ],
+            text: {
+                format: zodTextFormat(McqExtractionResponseSchema, 'mcq_extraction_response'),
+            },
+        })
 
-                const content = response.choices[0]?.message?.content
-                if (!content) {
-                    failedCount += approximateChunkTarget
-                    continue
-                }
+        const cost = calculateCost(model, response.usage)
+        totalCost.inputTokens += cost.inputTokens
+        totalCost.outputTokens += cost.outputTokens
+        totalCost.costUSD += cost.costUSD
 
-                const parsed = JSON.parse(content) as {
-                    mode?: PdfImportFallbackMode
-                    questions?: GeneratedQuestion[]
-                }
-
-                if (parsed.mode === 'EXTRACTED') {
-                    overallMode = 'EXTRACTED'
-                }
-
-                const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : []
-                const validQuestions: GeneratedQuestion[] = []
-                for (const question of rawQuestions) {
-                    if (validateQuestion(question)) {
-                        validQuestions.push(question)
-                    } else {
-                        failedCount += 1
-                    }
-                }
-
-                allQuestions.push(...validQuestions)
-
-                const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
-                totalCost.inputTokens += cost.inputTokens
-                totalCost.outputTokens += cost.outputTokens
-                totalCost.costUSD += cost.costUSD
-            } catch (err) {
-                lastFailure = toAIChunkFailure(err)
-                console.error('[AI] PDF vision fallback failed on chunk:', err)
-                failedCount += approximateChunkTarget
-                if (!lastFailure.retryable) {
-                    return {
-                        mode: overallMode,
-                        error: true,
-                        message: lastFailure.message,
-                        pageCount,
-                        chunkCount,
-                        questions: [],
-                        failedCount,
-                        cost: totalCost,
-                    }
-                }
-            }
-        }
-
-        allQuestions = deduplicateQuestions(allQuestions)
+        const { questions, failedCount } = coerceGeneratedQuestions(response.output_parsed?.questions ?? [])
+        const dedupedQuestions = deduplicateQuestions(questions)
+        const verification = verifyExtractedQuestions(dedupedQuestions, expectedCount)
 
         if (auditUserId) {
-            await logCostToAudit(auditUserId, 'AI_DOC_PARSE_FALLBACK', totalCost)
-        }
-
-        if (allQuestions.length === 0 && lastFailure) {
-            return {
-                mode: overallMode,
-                error: true,
-                message: lastFailure.message,
-                pageCount,
-                chunkCount,
-                questions: [],
-                failedCount,
-                cost: totalCost,
-            }
+            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', totalCost)
         }
 
         return {
-            mode: overallMode,
-            questions: allQuestions,
+            mode: 'EXTRACTED',
+            questions: dedupedQuestions,
             failedCount,
             cost: totalCost,
             pageCount,
-            chunkCount,
+            chunkCount: 1,
+            verification,
+        }
+    } catch (error) {
+        const failure = toAIChunkFailure(error)
+        console.error('[AI] Multimodal PDF extraction failed:', error)
+        return {
+            mode: 'EXTRACTED',
+            error: true,
+            message: failure.message,
+            pageCount: pdf.numPages,
+            chunkCount: 1,
+            questions: [],
+            failedCount: Math.max(1, expectedCount),
+            cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
         }
     } finally {
         await pdf.cleanup()
+    }
+}
+
+export async function generateQuestionsFromPdfVisionFallback(
+    buffer: Buffer,
+    count: number = 30,
+    auditUserId?: string,
+    fileName: string = 'uploaded.pdf',
+): Promise<PdfVisionFallbackResult> {
+    const multimodalResult = await extractQuestionsFromPdfMultimodal(buffer, count, auditUserId, fileName)
+    if (!multimodalResult.error && multimodalResult.questions && multimodalResult.questions.length > 0) {
+        return multimodalResult
+    }
+
+    let text = ''
+    try {
+        text = await parsePdfToText(buffer)
+    } catch (error) {
+        console.error('[AI] PDF text fallback parsing failed:', error)
+    }
+
+    if (text.trim().length < 50) {
+        return multimodalResult.error
+            ? multimodalResult
+            : {
+                mode: 'GENERATED',
+                error: true,
+                message: 'Could not recover usable PDF content for AI generation fallback.',
+                pageCount: multimodalResult.pageCount,
+                chunkCount: multimodalResult.chunkCount,
+            }
+    }
+
+    const generatedResult = await generateQuestionsFromText(text, count, auditUserId)
+    if (generatedResult.error || !generatedResult.questions || generatedResult.questions.length === 0) {
+        return {
+            mode: 'GENERATED',
+            error: true,
+            message: generatedResult.message || multimodalResult.message || 'AI generation fallback could not recover the document.',
+            pageCount: multimodalResult.pageCount,
+            chunkCount: multimodalResult.chunkCount,
+            failedCount: generatedResult.failedCount,
+            cost: mergeCosts(multimodalResult.cost, generatedResult.cost),
+        }
+    }
+
+    return {
+        mode: 'GENERATED',
+        questions: deduplicateQuestions(generatedResult.questions),
+        failedCount: generatedResult.failedCount,
+        cost: mergeCosts(multimodalResult.cost, generatedResult.cost),
+        pageCount: multimodalResult.pageCount,
+        chunkCount: multimodalResult.chunkCount,
+        verification: verifyExtractedQuestions(generatedResult.questions, null),
     }
 }
 
@@ -2503,20 +2521,9 @@ Respond in JSON format:
 
         const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
         const parsed = JSON.parse(content)
-        const rawQuestions: GeneratedQuestion[] = parsed.questions || []
+        const { questions, failedCount } = coerceGeneratedQuestions(parsed.questions)
 
-        // Validate each question
-        const valid: GeneratedQuestion[] = []
-        let failed = 0
-        for (const q of rawQuestions) {
-            if (validateQuestion(q)) {
-                valid.push(q)
-            } else {
-                failed++
-            }
-        }
-
-        return { questions: valid, failedCount: failed, cost }
+        return { questions, failedCount, cost }
     } catch (err) {
         console.error(`[AI] Question generation failed with ${model}:`, err)
         return { questions: [], failedCount: count, failure: toAIChunkFailure(err) }

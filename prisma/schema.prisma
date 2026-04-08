@@ -111,6 +111,7 @@ model Test {
   durationMinutes Int
   status          TestStatus @default(DRAFT)
   source          TestSource @default(MANUAL)
+  reviewStatus    String?    @map("review_status")
   settings        Json       @default("{}")
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt

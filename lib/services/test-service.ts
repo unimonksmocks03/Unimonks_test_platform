@@ -4,11 +4,14 @@ import { FREE_BATCH_KIND, STANDARD_BATCH_KIND } from '@/lib/config/platform-poli
 import { prisma } from '@/lib/prisma'
 import {
     enrichGeneratedQuestionsMetadata,
+    extractQuestionsFromPdfMultimodal,
     extractQuestionsFromDocumentTextPrecisely,
-    generateQuestionsFromText,
     generateQuestionsFromPdfVisionFallback,
+    generateQuestionsFromText,
     parseDocumentToText,
+    verifyExtractedQuestions,
 } from '@/lib/services/ai-service'
+import type { VerificationResult } from '@/lib/services/ai-extraction-schemas'
 import { resolveTestSettings } from '@/lib/utils/test-settings'
 import type {
     AssignTestInput,
@@ -80,8 +83,29 @@ type DocumentImportDiagnostics = {
     aiFallbackUsed: boolean
     reportParserIssue: boolean
     warning: string | null
+    reviewRequired?: boolean
+    reviewIssueCount?: number
     metadataAiUsed?: boolean
 }
+
+type GeneratedTextQuestionsResult = Awaited<ReturnType<typeof generateQuestionsFromText>>
+
+type DocumentGenerationResult =
+    | {
+        error: false
+        message: undefined
+        questions: Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>>['questions']
+        failedCount: number
+        cost: GeneratedTextQuestionsResult['cost']
+        verification?: VerificationResult
+        pageCount?: number
+        chunkCount?: number
+    }
+    | (GeneratedTextQuestionsResult & {
+        verification?: VerificationResult
+        pageCount?: number
+        chunkCount?: number
+    })
 
 function serviceError(
     code: ServiceErrorCode,
@@ -1008,7 +1032,9 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         extracted = await extractQuestionsFromDocumentTextPrecisely(text, admin.id)
     }
 
-    if (extracted.detectedAsMcqDocument && extracted.error) {
+    const isPdfUpload = uploadValidation.sanitizedFileName.toLowerCase().endsWith('.pdf')
+
+    if (extracted.detectedAsMcqDocument && extracted.error && !isPdfUpload) {
         return serviceError(
             'GENERATION_FAILED',
             extracted.message || 'Failed to recover an exact MCQ set from the document.',
@@ -1021,12 +1047,12 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         )
     }
 
-    const isPdfUpload = uploadValidation.sanitizedFileName.toLowerCase().endsWith('.pdf')
     const parserProducedWeakPdfOutput =
         isPdfUpload
         && !parseError
         && (
-            text.length < 50
+            Boolean(extracted.error)
+            || text.length < 50
             || (
                 !extracted.detectedAsMcqDocument
                 &&
@@ -1035,17 +1061,11 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             )
         )
 
+    let needsAdminReview = false
+    let reviewIssueCount = 0
+
     let strategy: 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
-    let result:
-        | {
-            error: false
-            message: undefined
-            questions: typeof extracted.questions
-            failedCount: number
-            cost: { model: string; inputTokens: number; outputTokens: number; costUSD: number } | undefined
-        }
-        | Awaited<ReturnType<typeof generateQuestionsFromText>>
-        | Awaited<ReturnType<typeof generateQuestionsFromPdfVisionFallback>>
+    let result: DocumentGenerationResult
 
     if (parseError || parserProducedWeakPdfOutput) {
         if (!isPdfUpload) {
@@ -1055,34 +1075,92 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             )
         }
 
-        const fallback = await generateQuestionsFromPdfVisionFallback(
+        const multimodal = await extractQuestionsFromPdfMultimodal(
             buffer,
-            uploadValidation.generationTarget,
+            extracted.expectedQuestionCount ?? uploadValidation.generationTarget,
             admin.id,
+            uploadValidation.sanitizedFileName,
         )
 
-        if (fallback.error || !fallback.questions || fallback.questions.length === 0) {
-            return serviceError(
-                parseError ? 'PARSE_ERROR' : 'GENERATION_FAILED',
-                fallback.message || (
-                    parseError
-                        ? 'Failed to parse the PDF and AI fallback could not recover the document.'
-                        : 'The PDF parser produced weak output and AI fallback could not recover the document.'
-                ),
+        if (!multimodal.error && multimodal.questions && multimodal.questions.length > 0) {
+            if (multimodal.verification && !multimodal.verification.passed) {
+                needsAdminReview = true
+                reviewIssueCount = multimodal.verification.issues.length
+            }
+
+            importDiagnostics = {
+                parserStatus: parseError || extracted.error ? 'FAILED' : 'WEAK_OUTPUT',
+                aiFallbackUsed: true,
+                reportParserIssue: Boolean(parseError || extracted.error || needsAdminReview),
+                warning: needsAdminReview
+                    ? `AI multimodal extraction recovered this PDF with ${reviewIssueCount} issue(s). The draft has been flagged for admin review before publishing.`
+                    : (
+                        parseError
+                            ? 'AI took the lead because the PDF parser failed on this file. Please inform engineering so the parser can be improved for this document type.'
+                            : 'AI took the lead because the PDF parser produced weak structured output on this file. Please inform engineering so the parser can be improved for this document type.'
+                    ),
+                reviewRequired: needsAdminReview,
+                reviewIssueCount,
+            }
+
+            strategy = 'AI_VISION_FALLBACK'
+            result = multimodal
+        } else {
+            if (text.length < 50) {
+                return serviceError(
+                    parseError ? 'PARSE_ERROR' : 'GENERATION_FAILED',
+                    multimodal.message || (
+                        parseError
+                            ? 'Failed to parse the PDF and multimodal extraction could not recover the document.'
+                            : 'The PDF parser produced weak output and multimodal extraction could not recover the document.'
+                    ),
+                )
+            }
+
+            const fallback = await generateQuestionsFromText(
+                text,
+                uploadValidation.generationTarget,
+                admin.id,
             )
-        }
 
-        importDiagnostics = {
-            parserStatus: parseError ? 'FAILED' : 'WEAK_OUTPUT',
-            aiFallbackUsed: true,
-            reportParserIssue: true,
-            warning: parseError
-                ? 'AI took the lead because the PDF parser failed on this file. Please inform engineering so the parser can be improved for this document type.'
-                : 'AI took the lead because the PDF parser produced weak structured output on this file. Please inform engineering so the parser can be improved for this document type.',
-        }
+            if (fallback.error || !fallback.questions || fallback.questions.length === 0) {
+                return serviceError(
+                    parseError ? 'PARSE_ERROR' : 'GENERATION_FAILED',
+                    fallback.message || multimodal.message || (
+                        parseError
+                            ? 'Failed to parse the PDF and AI fallback could not recover the document.'
+                            : 'The PDF parser produced weak output and AI fallback could not recover the document.'
+                    ),
+                )
+            }
 
-        strategy = 'AI_VISION_FALLBACK'
-        result = fallback
+            const fallbackVerification = verifyExtractedQuestions(fallback.questions, null)
+            if (!fallbackVerification.passed) {
+                needsAdminReview = true
+                reviewIssueCount = fallbackVerification.issues.length
+            }
+
+            importDiagnostics = {
+                parserStatus: parseError || extracted.error ? 'FAILED' : 'WEAK_OUTPUT',
+                aiFallbackUsed: true,
+                reportParserIssue: true,
+                warning: needsAdminReview
+                    ? `AI fallback recovered this PDF with ${reviewIssueCount} issue(s). The draft has been flagged for admin review before publishing.`
+                    : (
+                        parseError
+                            ? 'AI took the lead because the PDF parser failed on this file. Please inform engineering so the parser can be improved for this document type.'
+                            : 'AI took the lead because the PDF parser produced weak structured output on this file. Please inform engineering so the parser can be improved for this document type.'
+                    ),
+                reviewRequired: needsAdminReview,
+                reviewIssueCount,
+            }
+
+            strategy = 'AI_VISION_FALLBACK'
+            result = {
+                ...fallback,
+                verification: fallbackVerification,
+            }
+        }
     } else {
         if (text.length < 50) {
             return serviceError(
@@ -1142,6 +1220,24 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         )
     }
 
+    const verification: VerificationResult | undefined = result.verification
+        ?? (
+            strategy === 'AI_GENERATED'
+                ? undefined
+                : verifyExtractedQuestions(result.questions, extracted.expectedQuestionCount)
+        )
+
+    if (verification && !verification.passed) {
+        needsAdminReview = true
+        reviewIssueCount = verification.issues.length
+        importDiagnostics.reviewRequired = true
+        importDiagnostics.reviewIssueCount = reviewIssueCount
+        importDiagnostics.reportParserIssue = true
+        importDiagnostics.warning = importDiagnostics.warning
+            ? `${importDiagnostics.warning} Verification also found ${reviewIssueCount} issue(s), so the draft needs admin review.`
+            : `Verification found ${reviewIssueCount} issue(s), so the draft has been flagged for admin review before publishing.`
+    }
+
     const baseTitle = uploadValidation.sanitizedFileName.replace(/\.(docx|pdf)$/i, '')
     const testTitle = (input.title?.trim() || `AI Generated Test - ${baseTitle || new Date().toLocaleDateString()}`)
     const metadataEnrichment = await enrichGeneratedQuestionsMetadata({
@@ -1168,6 +1264,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             settings: resolveTestSettings(undefined) as Prisma.InputJsonValue,
             status: 'DRAFT',
             source: 'AI_GENERATED',
+            reviewStatus: needsAdminReview ? 'NEEDS_REVIEW' : null,
             questions: {
                 create: finalQuestions.map((question, index) => ({
                     order: index + 1,
@@ -1182,6 +1279,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         select: {
             id: true,
             title: true,
+            reviewStatus: true,
         },
     })
 
@@ -1207,6 +1305,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 costUSD: (result.cost?.costUSD || 0) + (metadataEnrichment.cost?.costUSD || 0),
                 metadataAiUsed: metadataEnrichment.aiUsed,
                 metadataWarning: metadataEnrichment.warning || null,
+                reviewStatus: needsAdminReview ? 'NEEDS_REVIEW' : null,
+                reviewIssueCount,
             } as Prisma.InputJsonValue,
             ipAddress: input.ipAddress || undefined,
         },

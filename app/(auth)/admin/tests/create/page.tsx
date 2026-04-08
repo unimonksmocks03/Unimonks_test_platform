@@ -602,7 +602,13 @@ function AdminTestBuilderForm() {
 
             const { test, questionsGenerated, failedCount, strategy, generationTarget, importDiagnostics } = data;
 
-            if (importDiagnostics?.aiFallbackUsed) {
+            if (importDiagnostics?.reviewRequired) {
+                toast.warning("Review recommended", {
+                    description:
+                        importDiagnostics.warning ||
+                        "This import completed, but verification found issues. Review the draft carefully before publishing.",
+                });
+            } else if (importDiagnostics?.aiFallbackUsed) {
                 toast.warning("AI took the lead", {
                     description:
                         importDiagnostics.warning ||
