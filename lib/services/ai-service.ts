@@ -1308,12 +1308,144 @@ ${batchContext}`
     }
 }
 
+// ── AI-Based Extraction Fallback ──
+// Used when the regex parser fails to recognise the document format.
+// Sends the raw text to GPT-4o and asks it to extract any existing MCQs faithfully.
+// Unlike generateFromChunk, this never invents new questions — if no MCQs are found
+// it returns an empty array so the caller can decide whether to fall through to generation.
+async function extractQuestionsFromTextWithAI(
+    text: string,
+    auditUserId?: string,
+): Promise<{ questions: GeneratedQuestion[]; cost?: CostInfo; error?: boolean; message?: string }> {
+    if (!openai) {
+        return { questions: [], error: true, message: 'OpenAI API key not configured.' }
+    }
+
+    const model = 'gpt-4o-mini'
+    const chunks = chunkDocumentTextForGeneration(text, 12000, 200)
+    const allQuestions: GeneratedQuestion[] = []
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+
+    for (const chunk of chunks) {
+        const prompt = `You are an expert at extracting existing MCQs from educational documents.
+
+TASK: If the text contains pre-existing multiple-choice questions (MCQs), extract them faithfully. Do NOT create new questions.
+
+If MCQs are present:
+- Extract each question stem exactly as written (preserve multi-line stems, assertion/reason pairs, numbered statements, etc.)
+- Extract all answer options exactly as written; label them A, B, C, D in order
+- Determine the correct answer from any answer key, "Answer:", "Ans:", or inline answer markers
+- Use the provided explanation if present; otherwise write a brief one
+- Infer difficulty (EASY/MEDIUM/HARD) and a short topic tag
+
+If the document is theory, notes, or contains no MCQs, return: {"questions": []}
+
+Return strict JSON only — no markdown, no prose:
+{
+  "questions": [
+    {
+      "stem": "question text",
+      "options": [
+        {"id": "A", "text": "...", "isCorrect": false},
+        {"id": "B", "text": "...", "isCorrect": true},
+        {"id": "C", "text": "...", "isCorrect": false},
+        {"id": "D", "text": "...", "isCorrect": false}
+      ],
+      "explanation": "...",
+      "difficulty": "EASY",
+      "topic": "short topic tag"
+    }
+  ]
+}
+
+Rules:
+- Exactly 4 options per question (A–D); exactly 1 isCorrect: true
+- Preserve the original wording — do not paraphrase or simplify
+- Skip any question where the correct answer cannot be determined and cannot be reasonably inferred
+- Ignore page numbers, headers, footers, colour guides, and answer-key-only rows
+
+Text:
+${chunk}`
+
+        try {
+            const response = await openai.chat.completions.create({
+                model,
+                temperature: 0,
+                max_tokens: 4000,
+                response_format: { type: 'json_object' },
+                messages: [{ role: 'user', content: prompt }],
+            })
+
+            const content = response.choices[0]?.message?.content
+            const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
+            totalCost.inputTokens += cost.inputTokens
+            totalCost.outputTokens += cost.outputTokens
+            totalCost.costUSD += cost.costUSD
+
+            if (content) {
+                const parsed = JSON.parse(content) as { questions?: GeneratedQuestion[] }
+                const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : []
+                for (const q of rawQuestions) {
+                    if (validateQuestion(q)) {
+                        allQuestions.push(q)
+                    }
+                }
+            }
+        } catch (error) {
+            const failure = toAIChunkFailure(error)
+            return {
+                questions: allQuestions,
+                cost: totalCost.inputTokens > 0 ? totalCost : undefined,
+                error: true,
+                message: failure.message,
+            }
+        }
+    }
+
+    if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
+        await logCostToAudit(auditUserId, 'AI_DOC_EXTRACT', totalCost)
+    }
+
+    return {
+        questions: deduplicateQuestions(allQuestions),
+        cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+    }
+}
+
 export async function extractQuestionsFromDocumentTextPrecisely(
     text: string,
     auditUserId?: string,
 ): Promise<PreciseDocumentQuestionAnalysis> {
     const context = buildStructuredExtractionContext(text)
     if (!context.analysis.detectedAsMcqDocument || context.analysis.expectedQuestionCount === null) {
+        // Regex didn't recognise the document format — try AI-based extraction before
+        // giving up and letting the caller fall through to question generation.
+        if (text.length >= 200) {
+            const aiResult = await extractQuestionsFromTextWithAI(text, auditUserId)
+            if (aiResult.questions.length > 0) {
+                return {
+                    detectedAsMcqDocument: true,
+                    answerHintCount: aiResult.questions.length,
+                    candidateBlockCount: context.analysis.candidateBlockCount,
+                    questions: aiResult.questions,
+                    expectedQuestionCount: aiResult.questions.length,
+                    exactMatchAchieved: true,
+                    invalidQuestionNumbers: [],
+                    missingQuestionNumbers: [],
+                    duplicateQuestionNumbers: [],
+                    aiRepairUsed: true,
+                    cost: aiResult.cost,
+                }
+            }
+            if (aiResult.error) {
+                return {
+                    ...context.analysis,
+                    aiRepairUsed: false,
+                    error: true,
+                    message: aiResult.message,
+                }
+            }
+        }
         return {
             ...context.analysis,
             aiRepairUsed: false,
