@@ -619,6 +619,107 @@ test('extractQuestionsFromDocumentText parses header-only assertion-reason block
     expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('A')
 })
 
+// Covers the "REVISED CHEM UNIT 7 MOCK" format: Ques N: prefix, lowercase (a-d) options,
+// "Answer N: (x) text" inline answers, match-the-following with uppercase List I labels +
+// numeric List II items, assertion-reason, roman-numeral statements, and hyphenated
+// chemical names that wrap across PDF lines.
+const chemUnit7StyleMcqText = `
+Ques 1: Which of the following represents an allylic alcohol?
+(a) CH2=CH-OH
+(b) CH2=CH-CH2-OH
+(c) C6H5-OH
+(d) C6H5-CH2-OH
+Answer 1: (b) CH2=CH-CH2-OH
+
+Ques 2: Match the following common names of phenols with their IUPAC names:
+List I
+A. Catechol
+B. Resorcinol
+C. Hydroquinone
+D. o-Cresol
+List II
+1. Benzene-1,4-diol
+2. Benzene-1,2-diol
+3. 2-Methylphenol
+4. Benzene-1,3-diol
+(a) A-2, B-4, C-1, D-3
+(b) A-2, B-1, C-4, D-3
+(c) A-4, B-2, C-1, D-3
+(d) A-1, B-4, C-2, D-3
+Answer 2: (a) A-2, B-4, C-1, D-3
+
+Ques 3: Assertion (A): The C-O-H bond angle in alcohols is slightly less than the tetrahedral angle.
+Reason (R): It is due to the repulsion between the unshared electron pairs of oxygen.
+(a) Both A and R are correct and R is the correct explanation of A.
+(b) Both A and R are correct but R is not the correct explanation of A.
+(c) A is correct but R is incorrect.
+(d) A is incorrect but R is correct.
+Answer 3: (a) Both A and R are correct and R is the correct explanation of A.
+
+Ques 4: Which of the following statements is correct regarding the hydration of alkenes?
+I. Acid-catalysed hydration follows Markovnikov's rule.
+II. Hydroboration-oxidation gives anti-Markovnikov alcohol.
+III. Both methods give primary alcohols exclusively.
+(a) I only
+(b) I and II only
+(c) II and III only
+(d) I, II, and III
+Answer 4: (b) I and II only
+
+Ques 5: Which of the following is an appropriate set of reactants for the preparation of 2-methylprop-
+1-ene instead of an ether?
+(a) Sodium ethoxide + tert-Butyl bromide
+(b) Sodium tert-butoxide + Ethyl bromide
+(c) Sodium methoxide + Isopropyl bromide
+(d) Sodium isopropoxide + Methyl bromide
+Answer 5: (a) Sodium ethoxide + tert-Butyl bromide
+`
+
+test('extractQuestionsFromDocumentText handles Ques-N prefix, Answer-N inline answers, match-the-following, assertion-reason, and hyphenated chemical name line-wraps', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(chemUnit7StyleMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.answerHintCount).toBe(5)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.missingQuestionNumbers).toEqual([])
+
+    // Q1 – simple MCQ, answer B
+    expect(analysis.questions[0]?.stem).toBe('Which of the following represents an allylic alcohol?')
+    expect(analysis.questions[0]?.options.find((o) => o.isCorrect)?.id).toBe('B')
+    expect(analysis.questions[0]?.options.find((o) => o.isCorrect)?.text).toBe('CH2=CH-CH2-OH')
+
+    // Q2 – match-the-following: List I labels and List II items must be in the stem,
+    // lowercase (a-d) must be the answer options
+    expect(analysis.questions[1]?.stem).toContain('A. Catechol')
+    expect(analysis.questions[1]?.stem).toContain('1. Benzene-1,4-diol')
+    expect(analysis.questions[1]?.options).toEqual([
+        { id: 'A', text: 'A-2, B-4, C-1, D-3', isCorrect: true },
+        { id: 'B', text: 'A-2, B-1, C-4, D-3', isCorrect: false },
+        { id: 'C', text: 'A-4, B-2, C-1, D-3', isCorrect: false },
+        { id: 'D', text: 'A-1, B-4, C-2, D-3', isCorrect: false },
+    ])
+
+    // Q3 – assertion-reason with lowercase (a-d) options, answer A
+    expect(analysis.questions[2]?.stem).toContain('Assertion (A):')
+    expect(analysis.questions[2]?.stem).toContain('Reason (R):')
+    expect(analysis.questions[2]?.options.find((o) => o.isCorrect)?.id).toBe('A')
+
+    // Q4 – roman-numeral statements in stem, answer B
+    expect(analysis.questions[3]?.stem).toContain('I. Acid-catalysed hydration')
+    expect(analysis.questions[3]?.options.find((o) => o.isCorrect)?.id).toBe('B')
+
+    // Q5 – hyphenated chemical name "2-methylprop-1-ene" split across PDF lines
+    expect(analysis.questions[4]?.stem).toContain('2-methylprop-1-ene instead of an ether')
+    expect(analysis.questions[4]?.options.find((o) => o.isCorrect)?.id).toBe('A')
+})
+
 test('chunkDocumentTextForGeneration advances through the tail chunk without repeating forever', async () => {
     const {
         chunkDocumentTextForGeneration,

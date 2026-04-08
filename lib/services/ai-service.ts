@@ -347,10 +347,14 @@ function shouldTreatAsNestedNumberedStemLine(
     return questionLabel.questionNumber >= 1 && questionLabel.questionNumber <= 4
 }
 
-const OPTION_LETTER_REGEX = /^\(?([A-D])\)?\s*[.)\-:]?\s*(.+)$/i
+// Matches option lines like: (A) text  |  A. text  |  A) text  |  A- text  |  A: text
+// When the letter is NOT surrounded by parentheses, a delimiter (.)-:) is MANDATORY
+// to avoid matching the first letter of words like "Answer", "Assertion", etc.
+const OPTION_LETTER_REGEX = /^(?:\(([A-D])\)|([A-D])[.)\-:])(?:\s*[.)\-:])*\s*(.+)$/i
 const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?(?:\s*[.)\-:]\s*|\s+)(.+)$/i
+// Matches answer hints including numbered format: "Answer 3: (b)" / "Answer: B" / "Ans: 2"
 const ANSWER_LINE_REGEX =
-    /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
+    /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:\d+\s*)?(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
 const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
 const DIFFICULTY_LINE_REGEX = /^difficulty\s*[:\-]?\s*(easy|medium|hard)\b/i
 const TOPIC_LINE_REGEX = /^topic\s*[:\-]?\s*(.+)$/i
@@ -367,7 +371,11 @@ const NUMERIC_TO_LETTER: Record<string, string> = { '1': 'A', '2': 'B', '3': 'C'
 function matchOptionLine(line: string): { optionId: string; text: string; sourceType: 'LETTER' | 'NUMBER' } | null {
     const letterMatch = line.match(OPTION_LETTER_REGEX)
     if (letterMatch) {
-        return { optionId: letterMatch[1].toUpperCase(), text: letterMatch[2], sourceType: 'LETTER' }
+        // Group 1: letter from (A) paren form; Group 2: letter from A. bare-delimiter form; Group 3: text
+        const optionId = (letterMatch[1] ?? letterMatch[2] ?? '').toUpperCase()
+        const text = letterMatch[3] ?? ''
+        if (!optionId || !text) return null
+        return { optionId, text, sourceType: 'LETTER' }
     }
 
     const numberMatch = line.match(OPTION_NUMBER_REGEX)
@@ -836,11 +844,35 @@ function parseQuestionBlock(
         )
     const useStatementContinuation = useStatementStyleOptions || useLowercaseStatementOptions || useBareNumberedStemStatements
 
+    // Match-the-following pattern: uppercase labels (A. Catechol) AND numeric matching targets (1. Benzene-...)
+    // in the stem, with lowercase (a)-(d) as the actual answer options that appear AFTER all numeric items.
+    // e.g. Ques 3: Match List I (A-D) with List II (1-4); options are (a) A-2,B-4… (b) A-2,B-1…
+    const lastNumericOptionIndex = numericOptionEntries.at(-1)?.index ?? -1
+    const lowercaseOptionsAfterNumerics = optionCandidates.filter(
+        entry => entry.option.sourceType === 'LETTER'
+            && isLowercaseLetterOptionLine(entry.line)
+            && entry.index > lastNumericOptionIndex,
+    )
+    const useLowercaseAsOptions = useStatementStyleOptions && lowercaseOptionsAfterNumerics.length >= 4
+    const lowercaseOptionLineSet: Set<string> = useLowercaseAsOptions
+        ? new Set(lowercaseOptionsAfterNumerics.map(entry => entry.line))
+        : new Set()
+
     for (const line of rawLines.slice(1)) {
         const bareNumberedStemStatement = useBareNumberedStemStatements
             ? isBareNumberedStemStatementLine(line)
             : null
-        if (looksLikeQuestionStart(line) && !bareNumberedStemStatement) break
+        if (looksLikeQuestionStart(line) && !bareNumberedStemStatement) {
+            // If the previous stem content ends with a hyphen and the current line starts with
+            // a digit, this is a hyphenated word split across PDF lines (e.g. "2-methylprop-" /
+            // "1-ene instead of an ether?"). Merge it back into the stem rather than breaking.
+            const lastStem = stemParts.at(-1) ?? ''
+            if (lastStem.endsWith('-') && /^\d/.test(line.trim())) {
+                stemParts[stemParts.length - 1] = lastStem + normalizeStem(line)
+                continue
+            }
+            break
+        }
 
         if (!answerSeen && /^(?:assertion|reason)\s*[:\-]/i.test(line)) {
             stemParts.push(normalizeStem(line))
@@ -927,6 +959,23 @@ function parseQuestionBlock(
                 const optionText = normalizeOptionText(optionResult.text)
 
                 if (!optionText) continue
+
+                // Match-the-following: List-I labels (A-D) and List-II numeric items (1-4) both
+                // belong in the stem; only the trailing lowercase options (a-d) are real answer choices.
+                if (useLowercaseAsOptions) {
+                    if (lowercaseOptionLineSet.has(line)) {
+                        options.set(optionResult.optionId, optionText)
+                        activeOption = optionResult.optionId
+                        activeSection = 'option'
+                        activeStatement = false
+                    } else {
+                        stemParts.push(normalizeStem(line))
+                        activeOption = null
+                        activeSection = 'stem'
+                        activeStatement = false
+                    }
+                    continue
+                }
 
                 if (useStatementStyleOptions && optionResult.sourceType === 'LETTER') {
                     stemParts.push(`(${optionResult.optionId}) ${optionText}`)
