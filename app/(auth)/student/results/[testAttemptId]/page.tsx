@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { SharedContextRenderer } from "@/components/test/shared-context-renderer";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
@@ -613,13 +614,8 @@ export default function ResultsPage() {
                                 </AccordionTrigger>
                                 <AccordionContent className="px-6 pb-6 pt-0 bg-slate-50 border-t border-slate-100">
                                     {question.sharedContext ? (
-                                        <div className="mt-6 rounded-2xl border border-indigo-100 bg-indigo-50/80 px-4 py-3">
-                                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-indigo-700">
-                                                Shared Reference
-                                            </div>
-                                            <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
-                                                {question.sharedContext}
-                                            </div>
+                                        <div className="mt-6">
+                                            <SharedContextRenderer context={question.sharedContext} tone="indigo" />
                                         </div>
                                     ) : null}
                                     <div className="pt-6 flex flex-col lg:flex-row gap-8 lg:gap-12">

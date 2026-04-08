@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SharedContextRenderer } from "@/components/test/shared-context-renderer";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -818,6 +819,18 @@ function AdminTestBuilderForm() {
                                 <p className="text-xs font-medium text-slate-500">
                                     Use this for data-interpretation tables, passages, or any shared prompt block that students must see before answering.
                                 </p>
+                                {activeQuestion.sharedContext.trim() ? (
+                                    <div className="space-y-3">
+                                        <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                                            Structured Preview
+                                        </Label>
+                                        <SharedContextRenderer
+                                            context={activeQuestion.sharedContext}
+                                            title="Preview"
+                                            tone="slate"
+                                        />
+                                    </div>
+                                ) : null}
                             </div>
 
                             <div className="space-y-4">

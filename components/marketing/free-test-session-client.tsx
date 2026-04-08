@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { SharedContextRenderer } from '@/components/test/shared-context-renderer'
 import { apiClient } from '@/lib/api-client'
 
 type Question = {
@@ -407,14 +408,7 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                     </CardHeader>
                     <CardContent className="space-y-6 pt-6">
                         {currentQuestion.sharedContext ? (
-                            <div className="rounded-[24px] border border-emerald-100 bg-emerald-50/60 px-5 py-4">
-                                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-700">
-                                    Shared Reference
-                                </div>
-                                <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
-                                    {currentQuestion.sharedContext}
-                                </div>
-                            </div>
+                            <SharedContextRenderer context={currentQuestion.sharedContext} tone="emerald" />
                         ) : null}
                         <RadioGroup
                             value={selectedOption}
