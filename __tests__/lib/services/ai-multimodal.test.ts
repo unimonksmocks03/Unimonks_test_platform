@@ -174,3 +174,28 @@ test('verifyExtractedQuestions skips count checks when expectedCount is null', a
     expect(result.passed).toBe(true)
     expect(result.validQuestions).toBe(3)
 })
+
+test('verifyExtractedQuestions flags missing shared context for table-referenced questions', async () => {
+    const { verifyExtractedQuestions } = await aiServicePromise
+
+    const questions = [
+        {
+            stem: 'Based on the following table, which year had the highest output?',
+            options: [
+                { id: 'A', text: '2021', isCorrect: false },
+                { id: 'B', text: '2022', isCorrect: true },
+                { id: 'C', text: '2023', isCorrect: false },
+                { id: 'D', text: '2024', isCorrect: false },
+            ],
+            explanation: '2022 had the highest output.',
+            difficulty: 'MEDIUM',
+            topic: 'Data Interpretation',
+            sharedContext: null,
+        },
+    ]
+
+    const result = verifyExtractedQuestions(questions, 1)
+
+    expect(result.passed).toBe(false)
+    expect(result.issues.some((issue) => issue.issue.includes('shared context'))).toBe(true)
+})

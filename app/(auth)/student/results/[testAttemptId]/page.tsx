@@ -29,6 +29,7 @@ interface Question {
     id: string;
     order: number;
     stem: string;
+    sharedContext?: string | null;
     options: QuestionOption[] | Record<string, string>;
     explanation?: string;
     difficulty?: string;
@@ -611,6 +612,16 @@ export default function ResultsPage() {
                                     </div>
                                 </AccordionTrigger>
                                 <AccordionContent className="px-6 pb-6 pt-0 bg-slate-50 border-t border-slate-100">
+                                    {question.sharedContext ? (
+                                        <div className="mt-6 rounded-2xl border border-indigo-100 bg-indigo-50/80 px-4 py-3">
+                                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-indigo-700">
+                                                Shared Reference
+                                            </div>
+                                            <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                                                {question.sharedContext}
+                                            </div>
+                                        </div>
+                                    ) : null}
                                     <div className="pt-6 flex flex-col lg:flex-row gap-8 lg:gap-12">
                                         <div className="flex-1 flex flex-col gap-4">
                                             <div className="font-bold text-xs uppercase tracking-wider text-slate-400 mb-1">Your response:</div>

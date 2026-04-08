@@ -783,3 +783,60 @@ test('enrichGeneratedQuestionsMetadata falls back gracefully when OpenAI metadat
     vi.stubEnv('DATABASE_URL', process.env.DATABASE_URL ?? 'postgresql://tester:tester@localhost:5432/unimonk_test')
     vi.stubEnv('DIRECT_URL', process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? 'postgresql://tester:tester@localhost:5432/unimonk_test')
 })
+
+test('attachSharedContextsFromPageText propagates a shared table across later question pages', async () => {
+    const { attachSharedContextsFromPageText } = await aiServicePromise
+
+    const questions = Array.from({ length: 4 }, (_, index) => ({
+        stem: `Question ${index + 1} based on the following table`,
+        options: [
+            { id: 'A', text: 'Option A', isCorrect: index === 0 },
+            { id: 'B', text: 'Option B', isCorrect: index === 1 },
+            { id: 'C', text: 'Option C', isCorrect: index === 2 },
+            { id: 'D', text: 'Option D', isCorrect: index === 3 },
+        ],
+        explanation: 'Explanation',
+        difficulty: 'MEDIUM',
+        topic: 'Data Interpretation',
+    }))
+
+    const pages = [
+        `SECTIONAL MOCKTEST
+UNIT 12: DATA INTERPRETATION
+SET 1: TABLE – PRODUCTION OF CARS (in thousands)
+Year Sedan SUV EV
+2021 110 90 25
+2022 125 95 40
+Q1. Based on the following table, which year had the highest EV output?
+(A) 2021
+(B) 2022
+(C) 2023
+(D) 2024
+Answer: (B)
+Q2. Based on the following table, which category grew the most?
+(A) Sedan
+(B) SUV
+(C) EV
+(D) None
+Answer: (C)`,
+        `Q3. Based on the following table, what is the total production in 2022?
+(A) 260
+(B) 250
+(C) 240
+(D) 270
+Answer: (A)
+Q4. Based on the following table, what is the EV increase?
+(A) 5
+(B) 10
+(C) 15
+(D) 20
+Answer: (C)`,
+    ]
+
+    const enriched = attachSharedContextsFromPageText(questions, pages)
+
+    expect(enriched).toHaveLength(4)
+    expect(enriched.every((question) => question.sharedContext?.includes('TABLE – PRODUCTION OF CARS'))).toBe(true)
+    expect(enriched[2]?.sharedContext).toContain('2022 125 95 40')
+    expect(enriched[3]?.sharedContext).toContain('Year Sedan SUV EV')
+})

@@ -26,6 +26,7 @@ interface Question {
     id: string;
     order: number;
     stem: string;
+    sharedContext?: string | null;
     options: QuestionOption[];
     difficulty?: string;
     topic?: string;
@@ -524,6 +525,16 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
                     {/* Question Content */}
                     <div className="p-10 flex-1 overflow-auto">
+                        {currentQuestion.sharedContext ? (
+                            <div className="mb-6 rounded-3xl border border-indigo-100 bg-indigo-50/70 px-6 py-5">
+                                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-indigo-700">
+                                    Shared Reference
+                                </div>
+                                <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                                    {currentQuestion.sharedContext}
+                                </div>
+                            </div>
+                        ) : null}
                         <h3 className="text-2xl font-serif font-bold text-slate-900 mb-10 leading-snug">
                             {currentQuestion.stem}
                         </h3>

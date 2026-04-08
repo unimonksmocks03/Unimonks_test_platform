@@ -18,6 +18,7 @@ type Question = {
     id: string
     order: number
     stem: string
+    sharedContext: string | null
     options: Array<{
         id: string
         text: string
@@ -405,6 +406,16 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                         </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-6 pt-6">
+                        {currentQuestion.sharedContext ? (
+                            <div className="rounded-[24px] border border-emerald-100 bg-emerald-50/60 px-5 py-4">
+                                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-700">
+                                    Shared Reference
+                                </div>
+                                <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                                    {currentQuestion.sharedContext}
+                                </div>
+                            </div>
+                        ) : null}
                         <RadioGroup
                             value={selectedOption}
                             onValueChange={(value) => updateQuestionAnswer(value)}

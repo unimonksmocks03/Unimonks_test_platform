@@ -271,6 +271,7 @@ export async function getResult(studentId: string, sessionId: string) {
                             id: true,
                             order: true,
                             stem: true,
+                            sharedContext: true,
                             options: true,
                             explanation: true,
                             difficulty: true,

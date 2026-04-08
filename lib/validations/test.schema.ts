@@ -44,6 +44,7 @@ const QuestionOptionSchema = z.object({
 // ── Create Question ──
 export const CreateQuestionSchema = z.object({
     stem: z.string().trim().min(3, 'Stem must be at least 3 characters'),
+    sharedContext: z.string().trim().max(12000).optional(),
     options: z.array(QuestionOptionSchema)
         .length(4, 'Exactly 4 options are required')
         .refine(
@@ -58,6 +59,7 @@ export const CreateQuestionSchema = z.object({
 // ── Update Question ──
 export const UpdateQuestionSchema = z.object({
     stem: z.string().trim().min(3).optional(),
+    sharedContext: z.string().trim().max(12000).optional().nullable(),
     options: z.array(QuestionOptionSchema)
         .length(4, 'Exactly 4 options are required')
         .refine(

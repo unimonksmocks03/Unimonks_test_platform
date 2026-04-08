@@ -3,6 +3,7 @@ import { BatchKind, Difficulty, Prisma, Role, SessionStatus, TestStatus } from '
 import { FREE_BATCH_KIND, STANDARD_BATCH_KIND } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
 import {
+    attachSharedContextsFromPdf,
     enrichGeneratedQuestionsMetadata,
     extractQuestionsFromPdfMultimodal,
     extractQuestionsFromDocumentTextPrecisely,
@@ -737,6 +738,7 @@ export async function getAdminQuestions(testId: string) {
             id: true,
             order: true,
             stem: true,
+            sharedContext: true,
             options: true,
             explanation: true,
             difficulty: true,
@@ -778,6 +780,7 @@ export async function addAdminQuestion(adminId: string, testId: string, data: Cr
             testId,
             order: (lastQuestion?.order ?? 0) + 1,
             stem: data.stem,
+            sharedContext: data.sharedContext,
             options: data.options as unknown as Prisma.InputJsonValue,
             explanation: data.explanation,
             difficulty: (data.difficulty ?? 'MEDIUM') as Difficulty,
@@ -787,6 +790,7 @@ export async function addAdminQuestion(adminId: string, testId: string, data: Cr
             id: true,
             order: true,
             stem: true,
+            sharedContext: true,
             options: true,
             explanation: true,
             difficulty: true,
@@ -836,6 +840,9 @@ export async function updateAdminQuestion(
     if (data.stem !== undefined) {
         updateData.stem = data.stem
     }
+    if (data.sharedContext !== undefined) {
+        updateData.sharedContext = data.sharedContext
+    }
     if (data.options !== undefined) {
         updateData.options = data.options as unknown as Prisma.InputJsonValue
     }
@@ -856,6 +863,7 @@ export async function updateAdminQuestion(
             id: true,
             order: true,
             stem: true,
+            sharedContext: true,
             options: true,
             explanation: true,
             difficulty: true,
@@ -1240,8 +1248,16 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
 
     const baseTitle = uploadValidation.sanitizedFileName.replace(/\.(docx|pdf)$/i, '')
     const testTitle = (input.title?.trim() || `AI Generated Test - ${baseTitle || new Date().toLocaleDateString()}`)
+    let questionsWithSharedContext = result.questions
+    if (isPdfUpload) {
+        try {
+            questionsWithSharedContext = await attachSharedContextsFromPdf(buffer, result.questions)
+        } catch (error) {
+            console.warn('[AI-DOC][ADMIN] Could not attach shared PDF context:', error)
+        }
+    }
     const metadataEnrichment = await enrichGeneratedQuestionsMetadata({
-        questions: result.questions,
+        questions: questionsWithSharedContext,
         auditUserId: admin.id,
         sourceLabel: uploadValidation.sanitizedFileName,
     })
@@ -1273,6 +1289,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                     explanation: question.explanation || null,
                     difficulty: (question.difficulty as Difficulty | undefined) || 'MEDIUM',
                     topic: question.topic || null,
+                    sharedContext: question.sharedContext || null,
                 })),
             },
         },

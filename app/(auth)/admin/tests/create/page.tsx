@@ -32,6 +32,7 @@ type QuestionOption = { id: string; text: string; isCorrect: boolean };
 type Question = {
     dbId?: string;
     stem: string;
+    sharedContext: string;
     options: QuestionOption[];
     difficulty: "EASY" | "MEDIUM" | "HARD";
     topic: string;
@@ -67,6 +68,7 @@ type QuestionsResponse = {
     questions: Array<{
         id: string;
         stem: string;
+        sharedContext: string | null;
         options: QuestionOption[] | Record<string, string>;
         difficulty: "EASY" | "MEDIUM" | "HARD";
         topic: string | null;
@@ -94,6 +96,7 @@ type AssignOptions = {
 
 const emptyQuestion = (): Question => ({
     stem: "",
+    sharedContext: "",
     options: [
         { id: "A", text: "", isCorrect: true },
         { id: "B", text: "", isCorrect: false },
@@ -225,6 +228,7 @@ function AdminTestBuilderForm() {
                 questionsResponse.data.questions.map((question) => ({
                     dbId: question.id,
                     stem: question.stem,
+                    sharedContext: question.sharedContext || "",
                     options: normalizeOptions(question.options),
                     difficulty: question.difficulty,
                     topic: question.topic || "",
@@ -355,6 +359,7 @@ function AdminTestBuilderForm() {
 
                 const payload = {
                     stem: question.stem.trim(),
+                    sharedContext: question.sharedContext.trim() || undefined,
                     options: question.options.map((option) => ({
                         ...option,
                         text: option.text.trim(),
@@ -797,6 +802,22 @@ function AdminTestBuilderForm() {
                                     onChange={(event) => updateActiveQuestion({ stem: event.target.value })}
                                     disabled={isContentLocked || isBusy}
                                 />
+                            </div>
+
+                            <div className="space-y-3">
+                                <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                                    Shared Reference / Table
+                                </Label>
+                                <Textarea
+                                    placeholder="Paste or review any shared table, chart, passage, or data block needed for this question."
+                                    className="min-h-[140px] resize-none rounded-2xl border-transparent bg-surface-2 p-4 text-sm font-medium text-slate-900 focus-visible:ring-indigo-500 disabled:opacity-60"
+                                    value={activeQuestion.sharedContext}
+                                    onChange={(event) => updateActiveQuestion({ sharedContext: event.target.value })}
+                                    disabled={isContentLocked || isBusy}
+                                />
+                                <p className="text-xs font-medium text-slate-500">
+                                    Use this for data-interpretation tables, passages, or any shared prompt block that students must see before answering.
+                                </p>
                             </div>
 
                             <div className="space-y-4">

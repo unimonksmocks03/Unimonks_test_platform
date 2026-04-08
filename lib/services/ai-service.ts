@@ -216,6 +216,44 @@ function normalizeDocumentText(text: string): string {
         .trim()
 }
 
+function normalizeSharedContextText(text: string | null | undefined) {
+    if (!text) return null
+
+    const normalized = text
+        .replace(/\r\n?/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/[ \t]+/g, ' ')
+        .trim()
+
+    return normalized.length > 0 ? normalized : null
+}
+
+function truncateForPrompt(text: string | null | undefined, maxLength = 320) {
+    const normalized = normalizeSharedContextText(text)
+    if (!normalized) return null
+    if (normalized.length <= maxLength) return normalized
+    return `${normalized.slice(0, maxLength - 1).trimEnd()}…`
+}
+
+function isLikelyPageHeaderNoise(line: string) {
+    return /^(?:sectional mock\s*test|mock\s*test|question\s*paper|general instructions?|duration|time allowed|maximum marks|page\s+\d+|class\s*xii|xii|cuet(?:\s+pattern)?|subject\b)/i.test(line.trim())
+}
+
+function looksMeaningfulSharedContext(text: string | null | undefined) {
+    const normalized = normalizeSharedContextText(text)
+    if (!normalized || normalized.length < 40) {
+        return false
+    }
+
+    const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean)
+    const hasStructuralCue = /(following|table|data|chart|graph|passage|case study|based on|study the|read the|set\s+\d+|list i|list ii|ratio|percentage|production|population|sales|profit|income)/i.test(normalized)
+    const numericLineCount = lines.filter(line => /\d/.test(line)).length
+    const likelyTable = numericLineCount >= 2 && lines.length >= 3
+
+    return hasStructuralCue || likelyTable
+}
+
 function normalizeStem(text: string): string {
     return text
         .replace(/\s+/g, ' ')
@@ -306,6 +344,89 @@ function stripQuestionLabel(line: string): { questionNumber: number; stem: strin
         stem,
         explicitPrefix: false,
     }
+}
+
+function findQuestionStartsInPage(pageText: string) {
+    return normalizeDocumentText(pageText)
+        .split('\n')
+        .map((line, index) => {
+            const label = stripQuestionLabel(line)
+            if (!label) return null
+
+            return {
+                index,
+                questionNumber: label.questionNumber,
+            }
+        })
+        .filter((entry): entry is { index: number; questionNumber: number } => entry !== null)
+}
+
+function extractPageSharedContext(pageText: string) {
+    const lines = normalizeDocumentText(pageText)
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+    const questionStarts = findQuestionStartsInPage(pageText)
+
+    if (questionStarts.length === 0) {
+        return {
+            questionNumbers: [] as number[],
+            sharedContext: null as string | null,
+        }
+    }
+
+    const firstQuestionLineIndex = questionStarts[0]?.index ?? 0
+    const candidateLines = lines
+        .slice(0, firstQuestionLineIndex)
+        .filter(line => !isLikelyPageHeaderNoise(line))
+    const sharedContext = normalizeSharedContextText(candidateLines.join('\n'))
+
+    return {
+        questionNumbers: questionStarts.map(entry => entry.questionNumber),
+        sharedContext: looksMeaningfulSharedContext(sharedContext) ? sharedContext : null,
+    }
+}
+
+export function attachSharedContextsFromPageText(
+    questions: GeneratedQuestion[],
+    pageTexts: string[],
+): GeneratedQuestion[] {
+    if (questions.length === 0 || pageTexts.length === 0) {
+        return questions
+    }
+
+    const hydratedQuestions = questions.map(question => ({ ...question }))
+    const questionsByNumber = new Map<number, GeneratedQuestion>()
+    hydratedQuestions.forEach((question, index) => {
+        questionsByNumber.set(index + 1, question)
+    })
+
+    let activeSharedContext: string | null = null
+
+    for (const pageText of pageTexts) {
+        const page = extractPageSharedContext(pageText)
+        if (page.sharedContext) {
+            activeSharedContext = page.sharedContext
+        }
+
+        if (!activeSharedContext) {
+            continue
+        }
+
+        for (const questionNumber of page.questionNumbers) {
+            const question = questionsByNumber.get(questionNumber)
+            if (!question) continue
+
+            if (!normalizeSharedContextText(question.sharedContext)) {
+                question.sharedContext = activeSharedContext
+            }
+        }
+    }
+
+    return hydratedQuestions.map(question => ({
+        ...question,
+        sharedContext: normalizeSharedContextText(question.sharedContext),
+    }))
 }
 
 function looksLikeQuestionStart(line: string): boolean {
@@ -1575,6 +1696,7 @@ B. ${question.options[1]?.text ?? ''}
 C. ${question.options[2]?.text ?? ''}
 D. ${question.options[3]?.text ?? ''}
 Current topic hint: ${normalizeTopicLabel(question.topic, question.stem)}
+Shared context hint: ${truncateForPrompt(question.sharedContext) ?? 'None'}
 Current difficulty hint: ${normalizeDifficultyLabel(question.difficulty)}`).join('\n\n')}`
 
     try {
@@ -1657,7 +1779,7 @@ Rules:
 
 Source label: ${sourceLabel ?? 'uploaded document'}
 Questions:
-${questions.map((question, index) => `${index + 1}. [${normalizeDifficultyLabel(question.difficulty)}] ${normalizeTopicLabel(question.topic, question.stem)} — ${question.stem}`).join('\n')}`
+${questions.map((question, index) => `${index + 1}. [${normalizeDifficultyLabel(question.difficulty)}] ${normalizeTopicLabel(question.topic, question.stem)} — ${question.stem}${truncateForPrompt(question.sharedContext, 180) ? ` | Shared context: ${truncateForPrompt(question.sharedContext, 180)}` : ''}`).join('\n')}`
 
     try {
         const response = await openai.chat.completions.create({
@@ -1958,6 +2080,7 @@ function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | nul
         explanation: typeof question.explanation === 'string' ? question.explanation.trim() : '',
         difficulty: normalizeDifficultyLabel(question.difficulty),
         topic: normalizeTopicLabel(question.topic, normalizedStem),
+        sharedContext: normalizeSharedContextText(question.sharedContext),
     }
 
     const parsed = McqQuestionSchema.safeParse(normalizedQuestion)
@@ -2044,6 +2167,17 @@ export function verifyExtractedQuestions(
             issues.push({
                 questionNumber,
                 issue: `Has ${correctCount} correct options instead of 1`,
+            })
+            isValid = false
+        }
+
+        if (
+            /\b(?:following|above|below)\s+(?:table|data|chart|graph|passage|information)\b|\b(?:table|data|chart|graph|passage|information)\s+(?:given|shown|below|above)\b|\blist i\b|\blist ii\b/i.test(validatedQuestion.stem)
+            && !normalizeSharedContextText(validatedQuestion.sharedContext)
+        ) {
+            issues.push({
+                questionNumber,
+                issue: 'Question references shared source material but has no shared context attached',
             })
             isValid = false
         }
@@ -2356,6 +2490,7 @@ Rules:
 - Return up to ${expectedCount} complete questions.
 - Preserve the stem wording as closely as possible.
 - Normalize answer labels to A, B, C, D in the order they appear.
+- If a question depends on a shared table, passage, chart, or dataset, include it in "sharedContext".
 - Each question must have exactly 4 options and exactly 1 correct option.
 - Preserve assertion-reason, match-the-following, statement-combination, and answer-key based questions.
 - Ignore headers, footers, decorative text, and page numbers.
@@ -2546,6 +2681,26 @@ export async function parsePdfToText(buffer: Buffer): Promise<string> {
         const result = await extractText(pdf, { mergePages: false })
         const pages = Array.isArray(result.text) ? result.text : [result.text]
         return normalizeDocumentText(pages.join('\n'))
+    } finally {
+        await pdf.cleanup()
+    }
+}
+
+export async function attachSharedContextsFromPdf(
+    buffer: Buffer,
+    questions: GeneratedQuestion[],
+): Promise<GeneratedQuestion[]> {
+    if (questions.length === 0) {
+        return questions
+    }
+
+    const { getDocumentProxy, extractText } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(buffer))
+
+    try {
+        const result = await extractText(pdf, { mergePages: false })
+        const pages = Array.isArray(result.text) ? result.text : [result.text]
+        return attachSharedContextsFromPageText(questions, pages)
     } finally {
         await pdf.cleanup()
     }

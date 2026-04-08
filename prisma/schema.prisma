@@ -130,6 +130,7 @@ model Question {
   testId      String     @db.Uuid
   order       Int
   stem        String     @db.Text
+  sharedContext String?  @db.Text
   options     Json
   explanation String?    @db.Text
   difficulty  Difficulty @default(MEDIUM)

@@ -38,6 +38,7 @@ type ResultPayload = {
         id: string
         order: number
         stem: string
+        sharedContext: string | null
         difficulty: string
         topic: string | null
         explanation: string | null
@@ -263,6 +264,16 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                                     </div>
                                 </AccordionTrigger>
                                 <AccordionContent className="space-y-4 pb-5">
+                                    {question.sharedContext ? (
+                                        <div className="rounded-[20px] border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+                                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-700">
+                                                Shared Reference
+                                            </div>
+                                            <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                                                {question.sharedContext}
+                                            </div>
+                                        </div>
+                                    ) : null}
                                     <div className="space-y-3">
                                         {question.options.map((option) => {
                                             const isCorrect = option.id === question.correctOptionId

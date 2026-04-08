@@ -6,6 +6,7 @@ export interface GeneratedQuestion {
     explanation: string
     difficulty: string
     topic: string
+    sharedContext?: string | null
 }
 
 export interface CostInfo {

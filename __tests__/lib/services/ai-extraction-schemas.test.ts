@@ -18,6 +18,7 @@ test('McqQuestionSchema accepts a valid MCQ question', () => {
         explanation: 'The SI unit of electric charge is the coulomb.',
         difficulty: 'EASY',
         topic: 'Units',
+        sharedContext: 'Reference table: base units and derived units.',
     }
 
     expect(McqQuestionSchema.safeParse(valid).success).toBe(true)

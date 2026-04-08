@@ -12,6 +12,7 @@ export const McqQuestionSchema = z.object({
     explanation: z.string(),
     difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']),
     topic: z.string().trim().min(1),
+    sharedContext: z.string().trim().max(12000).optional().nullable(),
 })
 
 export const McqExtractionResponseSchema = z.object({

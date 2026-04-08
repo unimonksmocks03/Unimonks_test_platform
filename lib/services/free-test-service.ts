@@ -101,6 +101,7 @@ export type PublicFreeSessionPayload = {
         id: string
         order: number
         stem: string
+        sharedContext: string | null
         options: SafeQuestionOption[]
         difficulty: string
         topic: string | null
@@ -139,6 +140,7 @@ export type PublicFreeResultPayload = {
         id: string
         order: number
         stem: string
+        sharedContext: string | null
         difficulty: string
         topic: string | null
         explanation: string | null
@@ -273,6 +275,7 @@ function stripCorrectAnswers(
         id: string
         order: number
         stem: string
+        sharedContext: string | null
         options: unknown
         difficulty: string
         topic: string | null
@@ -284,6 +287,7 @@ function stripCorrectAnswers(
         id: question.id,
         order: question.order,
         stem: question.stem,
+        sharedContext: question.sharedContext,
         options: toSafeOptions(question.options),
         difficulty: question.difficulty,
         topic: question.topic,
@@ -304,6 +308,7 @@ function orderQuestionReviewForSession(
         id: string
         order: number
         stem: string
+        sharedContext: string | null
         options: Prisma.JsonValue
         difficulty: string
         topic: string | null
@@ -431,6 +436,7 @@ function toResultPayload(session: {
             id: string
             order: number
             stem: string
+            sharedContext: string | null
             options: Prisma.JsonValue
             difficulty: string
             topic: string | null
@@ -460,6 +466,7 @@ function toResultPayload(session: {
             id: question.id,
             order: question.order,
             stem: question.stem,
+            sharedContext: question.sharedContext,
             difficulty: question.difficulty,
             topic: question.topic,
             explanation: question.explanation,
@@ -661,6 +668,7 @@ export async function startPublicFreeTestSession(
                         id: true,
                         order: true,
                         stem: true,
+                        sharedContext: true,
                         options: true,
                         difficulty: true,
                         topic: true,
@@ -782,6 +790,7 @@ export async function getPublicFreeSession(
                             id: true,
                             order: true,
                             stem: true,
+                            sharedContext: true,
                             options: true,
                             difficulty: true,
                             topic: true,
@@ -1015,6 +1024,7 @@ async function submitLeadSessionWithTransaction(
                     id: true,
                     order: true,
                     stem: true,
+                    sharedContext: true,
                     options: true,
                     difficulty: true,
                     topic: true,
@@ -1111,6 +1121,7 @@ export async function getPublicFreeResult(
                             id: true,
                             order: true,
                             stem: true,
+                            sharedContext: true,
                             options: true,
                             difficulty: true,
                             topic: true,
@@ -1173,6 +1184,7 @@ export async function getPublicFreeResult(
                                 id: true,
                                 order: true,
                                 stem: true,
+                                sharedContext: true,
                                 options: true,
                                 difficulty: true,
                                 topic: true,
