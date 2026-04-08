@@ -335,6 +335,69 @@ D. Indigenous reservation lands
 Answer: C
 `
 
+const numberedStatementStemMcqText = `
+Q1. Which of the following best describes a galvanic cell?
+(1) Converts chemical energy into electrical energy
+(2) Converts electrical energy into chemical energy
+(3) Operates only in molten salts
+(4) Requires continuous heating
+Answer: (1)
+Q2. Correct statements about haloalkanes:
+1. Generally insoluble in water
+2. Denser than water (Br, I compounds)
+3. Dipole moment decreases: CH3F > CH3Cl > CH3Br > CH3I
+(1) 1 and 2 only
+(2) 1 and 3 only
+(3) 2 and 3 only
+(4) 1, 2 and 3
+Answer: (4)
+Q3. Which reagent converts alcohols to alkyl chlorides with gaseous by-products?
+(1) PCl3
+(2) HCl + ZnCl2
+(3) SOCl2
+(4) Cl2/UV light
+Answer: (3)
+Q4. Which statement is INCORRECT?
+(1) SN2 follows second order kinetics
+(2) SN1 gives racemic mixture
+(3) Primary halides prefer SN1 mechanism
+(4) Carbocation stability: 3° > 2° > 1°
+Answer: (3)
+Q5. Which statement about Grignard reagents is correct?
+(1) Prepared in water
+(2) Prepared in dry ether
+(3) Stable in alcohol
+(4) Unreactive toward CO2
+Answer: (2)
+`
+
+const headerOnlyAssertionReasonMcqText = `
+Q1.
+Assertion: Primary alkyl halides undergo SN2 reactions readily.
+Reason: Primary carbocations are highly stable.
+(1) Both A and R are true and R is the correct explanation of A
+(2) Both A and R are true but R is NOT the correct explanation of A
+(3) A is true but R is false
+(4) A is false but R is true
+Answer: (3) A is true but R is false
+Q2.
+Assertion: Haloalkanes have higher boiling points than corresponding alkanes.
+Reason: Haloalkanes have stronger van der Waals forces due to greater molecular mass and polarity.
+Answer: (1) Both A and R are true and R is the correct explanation of A
+Q3.
+Assertion: SN1 reactions give racemic mixture.
+Reason: Planar carbocation intermediate is formed.
+Answer: (1) Both A and R are true and R is the correct explanation of A
+Q4.
+Assertion: Vinyl chloride is less reactive than ethyl chloride.
+Reason: C-Cl bond in vinyl chloride has partial double bond character.
+Answer: (1) Both A and R are true and R is the correct explanation of A
+Q5.
+Assertion: Haloalkanes are polar but immiscible with water.
+Reason: Haloalkanes cannot form hydrogen bonds with water.
+Answer: (1) Both A and R are true and R is the correct explanation of A
+`
+
 test('extractQuestionsFromDocumentText parses PDF-like CUET MCQs with parenthesized answers and pdf artifacts', async () => {
     const {
         extractQuestionsFromDocumentText,
@@ -519,6 +582,41 @@ test('extractQuestionsFromDocumentText keeps lowercase list markers in the stem 
     expect(analysis.questions[0]?.stem).toContain('a. Montreal Protocol')
     expect(analysis.questions[0]?.stem).toContain('1991')
     expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('A')
+})
+
+test('extractQuestionsFromDocumentText keeps numbered stem statements inside the current question', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(numberedStatementStemMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[1]?.stem).toContain('1. Generally insoluble in water')
+    expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('D')
+})
+
+test('extractQuestionsFromDocumentText parses header-only assertion-reason blocks with implicit standard options', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(headerOnlyAssertionReasonMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.missingQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.stem).toContain('Assertion: Primary alkyl halides undergo SN2 reactions readily.')
+    expect(analysis.questions[0]?.stem).toContain('Reason: Primary carbocations are highly stable.')
+    expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('A')
 })
 
 test('chunkDocumentTextForGeneration advances through the tail chunk without repeating forever', async () => {

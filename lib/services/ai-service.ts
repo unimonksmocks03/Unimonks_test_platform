@@ -103,6 +103,7 @@ type StructuredAnswerDetail = {
 
 type StructuredQuestionBlock = {
     questionNumber: number
+    explicitPrefix: boolean
     rawLines: string[]
     blockText: string
 }
@@ -298,13 +299,13 @@ function stripQuestionLabel(line: string): { questionNumber: number; stem: strin
     const normalizedLine = trimmedLine.replace(/^#{1,6}\s*/, '')
 
     const prefixedQuestionMatch = normalizedLine.match(
-        /^(question\s*|ques(?:tion)?\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.+)$/i
+        /^(question\s*|ques(?:tion)?\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.*)$/i
     )
 
     if (prefixedQuestionMatch) {
         const questionNumber = Number.parseInt(prefixedQuestionMatch[2], 10)
-        const stem = normalizeStem(prefixedQuestionMatch[3])
-        if (isLikelyQuestionStemNoise(questionNumber, stem, true)) {
+        const stem = normalizeStem(prefixedQuestionMatch[3] ?? '')
+        if (stem && isLikelyQuestionStemNoise(questionNumber, stem, true)) {
             return null
         }
 
@@ -335,6 +336,17 @@ function looksLikeQuestionStart(line: string): boolean {
     return stripQuestionLabel(line) !== null
 }
 
+function shouldTreatAsNestedNumberedStemLine(
+    currentBlock: StructuredQuestionBlock | null,
+    questionLabel: { questionNumber: number; explicitPrefix: boolean },
+) {
+    if (!currentBlock) return false
+    if (questionLabel.explicitPrefix) return false
+    if (!currentBlock.explicitPrefix) return false
+
+    return questionLabel.questionNumber >= 1 && questionLabel.questionNumber <= 4
+}
+
 const OPTION_LETTER_REGEX = /^\(?([A-D])\)?\s*[.)\-:]?\s*(.+)$/i
 const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?(?:\s*[.)\-:]\s*|\s+)(.+)$/i
 const ANSWER_LINE_REGEX =
@@ -343,6 +355,12 @@ const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\
 const DIFFICULTY_LINE_REGEX = /^difficulty\s*[:\-]?\s*(easy|medium|hard)\b/i
 const TOPIC_LINE_REGEX = /^topic\s*[:\-]?\s*(.+)$/i
 const INLINE_QUESTION_PREFIX_REGEX = /^question\s*:\s*(.+)$/i
+const ASSERTION_REASON_OPTION_SET = new Map<string, string>([
+    ['A', 'Both A and R are true and R is the correct explanation of A'],
+    ['B', 'Both A and R are true but R is NOT the correct explanation of A'],
+    ['C', 'A is true but R is false'],
+    ['D', 'A is false but R is true'],
+])
 
 const NUMERIC_TO_LETTER: Record<string, string> = { '1': 'A', '2': 'B', '3': 'C', '4': 'D' }
 
@@ -369,6 +387,25 @@ function isUppercaseLetterOptionLine(line: string) {
 
 function isLowercaseLetterOptionLine(line: string) {
     return /^\(?[a-d]\)?\s*[.)\-:]\s*/.test(line.trim())
+}
+
+function isParenthesizedNumericOptionLine(line: string) {
+    return /^\([1-4]\)\s+/.test(line.trim())
+}
+
+function isBareNumberedStemStatementLine(
+    line: string,
+): { questionNumber: number; stem: string } | null {
+    if (/^\(/.test(line.trim())) return null
+
+    const questionLabel = stripQuestionLabel(line)
+    if (!questionLabel || questionLabel.explicitPrefix) return null
+    if (questionLabel.questionNumber < 1 || questionLabel.questionNumber > 4) return null
+
+    return {
+        questionNumber: questionLabel.questionNumber,
+        stem: questionLabel.stem,
+    }
 }
 
 function extractInlineLetterOptions(
@@ -435,7 +472,7 @@ function normalizeAnswerIdent(raw: string): string {
 function expandInlineQuestionLine(
     line: string,
     questionNumber: number,
-): { questionNumber: number; rawLines: string[]; blockText: string } | null {
+): { questionNumber: number; explicitPrefix: boolean; rawLines: string[]; blockText: string } | null {
     const questionMatch = line.match(INLINE_QUESTION_PREFIX_REGEX)
     if (!questionMatch) return null
 
@@ -473,6 +510,7 @@ function expandInlineQuestionLine(
 
     return {
         questionNumber,
+        explicitPrefix: true,
         rawLines,
         blockText: rawLines.join('\n'),
     }
@@ -524,6 +562,11 @@ function collectStructuredQuestionBlocks(questionSection: string): StructuredQue
     for (const line of lines) {
         const questionLabel = stripQuestionLabel(line)
         if (questionLabel) {
+            if (shouldTreatAsNestedNumberedStemLine(currentBlock, questionLabel)) {
+                currentBlock?.rawLines.push(line)
+                continue
+            }
+
             if (currentBlock) {
                 currentBlock.blockText = currentBlock.rawLines.join('\n')
                 blocks.push(currentBlock)
@@ -531,6 +574,7 @@ function collectStructuredQuestionBlocks(questionSection: string): StructuredQue
 
             currentBlock = {
                 questionNumber: questionLabel.questionNumber,
+                explicitPrefix: questionLabel.explicitPrefix,
                 rawLines: [line],
                 blockText: line,
             }
@@ -717,7 +761,7 @@ function parseQuestionBlock(
     }
 
     const firstLine = stripQuestionLabel(rawLines[0])
-    if (!firstLine || !firstLine.stem) {
+    if (!firstLine) {
         return {
             questionNumber: block.questionNumber,
             answerHintUsed: false,
@@ -728,8 +772,8 @@ function parseQuestionBlock(
         }
     }
 
-    const inlineOptions = extractInlineLetterOptions(firstLine.stem)
-    const stemParts = [inlineOptions?.stem ?? firstLine.stem]
+    const inlineOptions = firstLine.stem ? extractInlineLetterOptions(firstLine.stem) : null
+    const stemParts = firstLine.stem ? [inlineOptions?.stem ?? firstLine.stem] : []
     const options = new Map<string, string>()
     let activeOption: string | null = null
     let activeSection: 'stem' | 'option' | 'explanation' | 'statement' = 'stem'
@@ -766,9 +810,45 @@ function parseQuestionBlock(
             && (firstUppercaseLetterOptionIndex === -1 || entry.index < firstUppercaseLetterOptionIndex),
     ).length
     const useLowercaseStatementOptions = uppercaseLetterOptionEntries.length >= 4 && leadingLowercaseLetterOptionCount >= 2
+    const bareNumberedStemEntries = rawLines
+        .slice(1)
+        .map((line, index) => ({
+            index,
+            line,
+            statement: isBareNumberedStemStatementLine(line),
+        }))
+        .filter((entry): entry is { index: number; line: string; statement: { questionNumber: number; stem: string } } => entry.statement !== null)
+    const lastBareNumberedStemIndex = bareNumberedStemEntries.at(-1)?.index ?? -1
+    const parenthesizedNumericOptionCountAfterBareStem = optionCandidates.filter(
+        entry => entry.option.sourceType === 'NUMBER'
+            && isParenthesizedNumericOptionLine(entry.line)
+            && entry.index > lastBareNumberedStemIndex,
+    ).length
+    const parenthesizedLetterOptionCountAfterBareStem = optionCandidates.filter(
+        entry => entry.option.sourceType === 'LETTER'
+            && /^\([A-Da-d]\)\s+/.test(entry.line.trim())
+            && entry.index > lastBareNumberedStemIndex,
+    ).length
+    const useBareNumberedStemStatements = bareNumberedStemEntries.length >= 2
+        && (
+            parenthesizedNumericOptionCountAfterBareStem >= 4
+            || parenthesizedLetterOptionCountAfterBareStem >= 4
+        )
+    const useStatementContinuation = useStatementStyleOptions || useLowercaseStatementOptions || useBareNumberedStemStatements
 
     for (const line of rawLines.slice(1)) {
-        if (looksLikeQuestionStart(line)) break
+        const bareNumberedStemStatement = useBareNumberedStemStatements
+            ? isBareNumberedStemStatementLine(line)
+            : null
+        if (looksLikeQuestionStart(line) && !bareNumberedStemStatement) break
+
+        if (!answerSeen && /^(?:assertion|reason)\s*[:\-]/i.test(line)) {
+            stemParts.push(normalizeStem(line))
+            activeOption = null
+            activeSection = 'stem'
+            activeStatement = false
+            continue
+        }
 
         const answerMatch = line.match(ANSWER_LINE_REGEX)
         if (answerMatch) {
@@ -805,7 +885,7 @@ function parseQuestionBlock(
             continue
         }
 
-        if (!answerSeen && useStatementStyleOptions && isSelectionPromptLine(line)) {
+        if (!answerSeen && (useStatementStyleOptions || useBareNumberedStemStatements) && isSelectionPromptLine(line)) {
             stemParts.push(normalizeSelectionPromptLine(line))
             activeOption = null
             activeSection = 'stem'
@@ -814,6 +894,14 @@ function parseQuestionBlock(
         }
 
         if (!answerSeen) {
+            if (bareNumberedStemStatement) {
+                stemParts.push(`${bareNumberedStemStatement.questionNumber}. ${normalizeStem(bareNumberedStemStatement.stem)}`)
+                activeOption = null
+                activeSection = 'statement'
+                activeStatement = true
+                continue
+            }
+
             const inlineLineOptions = extractInlineLetterOptions(line, { allowEmptyStem: true })
             if (inlineLineOptions) {
                 const normalizedInlineStem = inlineLineOptions.stem
@@ -874,7 +962,7 @@ function parseQuestionBlock(
             continue
         }
 
-        if (!answerSeen && useStatementStyleOptions && activeStatement) {
+        if (!answerSeen && useStatementContinuation && activeStatement) {
             if (isSelectionPromptLine(line)) {
                 stemParts.push(normalizeStem(line))
                 activeSection = 'stem'
@@ -915,6 +1003,15 @@ function parseQuestionBlock(
         explanation = detailedAnswer.explanation
     }
 
+    const normalizedStemText = normalizeStem(stemParts.join(' '))
+    const isAssertionReasonQuestion = /assertion\s*[:(]/i.test(normalizedStemText) && /reason\s*[:(]/i.test(normalizedStemText)
+
+    if (options.size === 0 && isAssertionReasonQuestion) {
+        for (const [optionId, text] of ASSERTION_REASON_OPTION_SET) {
+            options.set(optionId, text)
+        }
+    }
+
     const optionEntries = ['A', 'B', 'C', 'D']
         .map(id => {
             const text = options.get(id)
@@ -924,11 +1021,11 @@ function parseQuestionBlock(
         .filter((option): option is { id: string; text: string; isCorrect: boolean } => option !== null)
 
     const question: GeneratedQuestion = {
-        stem: normalizeStem(stemParts.join(' ')),
+        stem: normalizedStemText,
         options: optionEntries,
         explanation: explanation || 'Imported from structured MCQ document.',
-        difficulty: difficulty || guessDifficulty(stemParts.join(' ')),
-        topic: topic || detectTopic(stemParts.join(' ')),
+        difficulty: difficulty || guessDifficulty(normalizedStemText),
+        topic: topic || detectTopic(normalizedStemText),
     }
 
     return {
