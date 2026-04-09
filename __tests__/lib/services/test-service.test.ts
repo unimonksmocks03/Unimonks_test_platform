@@ -61,6 +61,30 @@ test('validatePublishedDurationRepublish allows only duration updates for publis
     })).toBe(false)
 })
 
+test('validatePublishedTitleUpdate allows only title updates for published tests', async () => {
+    const {
+        validatePublishedTitleUpdate,
+    } = await servicePromise
+
+    expect(validatePublishedTitleUpdate(TestStatus.PUBLISHED, {
+        title: 'Updated published title',
+    })).toBe(true)
+
+    expect(validatePublishedTitleUpdate(TestStatus.PUBLISHED, {
+        title: 'Updated published title',
+        durationMinutes: 90,
+    })).toBe(false)
+
+    expect(validatePublishedTitleUpdate(TestStatus.PUBLISHED, {
+        title: 'Updated published title',
+        description: 'Should remain locked',
+    })).toBe(false)
+
+    expect(validatePublishedTitleUpdate(TestStatus.DRAFT, {
+        title: 'Draft title',
+    })).toBe(false)
+})
+
 test('validatePublishDraftState enforces questions and assignments before publish', async () => {
     const {
         validatePublishDraftState,

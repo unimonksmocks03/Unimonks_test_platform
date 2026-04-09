@@ -101,6 +101,7 @@ export default function AdminTestsPage() {
     }, []);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional data refetch when filters change
         void fetchTests({
             search: deferredSearch.trim() || undefined,
             status: statusFilter === "ALL" ? undefined : statusFilter,

@@ -60,6 +60,7 @@ type AdminTestResponse = {
         audience: BatchAudience;
         assignedBatches: AssignedBatch[];
         isEditable: boolean;
+        canEditTitle: boolean;
         canEditDuration: boolean;
         canManageAssignments: boolean;
     };
@@ -173,12 +174,14 @@ function AdminTestBuilderForm() {
     const [description, setDescription] = useState("");
     const [testDuration, setTestDuration] = useState("60");
     const [savedDuration, setSavedDuration] = useState("60");
+    const [savedTitle, setSavedTitle] = useState("");
     const [testStatus, setTestStatus] = useState<"DRAFT" | "PUBLISHED" | "ARCHIVED">("DRAFT");
     const [savedAudience, setSavedAudience] = useState<BatchAudience>("UNASSIGNED");
 
     const [availableBatches, setAvailableBatches] = useState<Array<{ id: string; name: string; code: string; kind: "FREE_SYSTEM" | "STANDARD" }>>([]);
     const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
     const [isContentLocked, setIsContentLocked] = useState(false);
+    const [canEditTitle, setCanEditTitle] = useState(true);
     const [canEditDuration, setCanEditDuration] = useState(true);
     const [canManageAssignments, setCanManageAssignments] = useState(true);
 
@@ -213,6 +216,7 @@ function AdminTestBuilderForm() {
         const test = testResponse.data.test;
         setTestId(test.id);
         setTestName(test.title);
+        setSavedTitle(test.title);
         setDescription(test.description || "");
         const durationValue = String(test.durationMinutes);
         setTestDuration(durationValue);
@@ -221,6 +225,7 @@ function AdminTestBuilderForm() {
         setSavedAudience(test.audience);
         setSelectedBatchIds(test.assignedBatches.map((batch) => batch.id));
         setIsContentLocked(!test.isEditable);
+        setCanEditTitle(test.canEditTitle);
         setCanEditDuration(test.canEditDuration);
         setCanManageAssignments(test.canManageAssignments);
 
@@ -257,6 +262,7 @@ function AdminTestBuilderForm() {
     const isPublishedTest = testStatus === "PUBLISHED";
     const normalizedDuration = String(Number.parseInt(testDuration, 10) || 60);
     const hasPublishedDurationChange = isPublishedTest && normalizedDuration !== savedDuration;
+    const hasPublishedTitleChange = isPublishedTest && testName.trim() !== savedTitle.trim();
 
     const updateActiveQuestion = (updates: Partial<Question>) => {
         setQuestions((currentQuestions) =>
@@ -335,18 +341,26 @@ function AdminTestBuilderForm() {
 
                 currentTestId = createResponse.data.test.id;
                 setTestId(currentTestId);
+                setSavedTitle(testName.trim());
                 setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             } else {
-                const updateResponse = await apiClient.patch(`/api/admin/tests/${currentTestId}`, {
-                    title: testName.trim(),
-                    description: description.trim() || null,
-                    durationMinutes: Number.parseInt(testDuration, 10) || 60,
-                });
+                const updatePayload = isPublishedTest
+                    ? {
+                        title: testName.trim(),
+                    }
+                    : {
+                        title: testName.trim(),
+                        description: description.trim() || null,
+                        durationMinutes: Number.parseInt(testDuration, 10) || 60,
+                    };
+
+                const updateResponse = await apiClient.patch(`/api/admin/tests/${currentTestId}`, updatePayload);
 
                 if (!updateResponse.ok) {
                     throw new Error(updateResponse.message);
                 }
 
+                setSavedTitle(testName.trim());
                 setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             }
 
@@ -401,7 +415,11 @@ function AdminTestBuilderForm() {
             setQuestions(updatedQuestions);
 
             if (showSuccessToast) {
-                if (failedCount > 0) {
+                if (isPublishedTest) {
+                    toast.success("Title updated", {
+                        description: "The published test name has been updated without changing question content.",
+                    });
+                } else if (failedCount > 0) {
                     toast.warning("Draft saved partially", {
                         description: `Test saved. ${savedCount} question(s) synced, ${failedCount} question(s) still need attention.`,
                     });
@@ -422,7 +440,7 @@ function AdminTestBuilderForm() {
         } finally {
             setIsSavingDraft(false);
         }
-    }, [description, questions, testDuration, testId, testName]);
+    }, [description, isPublishedTest, questions, testDuration, testId, testName]);
 
     const assignSelectedBatches = useCallback(async (options?: AssignOptions) => {
         const showSuccessToast = options?.showSuccessToast ?? true;
@@ -544,11 +562,13 @@ function AdminTestBuilderForm() {
 
             setTestStatus("PUBLISHED");
             setIsContentLocked(true);
+            setCanEditTitle(true);
             setCanEditDuration(true);
             setCanManageAssignments(true);
+            setSavedTitle(testName.trim());
             setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             toast.success("Test published", {
-                description: "The test is now immediately available. Question content stays locked, while duration and batch assignment remain adjustable for future attempts.",
+                description: "The test is now immediately available. Question content stays locked, while title, duration, and batch assignment remain adjustable for future attempts.",
             });
             router.replace(`/admin/tests/create?edit=${savedId}`);
         } finally {
@@ -662,7 +682,7 @@ function AdminTestBuilderForm() {
                         <h4 className="font-bold text-amber-900">This test is read-only</h4>
                         <p className="mt-1 text-sm font-medium opacity-90">
                             {testStatus === "PUBLISHED"
-                                ? "Published tests keep their content locked, but duration and batch assignment stay open if you need to adjust future rollout details."
+                                ? "Published tests keep their question content locked, but you can still rename the test, republish a new duration, and adjust batch assignment for future rollout details."
                                 : "Archived tests stay visible for reference, but they cannot be edited."}
                         </p>
                     </div>
@@ -924,7 +944,7 @@ function AdminTestBuilderForm() {
                             <div className="space-y-3">
                                 <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Test Name</Label>
                                 <Input
-                                    disabled={isContentLocked || isBusy}
+                                    disabled={!canEditTitle || isBusy}
                                     value={testName}
                                     onChange={(event) => setTestName(event.target.value)}
                                     placeholder="e.g. CUET Physics Mock 3"
@@ -1016,12 +1036,20 @@ function AdminTestBuilderForm() {
                         <div className="flex flex-col gap-3 border-t bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
                             <Button
                                 onClick={() => void saveDraft()}
-                                disabled={isContentLocked || isBusy}
+                                disabled={
+                                    isBusy ||
+                                    (!isPublishedTest && isContentLocked) ||
+                                    (isPublishedTest && !hasPublishedTitleChange)
+                                }
                                 variant="outline"
                                 className="h-12 w-full rounded-xl border-slate-200 text-base font-bold shadow-sm disabled:opacity-60"
                             >
                                 <Save className="mr-2 h-4 w-4" />
-                                {isSavingDraft ? "Saving..." : "Save Draft"}
+                                {isSavingDraft
+                                    ? "Saving..."
+                                    : isPublishedTest
+                                        ? "Save Title"
+                                        : "Save Draft"}
                             </Button>
                             <Button
                                 onClick={() => void assignSelectedBatches()}

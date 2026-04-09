@@ -221,8 +221,27 @@ function isPublishedDurationOnlyUpdate(existingStatus: TestStatus, data: UpdateT
     return data.status === undefined || data.status === 'PUBLISHED'
 }
 
+function isPublishedTitleOnlyUpdate(existingStatus: TestStatus, data: UpdateTestInput) {
+    if (existingStatus !== 'PUBLISHED' || data.title === undefined) {
+        return false
+    }
+
+    const allowedKeys = new Set(['title'])
+    const keys = Object.keys(data)
+
+    if (keys.some((key) => !allowedKeys.has(key))) {
+        return false
+    }
+
+    return true
+}
+
 export function validatePublishedDurationRepublish(status: TestStatus, data: UpdateTestInput) {
     return isPublishedDurationOnlyUpdate(status, data)
+}
+
+export function validatePublishedTitleUpdate(status: TestStatus, data: UpdateTestInput) {
+    return isPublishedTitleOnlyUpdate(status, data)
 }
 
 function mergeSettings(
@@ -540,6 +559,7 @@ export async function getAdminTest(testId: string) {
         test: {
             ...buildAdminTestListItem(test),
             isEditable: test.status === 'DRAFT',
+            canEditTitle: test.status === 'DRAFT' || test.status === 'PUBLISHED',
             canEditDuration: test.status === 'DRAFT' || test.status === 'PUBLISHED',
             canManageAssignments: test.status !== 'ARCHIVED',
             assignedBatches,
@@ -596,15 +616,17 @@ export async function updateAdminTest(adminId: string, testId: string, data: Upd
         data.durationMinutes !== undefined ||
         data.settings !== undefined
     const publishedDurationOnlyUpdate = isPublishedDurationOnlyUpdate(existing.status, data)
+    const publishedTitleOnlyUpdate = isPublishedTitleOnlyUpdate(existing.status, data)
+    const publishedAllowedMetadataUpdate = publishedDurationOnlyUpdate || publishedTitleOnlyUpdate
 
-    if (metadataUpdateRequested && !publishedDurationOnlyUpdate) {
+    if (metadataUpdateRequested && !publishedAllowedMetadataUpdate) {
         const editableError = ensureDraftEditable(existing.status)
         if (editableError) {
             return editableError
         }
     }
 
-    if (data.status === 'PUBLISHED' && !publishedDurationOnlyUpdate) {
+    if (data.status === 'PUBLISHED' && !publishedAllowedMetadataUpdate) {
         const publishError = validatePublishDraftState({
             currentStatus: existing.status,
             questionCount: existing._count.questions,
@@ -629,7 +651,7 @@ export async function updateAdminTest(adminId: string, testId: string, data: Upd
         return serviceError('INVALID_TRANSITION', 'Published or archived tests cannot return to draft')
     } else if (!metadataUpdateRequested && data.status === undefined) {
         return serviceError('BAD_REQUEST', 'No valid changes were provided')
-    } else if (existing.status !== 'DRAFT' && !isStatusOnlyArchiveRequest(existing.status, data) && !publishedDurationOnlyUpdate) {
+    } else if (existing.status !== 'DRAFT' && !isStatusOnlyArchiveRequest(existing.status, data) && !publishedAllowedMetadataUpdate) {
         const editableError = ensureDraftEditable(existing.status)
         if (editableError) {
             return editableError

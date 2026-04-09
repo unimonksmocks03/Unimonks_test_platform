@@ -83,7 +83,7 @@ export default function UserManagementPage() {
     const [createRole, setCreateRole] = useState<"STUDENT" | "SUB_ADMIN">("STUDENT");
     const [subAdminConfirmOpen, setSubAdminConfirmOpen] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-    const [pendingRoleSelection, setPendingRoleSelection] = useState<"SUB_ADMIN" | null>(null);
+    const [, setPendingRoleSelection] = useState<"SUB_ADMIN" | null>(null);
 
     const fetchUsers = useCallback(async (search?: string, role?: string, status?: string) => {
         setIsLoading(true);

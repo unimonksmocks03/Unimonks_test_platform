@@ -95,7 +95,6 @@ function hasHeaderRow(rows: string[][]) {
     }
 
     const [firstRow, secondRow] = rows;
-    const firstNumeric = countNumericish(firstRow);
     const secondNumeric = countNumericish(secondRow);
 
     return (
