@@ -275,6 +275,29 @@ function normalizeOptionText(text: string): string {
         .trim()
 }
 
+function isMatchFollowingContextLine(line: string) {
+    const trimmed = line.trim()
+    if (!trimmed) return false
+
+    if (/^(?:list\s*i|list\s*ii)\b/i.test(trimmed)) {
+        return true
+    }
+
+    if (/^[A-D][.)\-:]\s+.+(?:—|-)\s*\d+\./.test(trimmed)) {
+        return true
+    }
+
+    if (/^[A-D][.)\-:]\s+/.test(trimmed)) {
+        return true
+    }
+
+    if (/^\d+[.)\-:]\s+/.test(trimmed)) {
+        return true
+    }
+
+    return false
+}
+
 function guessDifficulty(stem: string): string {
     const wordCount = stem.split(/\s+/).filter(Boolean).length
     if (wordCount >= 22) return 'HARD'
@@ -898,6 +921,7 @@ function parseQuestionBlock(
 
     const inlineOptions = firstLine.stem ? extractInlineLetterOptions(firstLine.stem) : null
     const stemParts = firstLine.stem ? [inlineOptions?.stem ?? firstLine.stem] : []
+    const sharedContextParts: string[] = []
     const options = new Map<string, string>()
     let activeOption: string | null = null
     let activeSection: 'stem' | 'option' | 'explanation' | 'statement' = 'stem'
@@ -970,8 +994,25 @@ function parseQuestionBlock(
             && entry.index > lastNumericOptionIndex,
     )
     const useLowercaseAsOptions = useStatementStyleOptions && lowercaseOptionsAfterNumerics.length >= 4
-    const lowercaseOptionLineSet: Set<string> = useLowercaseAsOptions
-        ? new Set(lowercaseOptionsAfterNumerics.map(entry => entry.line))
+    const lowercaseOptionsAfterUppercase = optionCandidates.filter(
+        entry => entry.option.sourceType === 'LETTER'
+            && isLowercaseLetterOptionLine(entry.line)
+            && entry.index > firstUppercaseLetterOptionIndex,
+    )
+    const useUppercaseMatchRowsAsContext = !useLowercaseAsOptions
+        && uppercaseLetterOptionEntries.length >= 2
+        && lowercaseOptionsAfterUppercase.length >= 4
+    const lowercaseOptionLineSet: Set<string> = (useLowercaseAsOptions
+        ? lowercaseOptionsAfterNumerics
+        : useUppercaseMatchRowsAsContext
+            ? lowercaseOptionsAfterUppercase
+            : []
+    )
+        .length > 0
+        ? new Set((useLowercaseAsOptions
+            ? lowercaseOptionsAfterNumerics
+            : lowercaseOptionsAfterUppercase
+        ).map(entry => entry.line))
         : new Set()
 
     for (const line of rawLines.slice(1)) {
@@ -1043,6 +1084,19 @@ function parseQuestionBlock(
             continue
         }
 
+        if (
+            !answerSeen
+            && (useLowercaseAsOptions || useUppercaseMatchRowsAsContext)
+            && !lowercaseOptionLineSet.has(line)
+            && isMatchFollowingContextLine(line)
+        ) {
+            sharedContextParts.push(line.trim())
+            activeOption = null
+            activeSection = 'statement'
+            activeStatement = true
+            continue
+        }
+
         if (!answerSeen) {
             if (bareNumberedStemStatement) {
                 stemParts.push(`${bareNumberedStemStatement.questionNumber}. ${normalizeStem(bareNumberedStemStatement.stem)}`)
@@ -1087,10 +1141,25 @@ function parseQuestionBlock(
                         activeSection = 'option'
                         activeStatement = false
                     } else {
-                        stemParts.push(normalizeStem(line))
+                        sharedContextParts.push(line.trim())
                         activeOption = null
-                        activeSection = 'stem'
+                        activeSection = 'statement'
+                        activeStatement = true
+                    }
+                    continue
+                }
+
+                if (useUppercaseMatchRowsAsContext) {
+                    if (lowercaseOptionLineSet.has(line)) {
+                        options.set(optionResult.optionId, optionText)
+                        activeOption = optionResult.optionId
+                        activeSection = 'option'
                         activeStatement = false
+                    } else {
+                        sharedContextParts.push(line.trim())
+                        activeOption = null
+                        activeSection = 'statement'
+                        activeStatement = true
                     }
                     continue
                 }
@@ -1193,6 +1262,7 @@ function parseQuestionBlock(
         explanation: explanation || 'Imported from structured MCQ document.',
         difficulty: difficulty || guessDifficulty(normalizedStemText),
         topic: topic || detectTopic(normalizedStemText),
+        sharedContext: normalizeSharedContextText(sharedContextParts.join('\n')),
     }
 
     return {

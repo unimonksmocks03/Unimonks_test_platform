@@ -544,7 +544,9 @@ test('extractQuestionsFromDocumentText parses header-only numbered blocks that c
     expect(analysis.duplicateQuestionNumbers).toEqual([])
     expect(analysis.questions[0]?.stem).toContain("In Jensen's hierarchical model")
     expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('A')
-    expect(analysis.questions[2]?.stem).toContain('List I (Assessment Method)')
+    expect(analysis.questions[2]?.stem).toBe('Match the correct pair:')
+    expect(analysis.questions[2]?.sharedContext).toContain('List I (Assessment Method)')
+    expect(analysis.questions[2]?.sharedContext).toContain('A. Interview — 1. In-depth study of an individual\'s psychological history')
     expect(analysis.questions[2]?.options.find((option) => option.isCorrect)?.id).toBe('A')
     expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
 })
@@ -825,10 +827,12 @@ test('extractQuestionsFromDocumentText handles Ques-N prefix, Answer-N inline an
     expect(analysis.questions[0]?.options.find((o) => o.isCorrect)?.id).toBe('B')
     expect(analysis.questions[0]?.options.find((o) => o.isCorrect)?.text).toBe('CH2=CH-CH2-OH')
 
-    // Q2 – match-the-following: List I labels and List II items must be in the stem,
-    // lowercase (a-d) must be the answer options
-    expect(analysis.questions[1]?.stem).toContain('A. Catechol')
-    expect(analysis.questions[1]?.stem).toContain('1. Benzene-1,4-diol')
+    // Q2 – match-the-following: List I/List II rows should be preserved as shared context,
+    // while lowercase (a-d) lines remain the answer options.
+    expect(analysis.questions[1]?.stem).toBe('Match the following common names of phenols with their IUPAC names:')
+    expect(analysis.questions[1]?.sharedContext).toContain('List I')
+    expect(analysis.questions[1]?.sharedContext).toContain('A. Catechol')
+    expect(analysis.questions[1]?.sharedContext).toContain('1. Benzene-1,4-diol')
     expect(analysis.questions[1]?.options).toEqual([
         { id: 'A', text: 'A-2, B-4, C-1, D-3', isCorrect: true },
         { id: 'B', text: 'A-2, B-1, C-4, D-3', isCorrect: false },
