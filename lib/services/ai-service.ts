@@ -94,6 +94,13 @@ type StructuredAnswerDetail = {
     explanation: string | null
 }
 
+type QuestionLabel = {
+    questionNumber: number
+    stem: string
+    explicitPrefix: boolean
+    inlineAnswerId: string | null
+}
+
 type StructuredQuestionBlock = {
     questionNumber: number
     explicitPrefix: boolean
@@ -307,10 +314,20 @@ function isLikelyQuestionStemNoise(questionNumber: number, stem: string, explici
     return false
 }
 
-function stripQuestionLabel(line: string): { questionNumber: number; stem: string; explicitPrefix: boolean } | null {
+function stripQuestionLabel(line: string): QuestionLabel | null {
     const trimmedLine = line.trim()
     if (!trimmedLine) return null
     const normalizedLine = trimmedLine.replace(/^#{1,6}\s*/, '')
+
+    const answerOnlyHeaderMatch = normalizedLine.match(/^(\d+)\s+ANSWER\s*\(?([A-Da-d1-4])\)?\s*$/i)
+    if (answerOnlyHeaderMatch) {
+        return {
+            questionNumber: Number.parseInt(answerOnlyHeaderMatch[1], 10),
+            stem: '',
+            explicitPrefix: true,
+            inlineAnswerId: normalizeAnswerIdent(answerOnlyHeaderMatch[2]),
+        }
+    }
 
     const prefixedQuestionMatch = normalizedLine.match(
         /^(question\s*|ques(?:tion)?\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.*)$/i
@@ -327,6 +344,7 @@ function stripQuestionLabel(line: string): { questionNumber: number; stem: strin
             questionNumber,
             stem,
             explicitPrefix: true,
+            inlineAnswerId: null,
         }
     }
 
@@ -343,6 +361,7 @@ function stripQuestionLabel(line: string): { questionNumber: number; stem: strin
         questionNumber,
         stem,
         explicitPrefix: false,
+        inlineAnswerId: null,
     }
 }
 
@@ -882,11 +901,11 @@ function parseQuestionBlock(
     const options = new Map<string, string>()
     let activeOption: string | null = null
     let activeSection: 'stem' | 'option' | 'explanation' | 'statement' = 'stem'
-    let correctOptionId: string | null = null
+    let correctOptionId: string | null = firstLine.inlineAnswerId
     let explanation = ''
     let difficulty: GeneratedQuestion['difficulty'] | null = null
     let topic: string | null = null
-    let answerHintUsed = false
+    let answerHintUsed = Boolean(firstLine.inlineAnswerId)
     let answerSeen = false
     let activeStatement = false
 

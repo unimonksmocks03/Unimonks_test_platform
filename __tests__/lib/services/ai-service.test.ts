@@ -100,6 +100,51 @@ Answer: (a) 1
 (d) -1
 `
 
+const answerInHeaderPsychologyMcqText = `
+GAT MOCKTEST
+UNIT 1 : VARIATIONS IN PSYCHOLOGICAL ATTRIBUTES
+1 ANSWER(a)
+Assertion (A): In Jensen's hierarchical model, Level I involves associative learning where output is more or less similar to input.
+Reason (R): Level I mainly includes rote learning and memory-type tasks.
+(a) Both A and R are true, and R is the correct explanation of A
+(b) Both A and R are true, but R is not the correct explanation of A
+(c) A is true but R is false
+(d) A is false but R is true
+2 ANSWER(a)
+Assertion (A): In Sternberg's triarchic theory, contextual intelligence is also called practical intelligence.
+Reason (R): Contextual intelligence helps people deal with everyday environmental demands and is often termed "street smartness".
+(a) Both A and R are true, and R is the correct explanation of A
+(b) Both A and R are true, but R is not the correct explanation of A
+(c) A is true but R is false
+(d) A is false but R is true
+3 ANSWER(a)
+Match the correct pair:
+List I (Assessment Method) — List II (Description)
+A. Interview — 1. In-depth study of an individual's psychological history
+B. Case Study — 2. One-to-one seeking information
+C. Observation — 3. Systematic recording of behaviour in real time
+D. Self-report — 4. Person provides factual information/opinions about self
+(a) A-2, B-1, C-3, D-4
+(b) A-1, B-2, C-4, D-3
+(c) A-3, B-1, C-2, D-4
+(d) A-2, B-3, C-1, D-4
+4 ANSWER(b)
+Which statement(s) is/are correct?
+1. Psychometric approach treats intelligence as an aggregate of abilities.
+2. Information-processing approach focuses on how an intelligent person acts.
+3. Information-processing approach primarily focuses on a single index score.
+(a) 1 and 3 only
+(b) 1 and 2 only
+(c) 2 and 3 only
+(d) 1, 2 and 3
+5 ANSWER(b)
+Alfred Binet was the first psychologist to:
+(a) Propose multiple intelligences theory
+(b) Work on intelligence and formally measure it
+(c) Develop the concept of IQ
+(d) Study twins for intelligence research
+`
+
 const humanGeoDocxLikeMcqText = `
 45 Minutes
 Section A
@@ -481,6 +526,27 @@ test('extractQuestionsFromDocumentText keeps parsing options when answer hints a
     ])
     expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('C')
     expect(analysis.questions[3]?.options.find((option) => option.isCorrect)?.id).toBe('D')
+})
+
+test('extractQuestionsFromDocumentText parses header-only numbered blocks that carry answer hints on the first line', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(answerInHeaderPsychologyMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.answerHintCount).toBe(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.stem).toContain("In Jensen's hierarchical model")
+    expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('A')
+    expect(analysis.questions[2]?.stem).toContain('List I (Assessment Method)')
+    expect(analysis.questions[2]?.options.find((option) => option.isCorrect)?.id).toBe('A')
+    expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
 })
 
 test('extractQuestionsFromDocumentText uses answer-key sections without overcounting detailed-answer duplicates', async () => {
