@@ -60,6 +60,46 @@ Explanation: Charge is a scalar quantity.
 Di culty: Easy
 `
 
+const answerBeforeOptionsPdfMcqText = `
+MOCK TEST – APPLIED MATHS 1
+CHAPTER 2: Algebra - Matrices
+
+Q1. The order of matrix [1 2 3] is:
+Answer: (a) 1 × 3
+(a) 1 × 3
+(b) 3 × 1
+(c) 1 × 1
+(d) 3 × 3
+
+Q2. A square matrix A = [aᵢⱼ] is called a diagonal matrix if:
+Answer: (c) aᵢⱼ = 0 for i ≠ j
+(a) aᵢⱼ = 0 for all i, j
+(b) aᵢⱼ = 1 for i = j
+(c) aᵢⱼ = 0 for i ≠ j
+(d) aᵢⱼ ≠ 0 for i ≠ j
+
+Q3. If A and B are matrices of order 2 × 3 and 3 × 4 respectively, then the order of AB is:
+Answer: (b) 2 × 4
+(a) 3 × 3
+(b) 2 × 4
+(c) 4 × 2
+(d) 2 × 3
+
+Q4. The transpose of a row matrix is:
+Answer: (d) A column matrix
+(a) A diagonal matrix
+(b) A square matrix
+(c) Same row matrix
+(d) A column matrix
+
+Q5. If A is an identity matrix of order 3, then det(A) equals:
+Answer: (a) 1
+(a) 1
+(b) 0
+(c) 3
+(d) -1
+`
+
 const humanGeoDocxLikeMcqText = `
 45 Minutes
 Section A
@@ -417,6 +457,30 @@ test('extractQuestionsFromDocumentText parses PDF-like CUET MCQs with parenthesi
         difficulty: 'EASY',
     })
     expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('C')
+})
+
+test('extractQuestionsFromDocumentText keeps parsing options when answer hints appear before the option block', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(answerBeforeOptionsPdfMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.answerHintCount).toBe(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.missingQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.options).toEqual([
+        { id: 'A', text: '1 × 3', isCorrect: true },
+        { id: 'B', text: '3 × 1', isCorrect: false },
+        { id: 'C', text: '1 × 1', isCorrect: false },
+        { id: 'D', text: '3 × 3', isCorrect: false },
+    ])
+    expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('C')
+    expect(analysis.questions[3]?.options.find((option) => option.isCorrect)?.id).toBe('D')
 })
 
 test('extractQuestionsFromDocumentText uses answer-key sections without overcounting detailed-answer duplicates', async () => {

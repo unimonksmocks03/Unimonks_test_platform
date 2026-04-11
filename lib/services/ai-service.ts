@@ -983,7 +983,9 @@ function parseQuestionBlock(
         if (answerMatch) {
             correctOptionId = normalizeAnswerIdent(answerMatch[1])
             answerHintUsed = true
-            answerSeen = true
+            // Some coaching PDFs put "Answer: ..." before the actual option block.
+            // Only freeze further option parsing once the full choice set is already present.
+            answerSeen = options.size >= 4
             activeOption = null
             activeSection = 'stem'
             continue
