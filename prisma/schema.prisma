@@ -112,6 +112,7 @@ model Test {
   status          TestStatus @default(DRAFT)
   source          TestSource @default(MANUAL)
   reviewStatus    String?    @map("review_status")
+  importDiagnostics Json?    @map("import_diagnostics")
   settings        Json       @default("{}")
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
@@ -131,6 +132,7 @@ model Question {
   order       Int
   stem        String     @db.Text
   sharedContext String?  @db.Text
+  importEvidence Json?   @map("import_evidence")
   options     Json
   explanation String?    @db.Text
   difficulty  Difficulty @default(MEDIUM)

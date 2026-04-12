@@ -1,13 +1,21 @@
 import { expect, test, vi } from 'vitest'
+import type { GeneratedQuestion } from '@/lib/services/ai-service.types'
 
 vi.stubEnv('NODE_ENV', process.env.NODE_ENV ?? 'test')
 vi.stubEnv('DATABASE_URL', process.env.DATABASE_URL ?? 'postgresql://tester:tester@localhost:5432/unimonk_test')
 vi.stubEnv('DIRECT_URL', process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? 'postgresql://tester:tester@localhost:5432/unimonk_test')
 vi.stubEnv('OPENAI_API_KEY', process.env.OPENAI_API_KEY ?? 'test-openai-key')
 
-const { mockResponsesParse, mockGetDocumentProxy } = vi.hoisted(() => ({
+const {
+    mockResponsesParse,
+    mockGetDocumentProxy,
+    mockRenderPageAsImage,
+    mockExtractText,
+} = vi.hoisted(() => ({
     mockResponsesParse: vi.fn(),
     mockGetDocumentProxy: vi.fn(),
+    mockRenderPageAsImage: vi.fn(),
+    mockExtractText: vi.fn(),
 }))
 
 vi.mock('openai', () => ({
@@ -19,9 +27,31 @@ vi.mock('openai', () => ({
 
 vi.mock('unpdf', () => ({
     getDocumentProxy: mockGetDocumentProxy,
+    renderPageAsImage: mockRenderPageAsImage,
+    extractText: mockExtractText,
 }))
 
 const aiServicePromise = import('../../../lib/services/ai-service')
+
+function createVerifiedQuestion(stem: string, overrides: Partial<GeneratedQuestion> = {}): GeneratedQuestion {
+    return {
+        stem,
+        options: [
+            { id: 'A', text: 'A', isCorrect: false },
+            { id: 'B', text: 'B', isCorrect: true },
+            { id: 'C', text: 'C', isCorrect: false },
+            { id: 'D', text: 'D', isCorrect: false },
+        ],
+        explanation: 'E',
+        difficulty: 'EASY',
+        topic: 'T',
+        extractionMode: 'TEXT_EXACT',
+        answerSource: 'ANSWER_KEY',
+        sourceSnippet: stem,
+        confidence: 0.96,
+        ...overrides,
+    }
+}
 
 test('extractQuestionsFromPdfMultimodal sends the PDF to GPT-4o responses.parse and returns structured questions', async () => {
     const { extractQuestionsFromPdfMultimodal } = await aiServicePromise
@@ -79,18 +109,21 @@ test('extractQuestionsFromPdfMultimodal sends the PDF to GPT-4o responses.parse 
 test('verifyExtractedQuestions passes for a valid 50-question set', async () => {
     const { verifyExtractedQuestions } = await aiServicePromise
 
-    const questions = Array.from({ length: 50 }, (_, index) => ({
+    const questions = Array.from({ length: 50 }, (_, index) => {
+        const correctId = ['A', 'B', 'C', 'D'][index % 4]
+        return {
         stem: `Question ${index + 1}: What is ${index + 1}?`,
         options: [
-            { id: 'A', text: 'Wrong', isCorrect: false },
-            { id: 'B', text: 'Correct', isCorrect: true },
-            { id: 'C', text: 'Wrong', isCorrect: false },
-            { id: 'D', text: 'Wrong', isCorrect: false },
+            { id: 'A', text: 'Wrong', isCorrect: correctId === 'A' },
+            { id: 'B', text: 'Correct', isCorrect: correctId === 'B' },
+            { id: 'C', text: 'Wrong', isCorrect: correctId === 'C' },
+            { id: 'D', text: 'Wrong', isCorrect: correctId === 'D' },
         ],
         explanation: `${index + 1} is the answer.`,
         difficulty: 'MEDIUM',
         topic: 'Math',
-    }))
+        }
+    })
 
     const result = verifyExtractedQuestions(questions, 50)
     expect(result.passed).toBe(true)
@@ -119,7 +152,7 @@ test('verifyExtractedQuestions fails when count mismatch occurs', async () => {
     expect(result.issues.some((issue) => issue.issue.includes('count mismatch'))).toBe(true)
 })
 
-test('verifyExtractedQuestions detects wrong option counts and duplicate stems', async () => {
+test('verifyExtractedQuestions detects wrong option counts and true duplicate questions', async () => {
     const { verifyExtractedQuestions } = await aiServicePromise
 
     const questions = [
@@ -141,6 +174,7 @@ test('verifyExtractedQuestions detects wrong option counts and duplicate stems',
                 { id: 'A', text: 'A', isCorrect: false },
                 { id: 'B', text: 'B', isCorrect: true },
                 { id: 'C', text: 'C', isCorrect: false },
+                { id: 'D', text: 'D', isCorrect: false },
             ],
             explanation: 'E',
             difficulty: 'EASY',
@@ -151,7 +185,76 @@ test('verifyExtractedQuestions detects wrong option counts and duplicate stems',
     const result = verifyExtractedQuestions(questions as never, 2)
     expect(result.passed).toBe(false)
     expect(result.issues.some((issue) => issue.issue.includes('Duplicate stem'))).toBe(true)
-    expect(result.issues.some((issue) => issue.issue.includes('structured validation'))).toBe(true)
+})
+
+test('verifyExtractedQuestions allows repeated generic stems when options or shared context differ', async () => {
+    const { verifyExtractedQuestions } = await aiServicePromise
+
+    const questions = [
+        {
+            stem: 'Find the missing figure',
+            sharedContext: 'Grid with stars',
+            sharedContextEvidence: 'Visual grid with stars',
+            options: [
+                { id: 'A', text: 'Star A', isCorrect: true },
+                { id: 'B', text: 'Star B', isCorrect: false },
+                { id: 'C', text: 'Star C', isCorrect: false },
+                { id: 'D', text: 'Star D', isCorrect: false },
+            ],
+            explanation: 'E',
+            difficulty: 'EASY',
+            topic: 'T',
+        },
+        {
+            stem: 'Find the missing figure',
+            sharedContext: 'Grid with circles',
+            sharedContextEvidence: 'Visual grid with circles',
+            options: [
+                { id: 'A', text: 'Circle A', isCorrect: false },
+                { id: 'B', text: 'Circle B', isCorrect: true },
+                { id: 'C', text: 'Circle C', isCorrect: false },
+                { id: 'D', text: 'Circle D', isCorrect: false },
+            ],
+            explanation: 'E',
+            difficulty: 'EASY',
+            topic: 'T',
+        },
+    ]
+
+    const result = verifyExtractedQuestions(questions as never, 2)
+    expect(result.passed).toBe(true)
+    expect(result.issues.some((issue) => issue.code === 'DUPLICATE_STEM')).toBe(false)
+})
+
+test('verifyExtractedQuestions allows visual figure prompts when the shared diagrams differ', async () => {
+    const { verifyExtractedQuestions } = await aiServicePromise
+
+    const questions = [
+        createVerifiedQuestion('Which option completes the figure?', {
+            sharedContext: 'Grid with stars and a missing final cell',
+            sharedContextEvidence: 'Page 1 figure grid',
+            options: [
+                { id: 'A', text: '☆ ☆ ☆', isCorrect: true },
+                { id: 'B', text: '★ ★ ★', isCorrect: false },
+                { id: 'C', text: '☆ ★ ☆', isCorrect: false },
+                { id: 'D', text: '★ ☆ ★', isCorrect: false },
+            ],
+        }),
+        createVerifiedQuestion('Which option completes the figure?', {
+            sharedContext: 'Grid with circles and a missing final cell',
+            sharedContextEvidence: 'Page 2 figure grid',
+            options: [
+                { id: 'A', text: '○ ○ ●', isCorrect: false },
+                { id: 'B', text: '● ○ ○', isCorrect: true },
+                { id: 'C', text: '○ ● ○', isCorrect: false },
+                { id: 'D', text: '● ● ○', isCorrect: false },
+            ],
+        }),
+    ]
+
+    const result = verifyExtractedQuestions(questions as never, 2)
+    expect(result.passed).toBe(true)
+    expect(result.issues.some((issue) => issue.code === 'DUPLICATE_STEM' || issue.code === 'NEAR_DUPLICATE_STEM')).toBe(false)
 })
 
 test('verifyExtractedQuestions skips count checks when expectedCount is null', async () => {
@@ -198,4 +301,128 @@ test('verifyExtractedQuestions flags missing shared context for table-referenced
 
     expect(result.passed).toBe(false)
     expect(result.issues.some((issue) => issue.issue.includes('shared context'))).toBe(true)
+})
+
+test('verifyExtractedQuestions categorizes structural, evidence, and cross issues', async () => {
+    const { verifyExtractedQuestions } = await aiServicePromise
+
+    const questions = [
+        createVerifiedQuestion('Question 1 duplicated stem'),
+        createVerifiedQuestion('Question 1 duplicated stem', {
+            options: [
+                { id: 'A', text: 'A', isCorrect: false },
+                { id: 'A', text: 'B', isCorrect: true },
+                { id: 'C', text: 'C', isCorrect: false },
+                { id: 'D', text: 'D', isCorrect: false },
+            ],
+            confidence: 0.32,
+        }),
+    ]
+
+    const result = verifyExtractedQuestions(
+        questions as never,
+        5,
+        {
+            extractionAnalysis: {
+                expectedQuestionCount: 5,
+                exactMatchAchieved: false,
+                invalidQuestionNumbers: [4],
+                missingQuestionNumbers: [3, 5],
+                duplicateQuestionNumbers: [1],
+                questions,
+            },
+            comparisonQuestions: [createVerifiedQuestion('Completely different stem')],
+        },
+    )
+
+    expect(result.passed).toBe(false)
+    expect(result.issueSummary).toBeDefined()
+    expect(result.issues.some((issue) => issue.category === 'STRUCTURAL')).toBe(true)
+    expect(result.issues.some((issue) => issue.category === 'EVIDENCE')).toBe(true)
+    expect(result.issues.some((issue) => issue.category === 'CROSS')).toBe(true)
+    expect(result.issues.some((issue) => issue.code === 'NUMBERING_GAP')).toBe(true)
+    expect(result.issues.some((issue) => issue.code === 'LOW_CONFIDENCE')).toBe(true)
+    expect(result.issues.some((issue) => issue.code === 'SECONDARY_EXTRACTION_DISAGREEMENT')).toBe(true)
+})
+
+test('verifyExtractedQuestions flags multimodal questions without source pages and suspicious answer skew', async () => {
+    const { verifyExtractedQuestions } = await aiServicePromise
+
+    const questions = Array.from({ length: 20 }, (_, index) => createVerifiedQuestion(
+        `Question ${index + 1}?`,
+        {
+            extractionMode: 'MULTIMODAL_EXTRACT',
+            sourcePage: null,
+            options: [
+                { id: 'A', text: 'A', isCorrect: false },
+                { id: 'B', text: 'B', isCorrect: true },
+                { id: 'C', text: 'C', isCorrect: false },
+                { id: 'D', text: 'D', isCorrect: false },
+            ],
+        },
+    ))
+
+    const result = verifyExtractedQuestions(questions as never, 20)
+
+    expect(result.passed).toBe(false)
+    expect(result.issues.some((issue) => issue.code === 'MISSING_SOURCE_PAGE')).toBe(true)
+    expect(result.issues.some((issue) => issue.code === 'ANSWER_SKEW')).toBe(true)
+})
+
+test('extractVisualReferencesFromPdfImages returns structured visual references from page OCR and images', async () => {
+    const { extractVisualReferencesFromPdfImages } = await aiServicePromise
+
+    mockResponsesParse.mockClear()
+    mockGetDocumentProxy.mockClear()
+    mockExtractText.mockClear()
+    mockRenderPageAsImage.mockClear()
+
+    mockGetDocumentProxy.mockResolvedValueOnce({
+        numPages: 2,
+        cleanup: vi.fn(),
+    })
+    mockExtractText.mockResolvedValueOnce({
+        text: [
+            'Study the following Venn diagram and answer Q1.',
+            'Q2 is based on the figure below.',
+        ],
+    })
+    mockRenderPageAsImage
+        .mockResolvedValueOnce('data:image/png;base64,page-1')
+        .mockResolvedValueOnce('data:image/png;base64,page-2')
+    mockResponsesParse.mockResolvedValueOnce({
+        output_parsed: {
+            references: [
+                {
+                    questionNumber: 1,
+                    sharedContext: 'Venn diagram showing overlap between sets A and B.',
+                    sourcePage: 1,
+                    sourceSnippet: 'Study the following Venn diagram and answer Q1.',
+                    sharedContextEvidence: 'Question 1 explicitly points to the page 1 Venn diagram.',
+                    confidence: 0.91,
+                },
+            ],
+        },
+        usage: {
+            input_tokens: 320,
+            output_tokens: 90,
+        },
+    })
+
+    const result = await extractVisualReferencesFromPdfImages(
+        Buffer.from('fake-pdf'),
+        undefined,
+        'venn.pdf',
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.references).toHaveLength(1)
+    expect(result.references?.[0]).toMatchObject({
+        questionNumber: 1,
+        sharedContext: 'Venn diagram showing overlap between sets A and B.',
+        sourcePage: 1,
+        sourceSnippet: 'Study the following Venn diagram and answer Q1.',
+    })
+    expect(mockResponsesParse).toHaveBeenCalledOnce()
+    expect(mockRenderPageAsImage).toHaveBeenCalledTimes(2)
 })

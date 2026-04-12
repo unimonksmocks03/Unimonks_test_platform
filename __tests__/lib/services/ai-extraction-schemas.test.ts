@@ -100,10 +100,17 @@ test('VerificationResultSchema accepts a valid verifier result', () => {
         totalQuestions: 50,
         validQuestions: 48,
         issues: [
-            { questionNumber: 12, issue: 'Two options marked correct' },
-            { questionNumber: 37, issue: 'Missing option D' },
+            { questionNumber: 12, issue: 'Two options marked correct', category: 'STRUCTURAL', severity: 'ERROR' },
+            { questionNumber: 37, issue: 'Missing option D', category: 'EVIDENCE', severity: 'WARNING' },
         ],
         passed: false,
+        issueSummary: {
+            structural: 1,
+            evidence: 1,
+            cross: 0,
+            errors: 1,
+            warnings: 1,
+        },
     }
 
     expect(VerificationResultSchema.safeParse(valid).success).toBe(true)

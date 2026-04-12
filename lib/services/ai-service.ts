@@ -6,7 +6,13 @@ import {
     McqExtractionResponseSchema,
     McqQuestionSchema,
     type VerificationResult,
+    VisualReferenceExtractionSchema,
+    VisualReferenceExtractionResponseSchema,
 } from '@/lib/services/ai-extraction-schemas'
+import {
+    verifyExtractedQuestionsV2,
+    type VerificationContext,
+} from '@/lib/services/import-verifier'
 import { prisma } from '@/lib/prisma'
 import type {
     CostInfo,
@@ -15,6 +21,7 @@ import type {
     GeneratedQuestion,
     PdfVisionFallbackResult,
     PreciseDocumentQuestionAnalysis,
+    VisualReferenceExtractionResult,
 } from '@/lib/services/ai-service.types'
 
 export type {
@@ -26,6 +33,7 @@ export type {
     PdfImportFallbackMode,
     PdfVisionFallbackResult,
     PreciseDocumentQuestionAnalysis,
+    VisualReferenceExtractionResult,
 } from '@/lib/services/ai-service.types'
 
 /**
@@ -117,11 +125,14 @@ type ParsedStructuredQuestion = {
     question: GeneratedQuestion | null
 }
 
+type CanvasModule = typeof import('@napi-rs/canvas')
+
 type StructuredExtractionContext = {
     analysis: ExtractedQuestionAnalysis
     answerSection: string
     questionBlocks: Map<number, StructuredQuestionBlock>
     parsedQuestions: Map<number, ParsedStructuredQuestion>
+    genericStemHint: string | null
 }
 
 
@@ -221,6 +232,29 @@ function normalizeDocumentText(text: string): string {
         .join('\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
+}
+
+function truncateEvidenceText(text: string | null | undefined, maxLength = 1200) {
+    if (!text) {
+        return null
+    }
+
+    const normalized = text.trim().replace(/\s+/g, ' ')
+    if (!normalized) {
+        return null
+    }
+
+    return normalized.length <= maxLength
+        ? normalized
+        : `${normalized.slice(0, maxLength - 1).trim()}…`
+}
+
+function normalizeConfidenceScore(value: number) {
+    if (!Number.isFinite(value)) {
+        return null
+    }
+
+    return Math.max(0, Math.min(1, Math.round(value * 100) / 100))
 }
 
 function normalizeSharedContextText(text: string | null | undefined) {
@@ -353,7 +387,7 @@ function stripQuestionLabel(line: string): QuestionLabel | null {
     }
 
     const prefixedQuestionMatch = normalizedLine.match(
-        /^(question\s*|ques(?:tion)?\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.*)$/i
+        /^(question\s*|ques(?:tion)?\s*|ues\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.*)$/i
     )
 
     if (prefixedQuestionMatch) {
@@ -754,6 +788,42 @@ function collectStructuredQuestionBlocks(questionSection: string): StructuredQue
     return blocks
 }
 
+function deriveGenericStemHint(questionSection: string) {
+    const lines = questionSection
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+
+    const headingLines: string[] = []
+    for (const line of lines) {
+        if (looksLikeQuestionStart(line) || expandInlineQuestionLine(line, 1)) {
+            break
+        }
+        headingLines.push(line)
+    }
+
+    const headingText = headingLines.join(' ').replace(/\s+/g, ' ').trim()
+    if (!headingText) return null
+
+    if (/\bodd\s*[-–]?\s*one\s*out\b/i.test(headingText)) {
+        return 'Select the odd one out.'
+    }
+    if (/\bfigure\s*completion\b|\bmissing\s*figure\b/i.test(headingText)) {
+        return 'Find the missing figure.'
+    }
+    if (/\bfigure\s*formation\b/i.test(headingText)) {
+        return 'Select the correctly formed figure.'
+    }
+    if (/\bvenn\s*diagram\b/i.test(headingText)) {
+        return 'Select the correct Venn diagram.'
+    }
+    if (/\branking|rankings\b/i.test(headingText)) {
+        return 'Select the correct option.'
+    }
+
+    return null
+}
+
 function extractAnswerKey(answerSection: string): Map<number, string> {
     const answerKey = new Map<number, string>()
     if (!answerSection) return answerKey
@@ -896,6 +966,7 @@ function parseQuestionBlock(
     block: StructuredQuestionBlock,
     answerKey: Map<number, string>,
     detailedAnswers: Map<number, StructuredAnswerDetail>,
+    genericStemHint?: string | null,
 ): ParsedStructuredQuestion {
     const rawLines = block.rawLines
         .map(line => line.trim())
@@ -937,6 +1008,7 @@ function parseQuestionBlock(
     let answerHintUsed = Boolean(firstLine.inlineAnswerId)
     let answerSeen = false
     let activeStatement = false
+    let answerSource: GeneratedQuestion['answerSource'] = firstLine.inlineAnswerId ? 'INLINE_ANSWER' : 'INFERRED'
 
     for (const option of inlineOptions?.options ?? []) {
         options.set(option.optionId, option.text)
@@ -1048,6 +1120,7 @@ function parseQuestionBlock(
         if (answerMatch) {
             correctOptionId = normalizeAnswerIdent(answerMatch[1])
             answerHintUsed = true
+            answerSource = 'INLINE_ANSWER'
             // Some coaching PDFs put "Answer: ..." before the actual option block.
             // Only freeze further option parsing once the full choice set is already present.
             answerSeen = options.size >= 4
@@ -1188,6 +1261,7 @@ function parseQuestionBlock(
                 if (/\((?:correct)\)|\[(?:correct)\]|✓|✅/i.test(optionResult.text)) {
                     correctOptionId = optionResult.optionId
                     answerHintUsed = true
+                    answerSource = 'INLINE_ANSWER'
                 }
 
                 options.set(optionResult.optionId, optionText)
@@ -1231,20 +1305,21 @@ function parseQuestionBlock(
     }
 
     const detailedAnswer = detailedAnswers.get(firstLine.questionNumber)
-    if (!correctOptionId) {
-        const detailedCorrectOptionId = detailedAnswer?.correctOptionId
-        const keyedAnswer = detailedCorrectOptionId || answerKey.get(firstLine.questionNumber)
-        if (keyedAnswer) {
-            correctOptionId = keyedAnswer
-            answerHintUsed = true
+        if (!correctOptionId) {
+            const detailedCorrectOptionId = detailedAnswer?.correctOptionId
+            const keyedAnswer = detailedCorrectOptionId || answerKey.get(firstLine.questionNumber)
+            if (keyedAnswer) {
+                correctOptionId = keyedAnswer
+                answerHintUsed = true
+                answerSource = 'ANSWER_KEY'
+            }
         }
-    }
 
     if (!explanation && detailedAnswer?.explanation) {
         explanation = detailedAnswer.explanation
     }
 
-    const normalizedStemText = normalizeStem(stemParts.join(' '))
+    const normalizedStemText = normalizeStem(stemParts.join(' ')) || normalizeStem(genericStemHint ?? '')
     const isAssertionReasonQuestion = /assertion\s*[:(]/i.test(normalizedStemText) && /reason\s*[:(]/i.test(normalizedStemText)
 
     if (options.size === 0 && isAssertionReasonQuestion) {
@@ -1268,6 +1343,18 @@ function parseQuestionBlock(
         difficulty: difficulty || guessDifficulty(normalizedStemText),
         topic: topic || detectTopic(normalizedStemText),
         sharedContext: normalizeSharedContextText(sharedContextParts.join('\n')),
+        sourcePage: null,
+        sourceSnippet: truncateEvidenceText(block.blockText),
+        answerSource,
+        confidence: normalizeConfidenceScore(
+            answerSource === 'ANSWER_KEY'
+                ? 0.98
+                : answerSource === 'INLINE_ANSWER'
+                    ? 0.95
+                    : 0.8
+        ),
+        sharedContextEvidence: truncateEvidenceText(sharedContextParts.join('\n')),
+        extractionMode: 'TEXT_EXACT',
     }
 
     return {
@@ -1308,6 +1395,7 @@ function buildStructuredExtractionContext(text: string): StructuredExtractionCon
     const normalizedText = normalizeDocumentText(text)
     const { questionSection, answerSection } = splitDocumentSections(normalizedText)
     const collectedBlocks = collectStructuredQuestionBlocks(questionSection)
+    const genericStemHint = deriveGenericStemHint(questionSection)
     const answerKey = extractAnswerKey(answerSection)
     const detailedAnswers = extractDetailedAnswerRecords(answerSection)
 
@@ -1328,7 +1416,7 @@ function buildStructuredExtractionContext(text: string): StructuredExtractionCon
     let answerHintCount = 0
 
     for (const block of questionBlocks.values()) {
-        const parsedQuestion = parseQuestionBlock(block, answerKey, detailedAnswers)
+        const parsedQuestion = parseQuestionBlock(block, answerKey, detailedAnswers, genericStemHint)
         if (parsedQuestion.answerHintUsed) {
             answerHintCount++
         }
@@ -1375,6 +1463,7 @@ function buildStructuredExtractionContext(text: string): StructuredExtractionCon
         answerSection,
         questionBlocks,
         parsedQuestions,
+        genericStemHint,
         analysis: {
             detectedAsMcqDocument,
             answerHintCount,
@@ -2177,6 +2266,16 @@ function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | nul
         difficulty: normalizeDifficultyLabel(question.difficulty),
         topic: normalizeTopicLabel(question.topic, normalizedStem),
         sharedContext: normalizeSharedContextText(question.sharedContext),
+        sourcePage: Number.isInteger(question.sourcePage) && Number(question.sourcePage) > 0
+            ? Number(question.sourcePage)
+            : null,
+        sourceSnippet: truncateEvidenceText(question.sourceSnippet),
+        answerSource: question.answerSource ?? null,
+        confidence: typeof question.confidence === 'number'
+            ? normalizeConfidenceScore(question.confidence)
+            : null,
+        sharedContextEvidence: truncateEvidenceText(question.sharedContextEvidence),
+        extractionMode: question.extractionMode ?? null,
     }
 
     const parsed = McqQuestionSchema.safeParse(normalizedQuestion)
@@ -2210,85 +2309,14 @@ function validateQuestion(q: GeneratedQuestion): boolean {
 export function verifyExtractedQuestions(
     questions: GeneratedQuestion[],
     expectedCount: number | null,
+    context?: VerificationContext,
 ): VerificationResult {
-    const issues: VerificationResult['issues'] = []
-    const seenStems = new Map<string, number>()
-    let validQuestions = 0
-
-    if (expectedCount !== null && questions.length !== expectedCount) {
-        issues.push({
-            questionNumber: 0,
-            issue: `Expected ${expectedCount} questions, got ${questions.length} (count mismatch)`,
-        })
-    }
-
-    for (let index = 0; index < questions.length; index += 1) {
-        const question = questions[index]
-        const questionNumber = index + 1
-        let isValid = true
-
-        const rawStemKey = typeof question.stem === 'string'
-            ? question.stem.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 120)
-            : ''
-        const duplicateOf = rawStemKey ? seenStems.get(rawStemKey) : undefined
-        if (duplicateOf) {
-            issues.push({
-                questionNumber,
-                issue: `Duplicate stem (same as question ${duplicateOf})`,
-            })
-            isValid = false
-        } else if (rawStemKey) {
-            seenStems.set(rawStemKey, questionNumber)
-        }
-
-        const validatedQuestion = toValidatedGeneratedQuestion(question)
-        if (!validatedQuestion) {
-            issues.push({
-                questionNumber,
-                issue: 'Question failed structured validation',
-            })
-            continue
-        }
-
-        const correctCount = validatedQuestion.options.filter((option) => option.isCorrect).length
-        if (validatedQuestion.options.length !== 4) {
-            issues.push({
-                questionNumber,
-                issue: `Has ${validatedQuestion.options.length} options instead of 4`,
-            })
-            isValid = false
-        }
-
-        if (correctCount !== 1) {
-            issues.push({
-                questionNumber,
-                issue: `Has ${correctCount} correct options instead of 1`,
-            })
-            isValid = false
-        }
-
-        if (
-            /\b(?:following|above|below)\s+(?:table|data|chart|graph|passage|information)\b|\b(?:table|data|chart|graph|passage|information)\s+(?:given|shown|below|above)\b|\blist i\b|\blist ii\b/i.test(validatedQuestion.stem)
-            && !normalizeSharedContextText(validatedQuestion.sharedContext)
-        ) {
-            issues.push({
-                questionNumber,
-                issue: 'Question references shared source material but has no shared context attached',
-            })
-            isValid = false
-        }
-
-        if (isValid) {
-            validQuestions += 1
-        }
-    }
-
-    return {
-        totalQuestions: questions.length,
-        validQuestions,
-        issues,
-        passed: issues.length === 0,
-    }
+    return verifyExtractedQuestionsV2(
+        questions,
+        expectedCount,
+        toValidatedGeneratedQuestion,
+        context,
+    )
 }
 
 // ── Deduplicate questions by stem similarity ──
@@ -2643,6 +2671,194 @@ Return strict JSON with a top-level "questions" array only.`,
             questions: [],
             failedCount: Math.max(1, expectedCount),
             cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+        }
+    } finally {
+        await pdf.cleanup()
+    }
+}
+
+function normalizeVisualReferences(rawReferences: unknown) {
+    if (!Array.isArray(rawReferences)) {
+        return []
+    }
+
+    const references = rawReferences
+        .map((reference) => VisualReferenceExtractionSchema.safeParse(reference))
+        .filter((parsed): parsed is { success: true; data: import('@/lib/services/ai-extraction-schemas').VisualReferenceExtraction } => parsed.success)
+        .map(({ data }) => ({
+            questionNumber: data.questionNumber,
+            sharedContext: normalizeSharedContextText(data.sharedContext) ?? data.sharedContext,
+            sourcePage: Number.isInteger(data.sourcePage) && Number(data.sourcePage) > 0 ? Number(data.sourcePage) : null,
+            sourceSnippet: truncateEvidenceText(data.sourceSnippet),
+            sharedContextEvidence: truncateEvidenceText(data.sharedContextEvidence ?? data.sourceSnippet),
+            confidence: typeof data.confidence === 'number' ? normalizeConfidenceScore(data.confidence) : null,
+        }))
+        .filter((reference) => Boolean(reference.sharedContext))
+
+    const referencesByQuestion = new Map<number, (typeof references)[number]>()
+    for (const reference of references) {
+        const previous = referencesByQuestion.get(reference.questionNumber)
+        if (!previous || (reference.sharedContext?.length ?? 0) > (previous.sharedContext?.length ?? 0)) {
+            referencesByQuestion.set(reference.questionNumber, reference)
+        }
+    }
+
+    return Array.from(referencesByQuestion.values()).sort((left, right) => left.questionNumber - right.questionNumber)
+}
+
+async function loadCanvasModuleDynamically(): Promise<CanvasModule> {
+    const dynamicImport = new Function('modulePath', 'return import(modulePath)') as (modulePath: string) => Promise<CanvasModule>
+    return dynamicImport('@napi-rs/canvas')
+}
+
+export async function extractVisualReferencesFromPdfImages(
+    buffer: Buffer,
+    auditUserId?: string,
+    fileName: string = 'uploaded.pdf',
+): Promise<VisualReferenceExtractionResult> {
+    if (!openai) {
+        return {
+            error: true,
+            message: 'OpenAI API key not configured. Please set OPENAI_API_KEY.',
+            pageCount: 0,
+            chunkCount: 0,
+            references: [],
+        }
+    }
+
+    const { extractText, getDocumentProxy, renderPageAsImage } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(buffer))
+    const model = 'gpt-4o'
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+
+    try {
+        const pageCount = pdf.numPages
+        if (pageCount === 0) {
+            return {
+                error: true,
+                message: 'PDF has no pages available for visual-reference extraction.',
+                pageCount: 0,
+                chunkCount: 0,
+                references: [],
+            }
+        }
+
+        const textResult = await extractText(pdf, { mergePages: false }).catch(() => ({ text: [] as string[] }))
+        const pageTexts = Array.isArray(textResult.text) ? textResult.text : [textResult.text]
+        const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
+        const pageChunks = chunkArray(pageNumbers, 2)
+        const extractedReferences: ReturnType<typeof normalizeVisualReferences> = []
+        let chunkFailures = 0
+        let lastFailure: AIChunkFailure | null = null
+
+        for (const pageChunk of pageChunks) {
+            const userContent: Array<
+                | { type: 'input_text'; text: string }
+                | { type: 'input_image'; image_url: string; detail: 'auto' }
+            > = [
+                {
+                    type: 'input_text',
+                    text: `Extract only visual-reference context from these CUET mock-test PDF pages.
+
+Rules:
+- Return only question numbers that depend on a visual, figure, Venn diagram, embedded image, chart, graph, map, or non-linear visual prompt.
+- Do not return normal text-only questions.
+- sharedContext must capture only the visual information a student must see before answering.
+- sourcePage must identify the page the visual appears on.
+- sourceSnippet should quote a short OCR/instruction snippet that proves the visual belongs to that question set.
+- sharedContextEvidence should briefly explain what visual cue is being carried into the question.
+- confidence should be between 0 and 1.
+- If no question on these pages depends on a visual reference, return an empty references array.
+- Never invent answer choices, question stems, or question numbers.`,
+                },
+            ]
+
+            for (const pageNumber of pageChunk) {
+                const pageText = normalizeDocumentText(pageTexts[pageNumber - 1] ?? '')
+                const imageUrl = await renderPageAsImage(pdf, pageNumber, {
+                    canvasImport: loadCanvasModuleDynamically,
+                    scale: 1.65,
+                    toDataURL: true,
+                })
+
+                userContent.push({
+                    type: 'input_text',
+                    text: `Page ${pageNumber} OCR excerpt:\n${truncateForPrompt(pageText, 1800) ?? 'No OCR text available.'}`,
+                })
+                userContent.push({
+                    type: 'input_image',
+                    image_url: imageUrl,
+                    detail: 'auto',
+                })
+            }
+
+            try {
+                const response = await openai.responses.parse({
+                    model,
+                    temperature: 0,
+                    max_output_tokens: 2500,
+                    input: [
+                        {
+                            role: 'system',
+                            content: 'You extract only visual-reference context from uploaded CUET mock-test PDF pages and return strict structured output.',
+                        },
+                        {
+                            role: 'user',
+                            content: userContent,
+                        },
+                    ],
+                    text: {
+                        format: zodTextFormat(
+                            VisualReferenceExtractionResponseSchema,
+                            'visual_reference_extraction_response',
+                        ),
+                    },
+                })
+
+                const cost = calculateCost(model, response.usage)
+                totalCost.inputTokens += cost.inputTokens
+                totalCost.outputTokens += cost.outputTokens
+                totalCost.costUSD += cost.costUSD
+
+                const parsedReferences = VisualReferenceExtractionResponseSchema.safeParse(response.output_parsed)
+                if (parsedReferences.success) {
+                    extractedReferences.push(
+                        ...normalizeVisualReferences(parsedReferences.data.references),
+                    )
+                }
+            } catch (error) {
+                chunkFailures += 1
+                lastFailure = toAIChunkFailure(error)
+                console.error('[AI] Visual-reference extraction failed for page chunk:', pageChunk, error)
+            }
+        }
+
+        if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
+            await logCostToAudit(auditUserId, 'AI_VISUAL_REFERENCE_EXTRACT', totalCost)
+        }
+
+        const references = normalizeVisualReferences(extractedReferences)
+        if (references.length === 0 && chunkFailures > 0) {
+            return {
+                error: true,
+                message: lastFailure?.message ?? 'Visual-reference extraction could not recover any usable diagram context.',
+                pageCount,
+                chunkCount: pageChunks.length,
+                references: [],
+                cost: totalCost,
+            }
+        }
+
+        return {
+            references,
+            pageCount,
+            chunkCount: pageChunks.length,
+            cost: totalCost,
+            ...(chunkFailures > 0
+                ? {
+                    message: `Visual-reference extraction skipped ${chunkFailures} page chunk(s) while recovering diagram context.`,
+                }
+                : {}),
         }
     } finally {
         await pdf.cleanup()

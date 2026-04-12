@@ -1,4 +1,9 @@
-import type { VerificationResult } from '@/lib/services/ai-extraction-schemas'
+import type {
+    AnswerSource,
+    ExtractionMode,
+    VerificationResult,
+    VisualReferenceExtraction,
+} from '@/lib/services/ai-extraction-schemas'
 
 export interface GeneratedQuestion {
     stem: string
@@ -7,6 +12,12 @@ export interface GeneratedQuestion {
     difficulty: string
     topic: string
     sharedContext?: string | null
+    sourcePage?: number | null
+    sourceSnippet?: string | null
+    answerSource?: AnswerSource | null
+    confidence?: number | null
+    sharedContextEvidence?: string | null
+    extractionMode?: ExtractionMode | null
 }
 
 export interface CostInfo {
@@ -56,4 +67,13 @@ export interface PdfVisionFallbackResult {
     pageCount: number
     chunkCount: number
     verification?: VerificationResult
+}
+
+export interface VisualReferenceExtractionResult {
+    references?: VisualReferenceExtraction[]
+    cost?: CostInfo
+    error?: boolean
+    message?: string
+    pageCount: number
+    chunkCount: number
 }
