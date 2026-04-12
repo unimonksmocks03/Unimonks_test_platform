@@ -145,6 +145,57 @@ Alfred Binet was the first psychologist to:
 (d) Study twins for intelligence research
 `
 
+const emojiAnswerOutlierMcqText = `
+SECTIONAL MOCKTEST
+REASONING
+
+Q1. Archipelago : Islands :: Constellation : ?
+(a) Planets
+(b) Galaxies
+(c) Stars
+(d) Meteors
+✅ Answer: (c) Stars
+Explanation: An Archipelago is a cluster/group of Islands, similarly a Constellation is a group of Stars.
+
+Q2. 7 : 350 :: 9 : ?
+(a) 729
+(b) 810
+(c) 738
+(d) 576
+✅ Answer: (c) 738
+Explanation: 7 × (7² + 1) = 7 × 50 = 350. Similarly, 9 × (9² + 1) = 9 × 82 = 738.
+
+Q3. 3 : 364 :: 4 : ?
+(a) 1365
+(b) 1264
+(c) 1024
+(d) 1285
+✅ Answer: (a) 1365
+Explanation: 3⁶ − 3⁵ = 729 − 365? No. Let me think: 3 → 364. 364 = 3 + 3² + 3³ + 3⁴ + 3⁵ = 3+9+27+81+243 =
+363. That's 363 not 364. Try: 3⁶ − 5 = 724. Or 364 = (3⁶−1)/2 = 728/2 = 364 ✓! So pattern is (n⁶−1)/2. For
+n=4: (4⁶−1)/2 = (4096−1)/2 = 4095/2 = 2047.5 — not integer. Try: 364 = 3⁵ + 3⁴ + 3³ + 3² + 3 + 1 =
+243+81+27+9+3+1 = 364 ✓. This is (3⁶−1)/(3−1) = (729−1)/2 = 364 ✓. Similarly for 4: (4⁶−1)/(4−1) =
+(4096−1)/3 = 4095/3 = 1365 ✓!
+Pattern: (n⁶ − 1)/(n − 1) which equals 1 + n + n² + n³ + n⁴ + n⁵.
+
+Q4. 15 : 474 :: 18 : ?
+(a) 306
+(b) 324
+(c) 342
+(d) 360
+✅ REVISED Answer: (c) 342
+Explanation: 15 → 474 and 18 → 342 follow the revised answer key entry in this mock.
+
+Q5. Cygnet : Swan :: Leveret : ?
+(a) Fox
+(b) Hare
+(c) Deer
+(d) Rabbit
+✅ Answer: (b) Hare
+Explanation: Cygnet is the young one of a Swan, similarly Leveret is the young one of a Hare. Major trap:
+(d) Rabbit — a baby rabbit is called a "kit/kitten," NOT a leveret. Leveret specifically refers to a young Hare.
+`
+
 const humanGeoDocxLikeMcqText = `
 45 Minutes
 Section A
@@ -852,6 +903,31 @@ test('extractQuestionsFromDocumentText handles Ques-N prefix, Answer-N inline an
     // Q5 – hyphenated chemical name "2-methylprop-1-ene" split across PDF lines
     expect(analysis.questions[4]?.stem).toContain('2-methylprop-1-ene instead of an ether')
     expect(analysis.questions[4]?.options.find((o) => o.isCorrect)?.id).toBe('A')
+})
+
+test('extractQuestionsFromDocumentText keeps emoji answer lines and explanation numbers inside the current block', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(emojiAnswerOutlierMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.candidateBlockCount).toBe(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.answerHintCount).toBe(5)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.missingQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.options.find((option) => option.isCorrect)?.id).toBe('C')
+    expect(analysis.questions[0]?.options[3]?.text).toBe('Meteors')
+    expect(analysis.questions[2]?.options.find((option) => option.isCorrect)?.id).toBe('A')
+    expect(analysis.questions[2]?.explanation).toContain("That's 363 not 364")
+    expect(analysis.questions[3]?.options.find((option) => option.isCorrect)?.id).toBe('C')
+    expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+    expect(analysis.questions[4]?.options[3]?.text).toBe('Rabbit')
 })
 
 test('chunkDocumentTextForGeneration advances through the tail chunk without repeating forever', async () => {

@@ -7,6 +7,7 @@ export interface GeneratedQuestion {
     difficulty: string
     topic: string
     sharedContext?: string | null
+    answerSource?: 'INLINE_ANSWER' | 'ANSWER_KEY' | 'INFERRED'
 }
 
 export interface CostInfo {
