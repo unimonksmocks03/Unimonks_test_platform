@@ -8,11 +8,13 @@ vi.stubEnv('OPENAI_API_KEY', process.env.OPENAI_API_KEY ?? 'test-openai-key')
 
 const {
     mockResponsesParse,
+    mockChatCreate,
     mockGetDocumentProxy,
     mockRenderPageAsImage,
     mockExtractText,
 } = vi.hoisted(() => ({
     mockResponsesParse: vi.fn(),
+    mockChatCreate: vi.fn(),
     mockGetDocumentProxy: vi.fn(),
     mockRenderPageAsImage: vi.fn(),
     mockExtractText: vi.fn(),
@@ -21,7 +23,7 @@ const {
 vi.mock('openai', () => ({
     default: class {
         responses = { parse: mockResponsesParse }
-        chat = { completions: { create: vi.fn() } }
+        chat = { completions: { create: mockChatCreate } }
     },
 }))
 
@@ -104,6 +106,44 @@ test('extractQuestionsFromPdfMultimodal sends the PDF to GPT-4o responses.parse 
             }),
         }),
     )
+})
+
+test('verifyExtractedQuestionsWithAI preserves global question numbering across batches', async () => {
+    const { verifyExtractedQuestionsWithAI } = await aiServicePromise
+
+    mockChatCreate.mockReset()
+    mockChatCreate
+        .mockResolvedValueOnce({
+            choices: [{ message: { content: JSON.stringify({ issues: [], overallAssessment: 'Batch 1 OK', confidence: 0.95 }) } }],
+            usage: { prompt_tokens: 100, completion_tokens: 20 },
+        })
+        .mockResolvedValueOnce({
+            choices: [{
+                message: {
+                    content: JSON.stringify({
+                        issues: [
+                            {
+                                questionNumber: 1,
+                                issue: 'Missing context for the referenced passage.',
+                                category: 'CROSS',
+                                severity: 'WARNING',
+                                code: 'AI_CHECK_MISSING_CONTEXT',
+                            },
+                        ],
+                        overallAssessment: 'Batch 2 found one issue.',
+                        confidence: 0.72,
+                    }),
+                },
+            }],
+            usage: { prompt_tokens: 110, completion_tokens: 22 },
+        })
+
+    const questions = Array.from({ length: 16 }, (_, index) => createVerifiedQuestion(`Question ${index + 1}`))
+    const result = await verifyExtractedQuestionsWithAI(questions, 'gpt-4o-mini')
+
+    expect(result.error).toBeUndefined()
+    expect(result.issues).toHaveLength(1)
+    expect(result.issues[0]?.questionNumber).toBe(16)
 })
 
 test('verifyExtractedQuestions passes for a valid 50-question set', async () => {

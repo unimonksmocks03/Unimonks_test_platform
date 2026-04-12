@@ -5,6 +5,7 @@ import type {
     VerificationResult,
 } from '@/lib/services/ai-extraction-schemas'
 import type {
+    AIVerificationResult,
     ExtractedQuestionAnalysis,
     GeneratedQuestion,
 } from '@/lib/services/ai-service.types'
@@ -553,6 +554,47 @@ export function verifyExtractedQuestionsV2(
         issues,
         passed: issueSummary.errors === 0,
         reviewRecommended: issues.length > 0,
+        issueSummary,
+    }
+}
+
+export function mergeAIVerificationIssues(
+    codeVerification: VerificationResult,
+    aiVerification: AIVerificationResult,
+): VerificationResult {
+    if (aiVerification.issues.length === 0) {
+        return codeVerification
+    }
+
+    // Deduplicate: skip AI issues where code already flagged the same question + category
+    const existingKeys = new Set(
+        codeVerification.issues.map(issue => `${issue.questionNumber}:${issue.category}`),
+    )
+
+    const newAIIssues = aiVerification.issues.filter(issue => {
+        const key = `${issue.questionNumber}:${issue.category}`
+        return !existingKeys.has(key)
+    })
+
+    if (newAIIssues.length === 0) {
+        return codeVerification
+    }
+
+    const mergedIssues = [...codeVerification.issues, ...newAIIssues]
+    const issueSummary = {
+        structural: mergedIssues.filter(i => i.category === 'STRUCTURAL').length,
+        evidence: mergedIssues.filter(i => i.category === 'EVIDENCE').length,
+        cross: mergedIssues.filter(i => i.category === 'CROSS').length,
+        errors: mergedIssues.filter(i => i.severity === 'ERROR').length,
+        warnings: mergedIssues.filter(i => i.severity === 'WARNING').length,
+    }
+
+    return {
+        totalQuestions: codeVerification.totalQuestions,
+        validQuestions: codeVerification.validQuestions,
+        issues: mergedIssues,
+        passed: issueSummary.errors === 0,
+        reviewRecommended: mergedIssues.length > 0,
         issueSummary,
     }
 }

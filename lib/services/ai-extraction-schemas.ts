@@ -94,5 +94,12 @@ export type VerificationIssue = z.infer<typeof VerificationIssueSchema>
 export type VerificationResult = z.infer<typeof VerificationResultSchema>
 export type ExtractionMode = z.infer<typeof ExtractionModeSchema>
 export type AnswerSource = z.infer<typeof AnswerSourceSchema>
+export const AIVerificationResponseSchema = z.object({
+    issues: z.array(VerificationIssueSchema),
+    overallAssessment: z.string().trim().min(1),
+    confidence: z.number().min(0).max(1),
+})
+
+export type AIVerificationResponse = z.infer<typeof AIVerificationResponseSchema>
 export type VerificationIssueCategory = z.infer<typeof VerificationIssueCategorySchema>
 export type VerificationIssueSeverity = z.infer<typeof VerificationIssueSeveritySchema>

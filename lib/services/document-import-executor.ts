@@ -227,7 +227,7 @@ function shouldPreferExactExtraction(
     return false
 }
 
-export async function executeDocumentImportPlan(
+async function executeDocumentImportPlanCore(
     input: ExecuteDocumentImportPlanInput,
     handlers: ExecuteDocumentImportPlanHandlers,
 ): Promise<DocumentImportExecutionResult> {
@@ -544,4 +544,54 @@ export async function executeDocumentImportPlan(
         needsAdminReview: false,
         reviewIssueCount: 0,
     }
+}
+
+export async function executeDocumentImportPlan(
+    input: ExecuteDocumentImportPlanInput,
+    handlers: ExecuteDocumentImportPlanHandlers,
+): Promise<DocumentImportExecutionResult> {
+    const baseResult = await executeDocumentImportPlanCore(input, handlers)
+
+    if (
+        baseResult.useLegacyFlow
+        || baseResult.failure
+        || !baseResult.result?.questions?.length
+        || !input.plan.visualReferenceOverlay
+    ) {
+        return baseResult
+    }
+
+    // Already merged during the HYBRID_RECONCILE + visualReferenceOverlay path
+    if (
+        input.plan.selectedStrategy === 'HYBRID_RECONCILE'
+        && baseResult.strategy === 'EXTRACTED'
+        && baseResult.extracted
+    ) {
+        return baseResult
+    }
+
+    try {
+        const visualReferences = await handlers.extractVisualReferences()
+        if (visualReferences.references && visualReferences.references.length > 0) {
+            const mergedQuestions = mergeVisualReferencesIntoQuestions(
+                baseResult.result.questions,
+                visualReferences.references,
+            )
+            return {
+                ...baseResult,
+                result: {
+                    ...baseResult.result,
+                    questions: mergedQuestions,
+                },
+                aiFallbackUsed: baseResult.aiFallbackUsed || true,
+                warning: baseResult.warning
+                    ? `${baseResult.warning} Visual references were also extracted and merged for ${visualReferences.references.length} question(s).`
+                    : `Visual references were extracted and merged for ${visualReferences.references.length} question(s).`,
+            }
+        }
+    } catch (error) {
+        console.warn('[IMPORT] Post-extraction visual reference merge failed:', error)
+    }
+
+    return baseResult
 }

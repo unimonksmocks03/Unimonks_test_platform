@@ -170,7 +170,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     } else if (hasTables || hasPassages || isMixedLayout) {
         preferredStrategy = 'MULTIMODAL_EXTRACT'
     } else if (hasMatchFollowing || hasAssertionReason) {
-        preferredStrategy = 'HYBRID_RECONCILE'
+        preferredStrategy = 'MULTIMODAL_EXTRACT'
     } else {
         preferredStrategy = 'TEXT_EXACT'
     }

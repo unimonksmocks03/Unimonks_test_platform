@@ -1,6 +1,7 @@
 import type {
     AnswerSource,
     ExtractionMode,
+    VerificationIssue,
     VerificationResult,
     VisualReferenceExtraction,
 } from '@/lib/services/ai-extraction-schemas'
@@ -52,9 +53,22 @@ export interface PreciseDocumentQuestionAnalysis extends ExtractedQuestionAnalys
 export interface DocumentMetadataEnrichmentResult {
     questions: GeneratedQuestion[]
     description: string
+    suggestedTitle?: string | null
+    suggestedDurationMinutes?: number | null
+    primaryTopic?: string | null
+    difficultyDistribution?: { easy: number; medium: number; hard: number } | null
     aiUsed: boolean
     cost?: CostInfo
     warning?: string
+}
+
+export interface AIVerificationResult {
+    issues: VerificationIssue[]
+    overallAssessment: string
+    confidence: number
+    cost?: CostInfo
+    error?: boolean
+    message?: string
 }
 
 export interface PdfVisionFallbackResult {

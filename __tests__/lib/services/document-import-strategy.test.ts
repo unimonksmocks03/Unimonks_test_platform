@@ -50,7 +50,7 @@ test('resolveDocumentImportPlan promotes risky table-heavy PDFs to multimodal-fi
     expect(plan.generateFromSource).toBe(false)
 })
 
-test('resolveDocumentImportPlan preserves hybrid reconcile for match-following and assertion papers', () => {
+test('resolveDocumentImportPlan routes match-following and assertion papers to multimodal-first PDFs', () => {
     const classification = classifyDocumentForImport({
         fileName: 'psychology-1.pdf',
         text: answerInHeaderPsychologyMcqText,
@@ -62,8 +62,8 @@ test('resolveDocumentImportPlan preserves hybrid reconcile for match-following a
         isPdfUpload: true,
     })
 
-    expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
-    expect(plan.runMultimodalFirst).toBe(false)
+    expect(plan.selectedStrategy).toBe('MULTIMODAL_EXTRACT')
+    expect(plan.runMultimodalFirst).toBe(true)
     expect(plan.visualReferenceOverlay).toBe(false)
     expect(plan.generateFromSource).toBe(false)
 })

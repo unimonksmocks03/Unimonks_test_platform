@@ -36,7 +36,7 @@ test('classifyDocumentForImport keeps answer-key heavy docx mocks in text-exact 
     expect(result.layoutRisk).toBe('LOW')
 })
 
-test('classifyDocumentForImport routes assertion and match-following papers to hybrid reconcile', () => {
+test('classifyDocumentForImport routes assertion and match-following papers to multimodal extraction', () => {
     const result = classifyDocumentForImport({
         fileName: 'sectional-mocktest-psychology-1.pdf',
         text: answerInHeaderPsychologyMcqText,
@@ -45,7 +45,7 @@ test('classifyDocumentForImport routes assertion and match-following papers to h
     expect(result.documentType).toBe('MCQ_PAPER')
     expect(result.hasAssertionReason).toBe(true)
     expect(result.hasMatchFollowing).toBe(true)
-    expect(result.preferredStrategy).toBe('HYBRID_RECONCILE')
+    expect(result.preferredStrategy).toBe('MULTIMODAL_EXTRACT')
     expect(result.layoutRisk).toBe('MEDIUM')
 })
 

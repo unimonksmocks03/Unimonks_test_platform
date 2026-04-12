@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import { zodTextFormat } from 'openai/helpers/zod'
 
 import {
+    AIVerificationResponseSchema,
     McqExtractionResponseSchema,
     McqQuestionSchema,
     type VerificationResult,
@@ -15,6 +16,7 @@ import {
 } from '@/lib/services/import-verifier'
 import { prisma } from '@/lib/prisma'
 import type {
+    AIVerificationResult,
     CostInfo,
     DocumentMetadataEnrichmentResult,
     ExtractedQuestionAnalysis,
@@ -25,6 +27,7 @@ import type {
 } from '@/lib/services/ai-service.types'
 
 export type {
+    AIVerificationResult,
     CostInfo,
     DocumentMetadataEnrichmentResult,
     DocumentQuestionStrategy,
@@ -1729,12 +1732,32 @@ async function extractQuestionsFromTextWithAI(
 
 TASK: If the text contains pre-existing multiple-choice questions (MCQs), extract them faithfully. Do NOT create new questions.
 
+FORMAT HANDLING:
+
+1. MATCH-THE-FOLLOWING: Look for "List I / List II", "Column A / Column B", or similar pairing tables.
+   Include the complete matching table in the stem. Preserve option combinations like "a-i, b-ii, c-iii, d-iv".
+   Also include the table in "sharedContext".
+
+2. ASSERTION-REASON: Look for "Assertion (A):" and "Reason (R):" pairs.
+   Include BOTH assertion and reason text in the stem.
+   Standard options: (A) Both true, R explains A / (B) Both true, R does not explain A / (C) A true, R false / (D) A false, R true.
+
+3. STATEMENT-COMBINATION: Look for "Consider the following statements: I. ... II. ..."
+   Include all statements in the stem. Options combine statement numbers.
+
+4. PASSAGE-BASED: If questions reference a shared passage, table, or case study, include it in "sharedContext".
+
+5. HORIZONTAL ANSWER KEYS: Some documents list answers in table format at the end (e.g., "1-B  2-A  3-C").
+   Use these to determine the correct option for each question.
+
 If MCQs are present:
 - Extract each question stem exactly as written (preserve multi-line stems, assertion/reason pairs, numbered statements, etc.)
 - Extract all answer options exactly as written; label them A, B, C, D in order
 - Determine the correct answer from any answer key, "Answer:", "Ans:", or inline answer markers
 - Use the provided explanation if present; otherwise write a brief one
 - Infer difficulty (EASY/MEDIUM/HARD) and a short topic tag
+- Set "answerSource" to "ANSWER_KEY", "INLINE_ANSWER", or "INFERRED"
+- Set "confidence" (0-1) based on how certain you are of the extraction accuracy
 
 If the document is theory, notes, or contains no MCQs, return: {"questions": []}
 
@@ -1751,7 +1774,10 @@ Return strict JSON only — no markdown, no prose:
       ],
       "explanation": "...",
       "difficulty": "EASY",
-      "topic": "short topic tag"
+      "topic": "short topic tag",
+      "sharedContext": "passage or table text if applicable, otherwise null",
+      "answerSource": "ANSWER_KEY",
+      "confidence": 0.95
     }
   ]
 }
@@ -1998,10 +2024,21 @@ Current difficulty hint: ${normalizeDifficultyLabel(question.difficulty)}`).join
     }
 }
 
+interface DocumentSummaryResult {
+    description?: string
+    suggestedTitle?: string | null
+    suggestedDurationMinutes?: number | null
+    primaryTopic?: string | null
+    difficultyDistribution?: { easy: number; medium: number; hard: number } | null
+    cost?: CostInfo
+    error?: boolean
+    message?: string
+}
+
 async function summarizeDocumentQuestionSetWithAI(
     questions: GeneratedQuestion[],
     sourceLabel?: string,
-): Promise<{ description?: string; cost?: CostInfo; error?: boolean; message?: string }> {
+): Promise<DocumentSummaryResult> {
     if (!openai) {
         return {
             description: buildFallbackDocumentDescription(questions, sourceLabel),
@@ -2011,32 +2048,36 @@ async function summarizeDocumentQuestionSetWithAI(
     }
 
     const model = 'gpt-4o-mini'
-    const prompt = `You are writing a concise admin-facing description for a generated CUET mock test.
+    const hasPassageQuestions = questions.some(q => q.sharedContext && q.sharedContext.length > 100)
+    const prompt = `You are analyzing a set of extracted MCQ questions to generate test metadata.
 
-Write 2 short sentences, under 280 characters total, that summarize:
-- the overall syllabus coverage
-- the question style or difficulty profile
-
-Return strict JSON:
+Return strict JSON with ALL of these fields:
 {
-  "description": "..."
+  "description": "2 concise sentences under 280 chars summarizing syllabus coverage and question style",
+  "suggestedTitle": "A clear, specific test title under 80 characters based on the content (e.g., 'CUET General Test - Indian History & Polity')",
+  "suggestedDurationMinutes": <integer: estimated minutes based on question count, complexity, and reading load>,
+  "primaryTopic": "The dominant subject area (e.g., 'Indian History', 'General Science', 'Logical Reasoning')",
+  "difficultyDistribution": { "easy": <count>, "medium": <count>, "hard": <count> }
 }
 
 Rules:
-- Mention CUET naturally when appropriate.
-- Be specific, not generic marketing copy.
-- Do not mention parsing, AI, uploads, or engineering.
-- Focus on what the test covers.
+- suggestedTitle should be specific to the content, not generic. Mention the subject and exam type if clear.
+- suggestedDurationMinutes: use ~1.5 min per standard MCQ, ~2.5 min per passage-based or complex MCQ. Minimum 15 minutes.
+- difficultyDistribution must sum to the total question count (${questions.length}).
+- description: Be specific about topics covered. Do not mention parsing, AI, uploads, or engineering.
+- primaryTopic: Pick the single most dominant subject from the questions.
+${hasPassageQuestions ? '- This test has passage-based questions, so allocate extra time in suggestedDurationMinutes.' : ''}
 
 Source label: ${sourceLabel ?? 'uploaded document'}
+Total questions: ${questions.length}
 Questions:
-${questions.map((question, index) => `${index + 1}. [${normalizeDifficultyLabel(question.difficulty)}] ${normalizeTopicLabel(question.topic, question.stem)} — ${question.stem}${truncateForPrompt(question.sharedContext, 180) ? ` | Shared context: ${truncateForPrompt(question.sharedContext, 180)}` : ''}`).join('\n')}`
+${questions.map((question, index) => `${index + 1}. [${normalizeDifficultyLabel(question.difficulty)}] ${normalizeTopicLabel(question.topic, question.stem)} — ${question.stem.slice(0, 120)}${truncateForPrompt(question.sharedContext, 80) ? ' [has shared context]' : ''}`).join('\n')}`
 
     try {
         const response = await openai.chat.completions.create({
             model,
             temperature: 0.2,
-            max_tokens: 220,
+            max_tokens: 400,
             response_format: { type: 'json_object' },
             messages: [{ role: 'user', content: prompt }],
         })
@@ -2046,15 +2087,39 @@ ${questions.map((question, index) => `${index + 1}. [${normalizeDifficultyLabel(
             return { description: buildFallbackDocumentDescription(questions, sourceLabel), error: true, message: 'OpenAI returned an empty document summary response.' }
         }
 
-        const parsed = JSON.parse(content) as { description?: string }
-        const description = parsed.description
-            ?.replace(/\s+/g, ' ')
-            .trim()
+        const parsed = JSON.parse(content) as {
+            description?: string
+            suggestedTitle?: string
+            suggestedDurationMinutes?: number
+            primaryTopic?: string
+            difficultyDistribution?: { easy?: number; medium?: number; hard?: number }
+        }
+
+        const description = parsed.description?.replace(/\s+/g, ' ').trim()
+        const suggestedTitle = parsed.suggestedTitle?.replace(/\s+/g, ' ').trim()
+        const suggestedDuration = typeof parsed.suggestedDurationMinutes === 'number'
+            ? Math.max(15, Math.min(300, Math.round(parsed.suggestedDurationMinutes)))
+            : null
+        const primaryTopic = parsed.primaryTopic?.replace(/\s+/g, ' ').trim() || null
+
+        const dist = parsed.difficultyDistribution
+        const difficultyDistribution = dist
+            && typeof dist.easy === 'number'
+            && typeof dist.medium === 'number'
+            && typeof dist.hard === 'number'
+            ? { easy: Math.max(0, dist.easy), medium: Math.max(0, dist.medium), hard: Math.max(0, dist.hard) }
+            : null
 
         return {
             description: description && description.length > 0
                 ? description.slice(0, 280)
                 : buildFallbackDocumentDescription(questions, sourceLabel),
+            suggestedTitle: suggestedTitle && suggestedTitle.length > 0
+                ? suggestedTitle.slice(0, 80)
+                : null,
+            suggestedDurationMinutes: suggestedDuration,
+            primaryTopic,
+            difficultyDistribution,
             cost: calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number }),
         }
     } catch (error) {
@@ -2130,6 +2195,10 @@ export async function enrichGeneratedQuestionsMetadata(input: {
     return {
         questions,
         description: descriptionResult.description ?? buildFallbackDocumentDescription(questions, input.sourceLabel),
+        suggestedTitle: descriptionResult.suggestedTitle ?? null,
+        suggestedDurationMinutes: descriptionResult.suggestedDurationMinutes ?? null,
+        primaryTopic: descriptionResult.primaryTopic ?? null,
+        difficultyDistribution: descriptionResult.difficultyDistribution ?? null,
         aiUsed: metadataOverrides.size > 0 || Boolean(descriptionResult.cost),
         cost: totalCost,
         warning: metadataWarning,
@@ -2632,6 +2701,135 @@ export async function generateQuestionsFromText(
     return { questions: allQuestions, failedCount: Math.max(0, failedCount), cost: totalCost }
 }
 
+// ── Cross-Model AI Verification ──
+export async function verifyExtractedQuestionsWithAI(
+    questions: GeneratedQuestion[],
+    extractionModel: string,
+    auditUserId?: string,
+): Promise<AIVerificationResult> {
+    if (!openai || questions.length === 0) {
+        return {
+            issues: [],
+            overallAssessment: questions.length === 0
+                ? 'No questions to verify.'
+                : 'OpenAI API key not configured. Skipping AI verification.',
+            confidence: 0,
+            error: !openai,
+            message: !openai ? 'OpenAI API key not configured.' : undefined,
+        }
+    }
+
+    // Cross-model: use the opposite model for independent verification
+    const model = extractionModel.includes('gpt-4o-mini') ? 'gpt-4o' : 'gpt-4o-mini'
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+    const allIssues: AIVerificationResult['issues'] = []
+
+    const batches = chunkArray(questions, 15)
+
+    for (const [batchIndex, batch] of batches.entries()) {
+        const batchStartQuestionNumber = batchIndex * 15
+        const questionsText = batch.map((q, i) => {
+            const questionNumber = batchStartQuestionNumber + i + 1
+            const correctOpt = q.options.find(o => o.isCorrect)
+            const optionsList = q.options.map(o => `  ${o.id}. ${o.text}${o.isCorrect ? ' [MARKED CORRECT]' : ''}`).join('\n')
+            return [
+                `Q${questionNumber}:`,
+                `  Stem: ${q.stem}`,
+                q.sharedContext ? `  Shared Context: ${truncateForPrompt(q.sharedContext, 500)}` : null,
+                `  Options:\n${optionsList}`,
+                `  Correct: ${correctOpt?.id ?? 'NONE'}`,
+                `  Explanation: ${truncateForPrompt(q.explanation, 200) ?? 'none'}`,
+                `  Difficulty: ${q.difficulty}`,
+                `  Topic: ${q.topic}`,
+            ].filter(Boolean).join('\n')
+        }).join('\n\n')
+
+        const prompt = `You are an independent quality verifier for extracted MCQ questions.
+A different AI model extracted these questions from an educational document. Your job is to find errors.
+
+CHECK EACH QUESTION FOR:
+1. STEM CLARITY: Is the stem a complete, understandable question? Flag fragments or garbled text.
+2. OPTION INTEGRITY: Are there exactly 4 distinct options? Are they meaningful (not empty/duplicate)?
+3. ANSWER CORRECTNESS: Does the marked correct answer actually appear correct given the stem and explanation? Flag suspicious answers.
+4. SHARED CONTEXT: If the stem references a "passage", "table", "following", "above" etc., is shared context present? Flag missing context.
+5. EXPLANATION QUALITY: Does the explanation logically support the marked correct answer?
+6. NUMBERING: Check for any numbering issues across questions.
+
+IMPORTANT:
+- Only flag genuine issues. Do not flag questions that look correct.
+- Use severity "WARNING" for all issues (never "ERROR").
+- Use category "CROSS" for all issues.
+- Prefix issue codes with "AI_CHECK_" (e.g., "AI_CHECK_WRONG_ANSWER", "AI_CHECK_MISSING_CONTEXT", "AI_CHECK_GARBLED_STEM", "AI_CHECK_DUPLICATE_OPTIONS", "AI_CHECK_BAD_EXPLANATION").
+- questionNumber must be the exact global question number shown in each block label (for example, if the block says "Q16", return questionNumber: 16).
+- If all questions look correct, return an empty issues array with high confidence.
+
+Questions to verify:
+${questionsText}
+
+Return strict JSON matching the schema.`
+
+        try {
+            const response = await openai.chat.completions.create({
+                model,
+                temperature: 0,
+                max_tokens: 3000,
+                response_format: { type: 'json_object' },
+                messages: [{ role: 'user', content: prompt }],
+            })
+
+            const content = response.choices[0]?.message?.content
+            const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
+            totalCost.inputTokens += cost.inputTokens
+            totalCost.outputTokens += cost.outputTokens
+            totalCost.costUSD += cost.costUSD
+
+            if (content) {
+                const parsed = AIVerificationResponseSchema.safeParse(JSON.parse(content))
+                if (parsed.success) {
+                    const normalizedIssues = (
+                        batchStartQuestionNumber > 0
+                        && parsed.data.issues.length > 0
+                        && parsed.data.issues.every(
+                            (issue) => issue.questionNumber >= 1 && issue.questionNumber <= batch.length,
+                        )
+                    )
+                        ? parsed.data.issues.map((issue) => ({
+                            ...issue,
+                            questionNumber: issue.questionNumber + batchStartQuestionNumber,
+                        }))
+                        : parsed.data.issues
+
+                    allIssues.push(...normalizedIssues)
+                }
+            }
+        } catch (error) {
+            const failure = toAIChunkFailure(error)
+            console.error('[AI] Cross-model verification batch failed:', error)
+            return {
+                issues: allIssues,
+                overallAssessment: `AI verification partially completed with errors: ${failure.message}`,
+                confidence: 0.3,
+                cost: totalCost.inputTokens > 0 ? totalCost : undefined,
+                error: true,
+                message: failure.message,
+            }
+        }
+    }
+
+    if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
+        await logCostToAudit(auditUserId, 'AI_VERIFY', totalCost)
+    }
+
+    return {
+        issues: allIssues,
+        overallAssessment: allIssues.length === 0
+            ? 'All questions passed AI cross-model verification.'
+            : `AI verification found ${allIssues.length} potential issue(s) across ${questions.length} questions.`,
+        confidence: allIssues.length === 0 ? 0.95 : Math.max(0.4, 0.95 - (allIssues.length * 0.05)),
+        cost: totalCost,
+    }
+}
+
 export async function extractQuestionsFromPdfMultimodal(
     buffer: Buffer,
     expectedCount: number = 50,
@@ -2679,17 +2877,63 @@ export async function extractQuestionsFromPdfMultimodal(
                     content: [
                         {
                             type: 'input_text',
-                            text: `Extract the existing CUET-style MCQs from this PDF.
+                            text: `Extract the existing MCQs from this PDF with high precision.
 
-Rules:
+FORMAT HANDLING RULES:
+
+1. MATCH-THE-FOLLOWING / LIST MATCHING:
+   Look for "List I / List II", "Column A / Column B", or similar pairing tables.
+   The question stem MUST include the complete matching table reproduced as text.
+   Options are typically coded combinations like "(A) a-i, b-ii, c-iii, d-iv".
+   Preserve the full table in "sharedContext" as well.
+
+2. ASSERTION-REASON:
+   Look for "Assertion (A):" and "Reason (R):" pairs.
+   Include BOTH the assertion and reason text in the stem.
+   Standard options follow the A-R pattern:
+   A. Both A and R are true and R is the correct explanation of A
+   B. Both A and R are true but R is NOT the correct explanation of A
+   C. A is true but R is false
+   D. A is false but R is true
+
+3. VENN DIAGRAMS & DATA TABLES:
+   Describe the visual content textually in "sharedContext".
+   For Venn diagrams: describe the sets, overlaps, labels, and any numbers shown.
+   For data tables: reproduce the full table structure in text with row/column headers and values.
+
+4. FIGURE COMPLETION / FIGURE SERIES:
+   Describe the visual pattern in "sharedContext" (shapes, rotation, progression).
+   Note what the missing element should look like based on the pattern.
+
+5. PASSAGE-BASED QUESTIONS:
+   Include the FULL passage in "sharedContext". Multiple questions may share the same passage.
+   Preserve the passage exactly as written, including any case study or comprehension text.
+
+6. HORIZONTAL ANSWER KEYS:
+   Some PDFs have answer keys in a table format at the end (e.g., "1-B  2-A  3-C  4-D").
+   Use these to determine the correct option for each question.
+
+7. MULTI-COLUMN LAYOUTS:
+   Questions may span multiple columns on the page.
+   Read left-to-right, top-to-bottom within each column before moving to the next.
+
+8. DATA INTERPRETATION:
+   Reproduce all tables, charts, or datasets as structured text in "sharedContext".
+   Include all row/column headers and numeric values exactly as shown.
+
+9. STATEMENT-COMBINATION:
+   Look for "Consider the following statements: I. ... II. ... III. ..."
+   The stem must include all statements. Options combine statement numbers (e.g., "Only I and III").
+
+GENERAL RULES:
 - Return up to ${expectedCount} complete questions.
-- Preserve the stem wording as closely as possible.
+- Preserve the stem wording as closely as possible — do NOT paraphrase.
 - Normalize answer labels to A, B, C, D in the order they appear.
-- If a question depends on a shared table, passage, chart, or dataset, include it in "sharedContext".
-- Each question must have exactly 4 options and exactly 1 correct option.
-- Preserve assertion-reason, match-the-following, statement-combination, and answer-key based questions.
-- Ignore headers, footers, decorative text, and page numbers.
+- Each question must have exactly 4 options and exactly 1 correct option (isCorrect: true).
+- Include "confidence" (0-1), "sourcePage", "sourceSnippet", and "answerSource" for each question.
+- "answerSource" must be one of: "ANSWER_KEY", "INLINE_ANSWER", or "INFERRED".
 - If a question cannot be recovered confidently, skip it instead of fabricating details.
+- Ignore headers, footers, decorative text, and page numbers.
 - Use a concise explanation when the source does not include one.
 - Assign a short topic tag and EASY/MEDIUM/HARD difficulty.
 
@@ -2829,12 +3073,32 @@ export async function extractVisualReferencesFromPdfImages(
             > = [
                 {
                     type: 'input_text',
-                    text: `Extract only visual-reference context from these CUET mock-test PDF pages.
+                    text: `Extract only visual-reference context from these mock-test PDF pages.
+
+VISUAL TYPE HANDLING:
+
+1. VENN DIAGRAMS: Describe the sets, their labels, overlap regions, and any numbers/items shown in each region.
+   Example sharedContext: "Venn diagram with Set A (Mammals) and Set B (Aquatic). Overlap contains: Whale, Dolphin. A only: Cat, Dog. B only: Fish, Shark."
+
+2. FIGURE SERIES / COMPLETION: Describe the visual pattern (shapes, rotations, size progression, shading changes).
+   Example: "Figure series shows a triangle rotating 45 degrees clockwise in each step, with alternating shading."
+
+3. MIRROR IMAGE / WATER IMAGE: Describe the original figure and the axis of reflection.
+   Example: "Original figure is the letter 'R' with a dot above. Mirror axis is vertical."
+
+4. PAPER FOLDING / CUTTING: Describe the fold direction(s), punch position, and expected unfolded result.
+   Example: "Square paper folded in half vertically, then a triangular cut at bottom-right corner."
+
+5. DATA TABLES / CHARTS: Reproduce the table or chart data as structured text including all headers and values.
+
+6. MAPS / GEOGRAPHIC DIAGRAMS: Describe regions, labels, compass directions, and any marked locations.
+
+7. GRAPHS: Describe axes, labels, data points/lines, and any trends visible.
 
 Rules:
 - Return only question numbers that depend on a visual, figure, Venn diagram, embedded image, chart, graph, map, or non-linear visual prompt.
 - Do not return normal text-only questions.
-- sharedContext must capture only the visual information a student must see before answering.
+- sharedContext must capture the visual information a student must see before answering, described textually.
 - sourcePage must identify the page the visual appears on.
 - sourceSnippet should quote a short OCR/instruction snippet that proves the visual belongs to that question set.
 - sharedContextEvidence should briefly explain what visual cue is being carried into the question.
@@ -2996,12 +3260,21 @@ async function generateFromChunk(
     count: number,
     model: string
 ): Promise<{ questions: GeneratedQuestion[]; failedCount: number; cost?: CostInfo; failure?: AIChunkFailure }> {
-    const prompt = `You are an expert test creator. Generate ${count} multiple-choice questions from the following educational content. Cover as many major sections, subtopics, definitions, formulas, and examples from the source as possible. Do not produce random trivia or repetitive paraphrases. Each question MUST have:
+    const prompt = `You are an expert test creator. Generate ${count} multiple-choice questions from the following educational content. Cover as many major sections, subtopics, definitions, formulas, and examples from the source as possible. Do not produce random trivia or repetitive paraphrases.
+
+QUESTION FORMAT VARIETY:
+When the content supports it, vary the question formats:
+- Standard MCQ: Direct factual or conceptual questions.
+- Assertion-Reason: When the content has cause-effect relationships, generate "Assertion (A): ... Reason (R): ..." style questions with standard AR options.
+- Statement-Combination: When the content lists multiple related facts, generate "Consider the following statements: I. ... II. ..." questions.
+- Application-Based: Generate scenario or case-based questions that test understanding, not just recall.
+
+Each question MUST have:
 - A clear, unambiguous stem
 - Exactly 4 options labeled A-D
 - Exactly 1 correct answer
 - A brief explanation of why the correct answer is right
-- A difficulty rating (EASY/MEDIUM/HARD)
+- A difficulty rating (EASY/MEDIUM/HARD) — aim for a mix of ~30% EASY, ~50% MEDIUM, ~20% HARD
 - A topic tag
 
 Content:

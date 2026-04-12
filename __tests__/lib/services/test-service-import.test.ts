@@ -27,6 +27,7 @@ const generateQuestionsFromTextMock = vi.fn()
 const attachSharedContextsFromPdfMock = vi.fn()
 const enrichGeneratedQuestionsMetadataMock = vi.fn()
 const verifyExtractedQuestionsMock = vi.fn()
+const verifyExtractedQuestionsWithAIMock = vi.fn()
 const classifyDocumentForImportMock = vi.fn()
 const resolveDocumentImportPlanMock = vi.fn()
 const isClassifierRoutingEnabledMock = vi.fn()
@@ -45,6 +46,7 @@ vi.mock('@/lib/services/ai-service', () => ({
     attachSharedContextsFromPdf: attachSharedContextsFromPdfMock,
     enrichGeneratedQuestionsMetadata: enrichGeneratedQuestionsMetadataMock,
     verifyExtractedQuestions: verifyExtractedQuestionsMock,
+    verifyExtractedQuestionsWithAI: verifyExtractedQuestionsWithAIMock,
 }))
 
 vi.mock('@/lib/services/document-classifier', () => ({
@@ -187,6 +189,11 @@ beforeEach(() => {
         reviewIssueCount: 0,
     })
     verifyExtractedQuestionsMock.mockReturnValue(createVerification())
+    verifyExtractedQuestionsWithAIMock.mockResolvedValue({
+        issues: [],
+        overallAssessment: 'No additional AI issues found.',
+        confidence: 0.95,
+    })
     enrichGeneratedQuestionsMetadataMock.mockResolvedValue({
         questions: [createQuestion('Recovered question stem')],
         description: 'Recovered description',

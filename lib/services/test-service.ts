@@ -12,8 +12,10 @@ import {
     generateQuestionsFromText,
     parseDocumentToText,
     verifyExtractedQuestions,
+    verifyExtractedQuestionsWithAI,
 } from '@/lib/services/ai-service'
 import type { VerificationResult } from '@/lib/services/ai-extraction-schemas'
+import { mergeAIVerificationIssues } from '@/lib/services/import-verifier'
 import type { DocumentClassificationResult } from '@/lib/services/document-classifier'
 import { classifyDocumentForImport } from '@/lib/services/document-classifier'
 import { executeDocumentImportPlan } from '@/lib/services/document-import-executor'
@@ -136,6 +138,8 @@ type TestImportDiagnosticsPayload = DocumentImportDiagnostics & {
     generationTarget: number | null
     costUSD: number
     metadataWarning: string | null
+    primaryTopic: string | null
+    difficultyDistribution: { easy: number; medium: number; hard: number } | null
     reviewStatus: string | null
     verification: VerificationResult | null
 }
@@ -1422,7 +1426,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         )
     }
 
-    const verification: VerificationResult | undefined = strategy === 'AI_GENERATED'
+    let verification: VerificationResult | undefined = strategy === 'AI_GENERATED'
         ? undefined
         : verifyExtractedQuestions(
             result.questions,
@@ -1432,6 +1436,28 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 comparisonQuestions: strategy === 'AI_VISION_FALLBACK' ? extracted.questions : undefined,
             },
         )
+
+    // Cross-model AI verification pass
+    if (verification && result.questions.length > 0) {
+        const extractionModel = strategy === 'AI_VISION_FALLBACK' ? 'gpt-4o' : 'gpt-4o-mini'
+        const aiVerification = await verifyExtractedQuestionsWithAI(
+            result.questions,
+            extractionModel,
+            admin.id,
+        )
+        if (aiVerification.issues.length > 0) {
+            verification = mergeAIVerificationIssues(verification, aiVerification)
+        }
+        if (aiVerification.cost) {
+            if (result.cost) {
+                result.cost.costUSD += aiVerification.cost.costUSD
+                result.cost.inputTokens += aiVerification.cost.inputTokens
+                result.cost.outputTokens += aiVerification.cost.outputTokens
+            } else {
+                result.cost = { ...aiVerification.cost }
+            }
+        }
+    }
 
     if (verification && (!verification.passed || verification.reviewRecommended)) {
         needsAdminReview = true
@@ -1445,7 +1471,6 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     }
 
     const baseTitle = uploadValidation.sanitizedFileName.replace(/\.(docx|pdf)$/i, '')
-    const testTitle = (input.title?.trim() || `AI Generated Test - ${baseTitle || new Date().toLocaleDateString()}`)
     let questionsWithSharedContext = result.questions
     if (isPdfUpload) {
         try {
@@ -1461,6 +1486,11 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     })
     const finalQuestions = metadataEnrichment.questions
     const finalDescription = metadataEnrichment.description
+    const testTitle = input.title?.trim()
+        || metadataEnrichment.suggestedTitle
+        || `AI Generated Test - ${baseTitle || new Date().toLocaleDateString()}`
+    const testDuration = metadataEnrichment.suggestedDurationMinutes
+        ?? Math.max(15, finalQuestions.length * 2)
     importDiagnostics.metadataAiUsed = metadataEnrichment.aiUsed
 
     if (metadataEnrichment.warning) {
@@ -1474,7 +1504,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             createdById: admin.id,
             title: testTitle,
             description: finalDescription,
-            durationMinutes: Math.max(15, finalQuestions.length * 2),
+            durationMinutes: testDuration,
             settings: resolveTestSettings(undefined) as Prisma.InputJsonValue,
             status: 'DRAFT',
             source: 'AI_GENERATED',
@@ -1493,6 +1523,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 generationTarget: strategy === 'AI_GENERATED' ? uploadValidation.generationTarget : null,
                 costUSD: (result.cost?.costUSD || 0) + (metadataEnrichment.cost?.costUSD || 0),
                 metadataWarning: metadataEnrichment.warning || null,
+                primaryTopic: metadataEnrichment.primaryTopic ?? null,
+                difficultyDistribution: metadataEnrichment.difficultyDistribution ?? null,
                 reviewStatus: needsAdminReview ? 'NEEDS_REVIEW' : null,
                 verification: verification ?? null,
             }),

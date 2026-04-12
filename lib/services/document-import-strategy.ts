@@ -62,7 +62,6 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         runMultimodalFirst: input.isPdfUpload && selectedStrategy === 'MULTIMODAL_EXTRACT',
         visualReferenceOverlay:
             input.isPdfUpload
-            && selectedStrategy === 'HYBRID_RECONCILE'
             && input.classification.hasVisualReferences,
         generateFromSource: selectedStrategy === 'GENERATE_FROM_SOURCE',
         reasons: [
