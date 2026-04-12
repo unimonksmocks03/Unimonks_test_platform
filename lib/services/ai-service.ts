@@ -842,7 +842,7 @@ function deriveGenericStemHint(questionSection: string) {
 
     const headingLines: string[] = []
     for (const line of lines) {
-        if (looksLikeQuestionStart(line) || expandInlineQuestionLine(line, 1)) {
+        if (stripQuestionLabel(line) || expandInlineQuestionLine(line, 1)) {
             break
         }
         headingLines.push(line)
@@ -1055,7 +1055,6 @@ function parseQuestionBlock(
     let answerSeen = false
     let answerSource: GeneratedQuestion['answerSource'] = firstLine.inlineAnswerId ? 'INLINE_ANSWER' : 'INFERRED'
     let activeStatement = false
-    let answerSource: GeneratedQuestion['answerSource'] = firstLine.inlineAnswerId ? 'INLINE_ANSWER' : 'INFERRED'
 
     for (const option of inlineOptions?.options ?? []) {
         options.set(option.optionId, option.text)
