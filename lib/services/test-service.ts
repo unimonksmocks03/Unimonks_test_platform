@@ -13,6 +13,7 @@ import {
     verifyExtractedQuestions,
 } from '@/lib/services/ai-service'
 import type { VerificationResult } from '@/lib/services/ai-extraction-schemas'
+import { getTestSearchTokens } from '@/lib/utils/test-search'
 import { resolveTestSettings } from '@/lib/utils/test-settings'
 import type {
     AssignTestInput,
@@ -270,10 +271,16 @@ function buildSearchWhere(query: TestQueryInput): Prisma.TestWhereInput {
     }
 
     if (query.search) {
-        where.OR = [
-            { title: { contains: query.search, mode: 'insensitive' } },
-            { description: { contains: query.search, mode: 'insensitive' } },
-        ]
+        const searchTokens = getTestSearchTokens(query.search)
+
+        if (searchTokens.length > 0) {
+            where.AND = searchTokens.map((token) => ({
+                title: {
+                    contains: token,
+                    mode: 'insensitive',
+                },
+            }))
+        }
     }
 
     return where

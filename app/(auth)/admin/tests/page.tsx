@@ -16,6 +16,7 @@ import { PaginationNav } from "@/components/ui/pagination-nav";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { matchesTestSearch } from "@/lib/utils/test-search";
 
 type AssignedBatch = {
     id: string;
@@ -105,6 +106,19 @@ export default function AdminTestsPage() {
     const [appliedSearch, setAppliedSearch] = useState(urlSearch);
     const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]["value"]>(urlStatus);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+
+    const visibleTests = useMemo(() => {
+        const query = search.trim();
+
+        if (!query) {
+            return tests;
+        }
+
+        return tests.filter((test) => matchesTestSearch(test.title, query));
+    }, [search, tests]);
+
+    const isSearchDirty = search.trim() !== appliedSearch.trim();
+    const resultsBadgeLabel = isSearchDirty ? `${visibleTests.length} shown` : `${total} tests`;
 
     const syncQueryState = useCallback((next: {
         search: string;
@@ -246,7 +260,7 @@ export default function AdminTestsPage() {
                             <Input
                                 value={search}
                                 onChange={(event) => setSearch(event.target.value)}
-                                placeholder="Search tests by title or description..."
+                                placeholder="Search tests by title..."
                                 className="h-12 rounded-xl border-transparent bg-surface-2 pl-10 font-medium"
                             />
                         </div>
@@ -279,9 +293,15 @@ export default function AdminTestsPage() {
                     </Select>
                 </div>
                 <Badge variant="outline" className="w-fit rounded-xl px-4 py-2 text-sm font-bold">
-                    {total} tests
+                    {resultsBadgeLabel}
                 </Badge>
             </div>
+
+            {isSearchDirty ? (
+                <p className="text-sm font-medium text-slate-500">
+                    Narrowing the current page instantly. Press Enter to search all tests.
+                </p>
+            ) : null}
 
             <Card className="overflow-hidden rounded-3xl border-0 bg-white" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
                 <CardContent className="p-0">
@@ -322,14 +342,16 @@ export default function AdminTestsPage() {
                                         </TableCell>
                                     </TableRow>
                                 ))
-                            ) : tests.length === 0 ? (
+                            ) : visibleTests.length === 0 ? (
                                 <TableRow>
                                     <TableCell colSpan={8} className="py-12 text-center text-slate-400">
-                                        No tests found for the current filters.
+                                        {isSearchDirty
+                                            ? "No tests on this page match. Press Enter to search all tests."
+                                            : "No tests found for the current filters."}
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                tests.map((test) => (
+                                visibleTests.map((test) => (
                                     <TableRow key={test.id} className="group">
                                         <TableCell className="pl-6">
                                             <div className="flex flex-col gap-1">
