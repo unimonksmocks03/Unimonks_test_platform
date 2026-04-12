@@ -13,10 +13,11 @@ import {
 } from "@/components/ui/sheet";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api-client";
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
+import { PaginationNav } from "@/components/ui/pagination-nav";
 
 type BatchItem = {
     id: string;
@@ -35,27 +36,41 @@ type BatchesResponse = {
     totalPages: number;
 };
 
+const PAGE_SIZE = 20;
+
 export default function AdminBatchesPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [batches, setBatches] = useState<BatchItem[]>([]);
     const [total, setTotal] = useState(0);
     const [searchQuery, setSearchQuery] = useState("");
+    const deferredSearchQuery = useDeferredValue(searchQuery);
     const [statusFilter, setStatusFilter] = useState("all");
+    const [page, setPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
     const [createSheetOpen, setCreateSheetOpen] = useState(false);
     const [creating, setCreating] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
-    const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-    const fetchBatches = useCallback(async (search?: string, status?: string) => {
+    const fetchBatches = useCallback(async (filters?: { search?: string; status?: string; page?: number }) => {
         setIsLoading(true);
         const params: Record<string, string | number | undefined> = {};
-        if (search) params.search = search;
-        if (status && status !== "all") params.status = status.toUpperCase();
+        if (filters?.search) params.search = filters.search;
+        if (filters?.status && filters.status !== "all") params.status = filters.status.toUpperCase();
+        params.page = filters?.page || 1;
+        params.limit = PAGE_SIZE;
 
         const res = await apiClient.get<BatchesResponse>("/api/admin/batches", params);
         if (res.ok) {
+            const nextTotalPages = Math.max(1, res.data.totalPages);
+            if (filters?.page && filters.page > nextTotalPages) {
+                setTotalPages(nextTotalPages);
+                setPage(nextTotalPages);
+                setIsLoading(false);
+                return;
+            }
             setBatches(res.data.batches);
             setTotal(res.data.total);
+            setTotalPages(nextTotalPages);
         } else {
             toast.error("Failed to load batches", { description: res.message });
         }
@@ -63,17 +78,13 @@ export default function AdminBatchesPage() {
     }, []);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional initial data fetch on mount
-        fetchBatches();
-    }, [fetchBatches]);
-
-    useEffect(() => {
-        if (debounceRef.current) clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => {
-            fetchBatches(searchQuery, statusFilter);
-        }, 400);
-        return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-    }, [searchQuery, statusFilter, fetchBatches]);
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch paginated server data when filters or page change
+        void fetchBatches({
+            search: deferredSearchQuery.trim() || undefined,
+            status: statusFilter,
+            page,
+        });
+    }, [deferredSearchQuery, statusFilter, page, fetchBatches]);
 
     const handleCreateBatch = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -88,7 +99,12 @@ export default function AdminBatchesPage() {
         if (res.ok) {
             toast.success("Batch Created", { description: `${body.name} has been created.` });
             setCreateSheetOpen(false);
-            fetchBatches(searchQuery, statusFilter);
+            setPage(1);
+            void fetchBatches({
+                search: deferredSearchQuery.trim() || undefined,
+                status: statusFilter,
+                page: 1,
+            });
         } else {
             toast.error("Failed to create batch", { description: res.message });
         }
@@ -100,7 +116,11 @@ export default function AdminBatchesPage() {
         const res = await apiClient.patch(`/api/admin/batches/${deleteTarget.id}`, { status: "COMPLETED" });
         if (res.ok) {
             toast.success("Batch Disabled", { description: `${deleteTarget.name} marked as completed.` });
-            fetchBatches(searchQuery, statusFilter);
+            void fetchBatches({
+                search: deferredSearchQuery.trim() || undefined,
+                status: statusFilter,
+                page,
+            });
         } else {
             toast.error("Failed to disable batch", { description: res.message });
         }
@@ -111,7 +131,11 @@ export default function AdminBatchesPage() {
         const res = await apiClient.delete(`/api/admin/batches/${deleteTarget.id}?permanent=true`);
         if (res.ok) {
             toast.success("Batch Deleted", { description: `${deleteTarget.name} has been deleted.` });
-            fetchBatches(searchQuery, statusFilter);
+            void fetchBatches({
+                search: deferredSearchQuery.trim() || undefined,
+                status: statusFilter,
+                page,
+            });
         } else {
             toast.error("Failed to delete batch", { description: res.message });
         }
@@ -185,13 +209,22 @@ export default function AdminBatchesPage() {
                         <Search className="h-5 w-5 absolute left-3 top-3 text-slate-400" />
                         <Input
                             value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onChange={(e) => {
+                                setSearchQuery(e.target.value);
+                                setPage(1);
+                            }}
                             placeholder="Search batches by name or code..."
                             className="pl-10 h-11 bg-white border-transparent shadow-sm rounded-xl font-medium focus-visible:ring-primary"
                         />
                     </div>
                     <div className="w-full md:w-auto flex gap-3">
-                        <Select value={statusFilter} onValueChange={setStatusFilter}>
+                        <Select
+                            value={statusFilter}
+                            onValueChange={(value) => {
+                                setStatusFilter(value);
+                                setPage(1);
+                            }}
+                        >
                             <SelectTrigger className="w-full md:w-[160px] h-11 bg-white border-transparent shadow-sm rounded-xl font-medium">
                                 <SelectValue placeholder="Status" />
                             </SelectTrigger>
@@ -280,8 +313,16 @@ export default function AdminBatchesPage() {
                         </tbody>
                     </table>
                 </div>
-                <div className="p-4 border-t bg-surface-2 text-center text-xs text-slate-500 font-medium" style={{ borderColor: 'var(--border-soft)' }}>
-                    Showing {batches.length} of {total} batches
+                <div className="border-t bg-surface-2 p-4" style={{ borderColor: 'var(--border-soft)' }}>
+                    <PaginationNav
+                        page={page}
+                        pageSize={PAGE_SIZE}
+                        totalItems={total}
+                        totalPages={totalPages}
+                        itemLabel="batches"
+                        isLoading={isLoading}
+                        onPageChange={setPage}
+                    />
                 </div>
             </Card>
 

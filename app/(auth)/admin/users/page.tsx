@@ -31,11 +31,12 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api-client";
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
 import { useAuth } from "@/lib/auth-context";
+import { PaginationNav } from "@/components/ui/pagination-nav";
 
 type User = {
     id: string;
@@ -49,6 +50,7 @@ type User = {
 type UsersResponse = {
     users: User[];
     total: number;
+    page: number;
     totalPages: number;
 };
 
@@ -68,6 +70,8 @@ function normalizeSelectValue(value: string) {
     return value.trim().toUpperCase().replace(/[\s-]+/g, "_");
 }
 
+const PAGE_SIZE = 20;
+
 export default function UserManagementPage() {
     const { user: currentUser } = useAuth();
     const isPrimaryAdmin = currentUser?.role === "admin";
@@ -75,27 +79,44 @@ export default function UserManagementPage() {
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
     const [users, setUsers] = useState<User[]>([]);
     const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
     const [searchQuery, setSearchQuery] = useState("");
+    const deferredSearchQuery = useDeferredValue(searchQuery);
     const [roleFilter, setRoleFilter] = useState("all");
     const [statusFilter, setStatusFilter] = useState("all");
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
     const [creating, setCreating] = useState(false);
     const [createRole, setCreateRole] = useState<"STUDENT" | "SUB_ADMIN">("STUDENT");
     const [subAdminConfirmOpen, setSubAdminConfirmOpen] = useState(false);
-    const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
     const [, setPendingRoleSelection] = useState<"SUB_ADMIN" | null>(null);
 
-    const fetchUsers = useCallback(async (search?: string, role?: string, status?: string) => {
+    const fetchUsers = useCallback(async (filters?: {
+        search?: string;
+        role?: string;
+        status?: string;
+        page?: number;
+    }) => {
         setIsLoading(true);
         const params: Record<string, string | number | undefined> = {};
-        if (search) params.search = search;
-        if (role && role !== "all") params.role = role.toUpperCase();
-        if (status && status !== "all") params.status = status.toUpperCase();
+        if (filters?.search) params.search = filters.search;
+        if (filters?.role && filters.role !== "all") params.role = filters.role.toUpperCase();
+        if (filters?.status && filters.status !== "all") params.status = filters.status.toUpperCase();
+        params.page = filters?.page || 1;
+        params.limit = PAGE_SIZE;
 
         const res = await apiClient.get<UsersResponse>("/api/admin/users", params);
         if (res.ok) {
+            const nextTotalPages = Math.max(1, res.data.totalPages);
+            if (filters?.page && filters.page > nextTotalPages) {
+                setTotalPages(nextTotalPages);
+                setPage(nextTotalPages);
+                setIsLoading(false);
+                return;
+            }
             setUsers(res.data.users);
             setTotal(res.data.total);
+            setTotalPages(nextTotalPages);
         } else {
             toast.error("Failed to load users", { description: res.message });
         }
@@ -103,18 +124,14 @@ export default function UserManagementPage() {
     }, []);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional initial data fetch
-        fetchUsers();
-    }, [fetchUsers]);
-
-    // Debounced search
-    useEffect(() => {
-        if (debounceRef.current) clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => {
-            fetchUsers(searchQuery, roleFilter, statusFilter);
-        }, 400);
-        return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-    }, [searchQuery, roleFilter, statusFilter, fetchUsers]);
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch paginated server data when filters or page change
+        void fetchUsers({
+            search: deferredSearchQuery.trim() || undefined,
+            role: roleFilter,
+            status: statusFilter,
+            page,
+        });
+    }, [deferredSearchQuery, roleFilter, statusFilter, page, fetchUsers]);
 
     const submitCreateUser = async (payload: CreateUserPayload) => {
         setCreating(true);
@@ -125,7 +142,13 @@ export default function UserManagementPage() {
             });
             setCreateDialogOpen(false);
             setCreateRole("STUDENT");
-            fetchUsers(searchQuery, roleFilter, statusFilter);
+            setPage(1);
+            void fetchUsers({
+                search: deferredSearchQuery.trim() || undefined,
+                role: roleFilter,
+                status: statusFilter,
+                page: 1,
+            });
         } else {
             toast.error("Failed to create user", { description: res.message });
         }
@@ -160,7 +183,12 @@ export default function UserManagementPage() {
         const res = await apiClient.patch(`/api/admin/users/${userId}`, body);
         if (res.ok) {
             toast.success("User Updated");
-            fetchUsers(searchQuery, roleFilter, statusFilter);
+            void fetchUsers({
+                search: deferredSearchQuery.trim() || undefined,
+                role: roleFilter,
+                status: statusFilter,
+                page,
+            });
         } else {
             toast.error("Failed to update user", { description: res.message });
         }
@@ -175,7 +203,12 @@ export default function UserManagementPage() {
         const res = await apiClient.delete(`/api/admin/users/${deleteTarget.id}`);
         if (res.ok) {
             toast.success("User Deactivated", { description: `${deleteTarget.name} has been deactivated.` });
-            fetchUsers(searchQuery, roleFilter, statusFilter);
+            void fetchUsers({
+                search: deferredSearchQuery.trim() || undefined,
+                role: roleFilter,
+                status: statusFilter,
+                page,
+            });
             setDeleteTarget(null);
         } else {
             toast.error("Failed to deactivate user", { description: res.message });
@@ -284,13 +317,22 @@ export default function UserManagementPage() {
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
                         <Input
                             value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onChange={(e) => {
+                                setSearchQuery(e.target.value);
+                                setPage(1);
+                            }}
                             className="pl-10 rounded-xl h-11 bg-surface-2 border-transparent font-medium"
                             placeholder="Search users by name or email..."
                         />
                     </div>
                     <div className="flex gap-3 w-full sm:w-auto">
-                        <Select value={roleFilter} onValueChange={setRoleFilter}>
+                        <Select
+                            value={roleFilter}
+                            onValueChange={(value) => {
+                                setRoleFilter(value);
+                                setPage(1);
+                            }}
+                        >
                             <SelectTrigger className="w-full sm:w-[140px] rounded-xl h-11 bg-surface-2 border-transparent font-medium">
                                 <SelectValue placeholder="Role" />
                             </SelectTrigger>
@@ -301,7 +343,13 @@ export default function UserManagementPage() {
                                 <SelectItem value="admin">Admin</SelectItem>
                             </SelectContent>
                         </Select>
-                        <Select value={statusFilter} onValueChange={setStatusFilter}>
+                        <Select
+                            value={statusFilter}
+                            onValueChange={(value) => {
+                                setStatusFilter(value);
+                                setPage(1);
+                            }}
+                        >
                             <SelectTrigger className="w-full sm:w-[140px] rounded-xl h-11 bg-surface-2 border-transparent font-medium">
                                 <SelectValue placeholder="Status" />
                             </SelectTrigger>
@@ -514,8 +562,16 @@ export default function UserManagementPage() {
                 </Table>
             </div>
 
-            <div className="text-center text-xs text-slate-500 font-medium mt-2">
-                Showing {users.length} of {total} total users
+            <div className="mt-4">
+                <PaginationNav
+                    page={page}
+                    pageSize={PAGE_SIZE}
+                    totalItems={total}
+                    totalPages={totalPages}
+                    itemLabel="users"
+                    isLoading={isLoading}
+                    onPageChange={setPage}
+                />
             </div>
 
             <DeleteConfirmDialog

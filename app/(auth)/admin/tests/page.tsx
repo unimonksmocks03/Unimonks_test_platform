@@ -1,7 +1,8 @@
 "use client";
 
-import { startTransition, useCallback, useDeferredValue, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, Search, Trash2 } from "lucide-react";
 
 import { apiClient } from "@/lib/api-client";
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { PaginationNav } from "@/components/ui/pagination-nav";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -52,6 +54,21 @@ const STATUS_FILTERS = [
     { value: "ARCHIVED", label: "Archived" },
 ] as const;
 
+const PAGE_SIZE = 20;
+
+function resolveStatusFilter(value: string | null) {
+    if (value && STATUS_FILTERS.some((option) => option.value === value)) {
+        return value as (typeof STATUS_FILTERS)[number]["value"];
+    }
+
+    return "ALL";
+}
+
+function resolvePage(value: string | null) {
+    const parsed = Number.parseInt(value || "1", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
 function statusBadgeClass(status: AdminTestItem["status"]) {
     if (status === "PUBLISHED") return "bg-emerald-50 text-emerald-700 border-none";
     if (status === "DRAFT") return "bg-amber-50 text-amber-700 border-none";
@@ -72,41 +89,102 @@ function audienceLabel(audience: AdminTestItem["audience"]) {
 }
 
 export default function AdminTestsPage() {
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    const urlSearch = useMemo(() => searchParams.get("search") || "", [searchParams]);
+    const urlStatus = useMemo(() => resolveStatusFilter(searchParams.get("status")), [searchParams]);
+    const urlPage = useMemo(() => resolvePage(searchParams.get("page")), [searchParams]);
+
     const [isLoading, setIsLoading] = useState(true);
     const [tests, setTests] = useState<AdminTestItem[]>([]);
     const [total, setTotal] = useState(0);
-    const [search, setSearch] = useState("");
-    const deferredSearch = useDeferredValue(search);
-    const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]["value"]>("ALL");
+    const [page, setPage] = useState(urlPage);
+    const [totalPages, setTotalPages] = useState(1);
+    const [search, setSearch] = useState(urlSearch);
+    const [appliedSearch, setAppliedSearch] = useState(urlSearch);
+    const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]["value"]>(urlStatus);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
-    const fetchTests = useCallback(async (filters?: { search?: string; status?: string }) => {
+    const syncQueryState = useCallback((next: {
+        search: string;
+        status: (typeof STATUS_FILTERS)[number]["value"];
+        page: number;
+    }) => {
+        const params = new URLSearchParams(searchParams.toString());
+
+        if (next.search) {
+            params.set("search", next.search);
+        } else {
+            params.delete("search");
+        }
+
+        if (next.status !== "ALL") {
+            params.set("status", next.status);
+        } else {
+            params.delete("status");
+        }
+
+        if (next.page > 1) {
+            params.set("page", String(next.page));
+        } else {
+            params.delete("page");
+        }
+
+        const query = params.toString();
+        router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    }, [pathname, router, searchParams]);
+
+    const fetchTests = useCallback(async (filters?: { search?: string; status?: string; page?: number }) => {
         setIsLoading(true);
         const response = await apiClient.get<AdminTestsResponse>("/api/admin/tests", {
             search: filters?.search || undefined,
             status: filters?.status || undefined,
-            limit: 100,
+            page: filters?.page || 1,
+            limit: PAGE_SIZE,
         });
 
         if (response.ok) {
+            const nextTotalPages = Math.max(1, response.data.totalPages);
+            if (filters?.page && filters.page > nextTotalPages) {
+                setTotalPages(nextTotalPages);
+                setPage(nextTotalPages);
+                syncQueryState({
+                    search: filters.search || "",
+                    status: (filters.status as (typeof STATUS_FILTERS)[number]["value"]) || "ALL",
+                    page: nextTotalPages,
+                });
+                setIsLoading(false);
+                return;
+            }
             startTransition(() => {
                 setTests(response.data.tests);
                 setTotal(response.data.total);
+                setTotalPages(nextTotalPages);
             });
         } else {
             toast.error("Failed to load tests", { description: response.message });
         }
 
         setIsLoading(false);
-    }, []);
+    }, [syncQueryState]);
+
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- sync local form and pagination state from URL parameters for back/forward navigation
+        setSearch(urlSearch);
+        setAppliedSearch(urlSearch);
+        setStatusFilter(urlStatus);
+        setPage(urlPage);
+    }, [urlPage, urlSearch, urlStatus]);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional data refetch when filters change
         void fetchTests({
-            search: deferredSearch.trim() || undefined,
+            search: appliedSearch.trim() || undefined,
             status: statusFilter === "ALL" ? undefined : statusFilter,
+            page,
         });
-    }, [deferredSearch, fetchTests, statusFilter]);
+    }, [appliedSearch, fetchTests, page, statusFilter]);
 
     const handlePermanentDelete = async () => {
         if (!deleteTarget) return;
@@ -121,8 +199,22 @@ export default function AdminTestsPage() {
         setDeleteTarget(null);
 
         void fetchTests({
-            search: deferredSearch.trim() || undefined,
+            search: appliedSearch.trim() || undefined,
             status: statusFilter === "ALL" ? undefined : statusFilter,
+            page,
+        });
+    };
+
+    const handleSearchSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        const nextSearch = search.trim();
+
+        setAppliedSearch(nextSearch);
+        setPage(1);
+        syncQueryState({
+            search: nextSearch,
+            status: statusFilter,
+            page: 1,
         });
     };
 
@@ -148,16 +240,32 @@ export default function AdminTestsPage() {
 
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-1 flex-col gap-3 sm:flex-row">
-                    <div className="relative flex-1">
-                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <Input
-                            value={search}
-                            onChange={(event) => setSearch(event.target.value)}
-                            placeholder="Search tests by title or description..."
-                            className="h-12 rounded-xl border-transparent bg-surface-2 pl-10 font-medium"
-                        />
-                    </div>
-                    <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as typeof statusFilter)}>
+                    <form onSubmit={handleSearchSubmit} className="flex flex-1 gap-3">
+                        <div className="relative flex-1">
+                            <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                            <Input
+                                value={search}
+                                onChange={(event) => setSearch(event.target.value)}
+                                placeholder="Search tests by title or description..."
+                                className="h-12 rounded-xl border-transparent bg-surface-2 pl-10 font-medium"
+                            />
+                        </div>
+                        <Button type="submit" variant="outline" className="h-12 rounded-xl px-5 font-semibold">
+                            Enter
+                        </Button>
+                    </form>
+                    <Select
+                        value={statusFilter}
+                        onValueChange={(value) => {
+                            setStatusFilter(value as typeof statusFilter);
+                            setPage(1);
+                            syncQueryState({
+                                search: appliedSearch,
+                                status: value as (typeof STATUS_FILTERS)[number]["value"],
+                                page: 1,
+                            });
+                        }}
+                    >
                         <SelectTrigger className="h-12 w-full rounded-xl border-transparent bg-surface-2 font-semibold sm:w-[190px]">
                             <SelectValue placeholder="Status" />
                         </SelectTrigger>
@@ -294,6 +402,23 @@ export default function AdminTestsPage() {
                     </Table>
                 </CardContent>
             </Card>
+
+            <PaginationNav
+                page={page}
+                pageSize={PAGE_SIZE}
+                totalItems={total}
+                totalPages={totalPages}
+                itemLabel="tests"
+                isLoading={isLoading}
+                onPageChange={(nextPage) => {
+                    setPage(nextPage);
+                    syncQueryState({
+                        search: appliedSearch,
+                        status: statusFilter,
+                        page: nextPage,
+                    });
+                }}
+            />
 
             <DeleteConfirmDialog
                 open={!!deleteTarget}
