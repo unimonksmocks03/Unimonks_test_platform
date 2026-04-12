@@ -505,10 +505,6 @@ export function attachSharedContextsFromPageText(
     }))
 }
 
-function looksLikeQuestionStart(line: string): boolean {
-    return stripQuestionLabel(line) !== null
-}
-
 function shouldTreatAsNestedNumberedStemLine(
     currentBlock: StructuredQuestionBlock | null,
     questionLabel: { questionNumber: number; explicitPrefix: boolean },
@@ -527,7 +523,7 @@ const OPTION_LETTER_REGEX = /^(?:\(([A-D])\)|([A-D])[.)\-:])(?:\s*[.)\-:])*\s*(.
 const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?(?:\s*[.)\-:]\s*|\s+)(.+)$/i
 // Matches answer hints including numbered format: "Answer 3: (b)" / "Answer: B" / "Ans: 2"
 const ANSWER_LINE_REGEX =
-    /^(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:\d+\s*)?(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
+    /^(?:[^A-Za-z0-9]+\s*)*(?:revised\s+)?(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:\d+\s*)?(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
 const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
 const DIFFICULTY_LINE_REGEX = /^difficulty\s*[:\-]?\s*(easy|medium|hard)\b/i
 const TOPIC_LINE_REGEX = /^topic\s*[:\-]?\s*(.+)$/i
@@ -650,6 +646,51 @@ function normalizeAnswerIdent(raw: string): string {
     return NUMERIC_TO_LETTER[raw] || upper
 }
 
+function isSuspiciousBareQuestionJump(
+    questionLabel: QuestionLabel,
+    currentQuestionNumber: number,
+    line: string,
+) {
+    if (questionLabel.explicitPrefix) {
+        return false
+    }
+
+    if (questionLabel.questionNumber <= currentQuestionNumber + 5) {
+        return false
+    }
+
+    const stem = normalizeStem(questionLabel.stem)
+    const looksQuestionLike = stem.includes('?')
+        || stem.includes('::')
+        || /^(?:assertion|reason|match|which|what|who|where|when|why|how|choose|select|identify|find|consider|read|study)\b/i.test(stem)
+        || extractInlineLetterOptions(line) !== null
+
+    if (looksQuestionLike) {
+        return false
+    }
+
+    return true
+}
+
+function shouldTreatAsSuspiciousBareQuestionJump(
+    currentBlock: StructuredQuestionBlock | null,
+    questionLabel: QuestionLabel,
+    line: string,
+) {
+    if (!currentBlock || !isSuspiciousBareQuestionJump(questionLabel, currentBlock.questionNumber, line)) {
+        return false
+    }
+
+    return currentBlock.rawLines.some((rawLine) => {
+        const trimmed = rawLine.trim()
+        return ANSWER_LINE_REGEX.test(trimmed)
+            || EXPLANATION_LINE_REGEX.test(trimmed)
+            || DIFFICULTY_LINE_REGEX.test(trimmed)
+            || TOPIC_LINE_REGEX.test(trimmed)
+            || matchOptionLine(trimmed) !== null
+    })
+}
+
 function expandInlineQuestionLine(
     line: string,
     questionNumber: number,
@@ -744,6 +785,11 @@ function collectStructuredQuestionBlocks(questionSection: string): StructuredQue
         const questionLabel = stripQuestionLabel(line)
         if (questionLabel) {
             if (shouldTreatAsNestedNumberedStemLine(currentBlock, questionLabel)) {
+                currentBlock?.rawLines.push(line)
+                continue
+            }
+
+            if (shouldTreatAsSuspiciousBareQuestionJump(currentBlock, questionLabel, line)) {
                 currentBlock?.rawLines.push(line)
                 continue
             }
@@ -894,7 +940,7 @@ function extractAnswerKey(answerSection: string): Map<number, string> {
             currentQuestionNumber = Number.parseInt(questionMatch[1], 10)
         }
 
-        const correctAnswerMatch = line.match(/^(?:correct\s*answer|answer)\s*:\s*\(?([1-4A-Da-d])\)?/i)
+        const correctAnswerMatch = line.match(ANSWER_LINE_REGEX)
         if (correctAnswerMatch && currentQuestionNumber !== null) {
             answerKey.set(currentQuestionNumber, normalizeAnswerIdent(correctAnswerMatch[1]))
         }
@@ -927,7 +973,7 @@ function extractDetailedAnswerRecords(answerSection: string): Map<number, Struct
         let collectingExplanation = false
 
         for (const line of lines.slice(1)) {
-            const correctAnswerMatch = line.match(/^(?:correct\s*answer|answer)\s*:\s*\(?([1-4A-Da-d])\)?/i)
+            const correctAnswerMatch = line.match(ANSWER_LINE_REGEX)
             if (correctAnswerMatch) {
                 correctOptionId = normalizeAnswerIdent(correctAnswerMatch[1])
                 collectingExplanation = false
@@ -1007,6 +1053,7 @@ function parseQuestionBlock(
     let topic: string | null = null
     let answerHintUsed = Boolean(firstLine.inlineAnswerId)
     let answerSeen = false
+    let answerSource: GeneratedQuestion['answerSource'] = firstLine.inlineAnswerId ? 'INLINE_ANSWER' : 'INFERRED'
     let activeStatement = false
     let answerSource: GeneratedQuestion['answerSource'] = firstLine.inlineAnswerId ? 'INLINE_ANSWER' : 'INFERRED'
 
@@ -1096,7 +1143,27 @@ function parseQuestionBlock(
         const bareNumberedStemStatement = useBareNumberedStemStatements
             ? isBareNumberedStemStatementLine(line)
             : null
-        if (looksLikeQuestionStart(line) && !bareNumberedStemStatement) {
+        const questionLabel = bareNumberedStemStatement ? null : stripQuestionLabel(line)
+        if (questionLabel && !bareNumberedStemStatement) {
+            const shouldKeepInCurrentBlock = isSuspiciousBareQuestionJump(questionLabel, firstLine.questionNumber, line)
+                && (
+                    activeSection === 'explanation'
+                    || Boolean(explanation)
+                    || answerSeen
+                    || options.size >= 4
+                )
+
+            if (shouldKeepInCurrentBlock) {
+                if (activeSection === 'explanation' && explanation) {
+                    explanation = `${explanation} ${normalizeStem(line)}`.trim()
+                } else if (!answerSeen && activeOption && options.has(activeOption)) {
+                    options.set(activeOption, `${options.get(activeOption)} ${normalizeOptionText(line)}`.trim())
+                } else {
+                    stemParts.push(normalizeStem(line))
+                }
+                continue
+            }
+
             // If the previous stem content ends with a hyphen and the current line starts with
             // a digit, this is a hyphenated word split across PDF lines (e.g. "2-methylprop-" /
             // "1-ene instead of an ether?"). Merge it back into the stem rather than breaking.
@@ -1305,15 +1372,15 @@ function parseQuestionBlock(
     }
 
     const detailedAnswer = detailedAnswers.get(firstLine.questionNumber)
-        if (!correctOptionId) {
-            const detailedCorrectOptionId = detailedAnswer?.correctOptionId
-            const keyedAnswer = detailedCorrectOptionId || answerKey.get(firstLine.questionNumber)
-            if (keyedAnswer) {
-                correctOptionId = keyedAnswer
-                answerHintUsed = true
-                answerSource = 'ANSWER_KEY'
-            }
+    if (!correctOptionId) {
+        const detailedCorrectOptionId = detailedAnswer?.correctOptionId
+        const keyedAnswer = detailedCorrectOptionId || answerKey.get(firstLine.questionNumber)
+        if (keyedAnswer) {
+            correctOptionId = keyedAnswer
+            answerHintUsed = true
+            answerSource = 'ANSWER_KEY'
         }
+    }
 
     if (!explanation && detailedAnswer?.explanation) {
         explanation = detailedAnswer.explanation
@@ -2279,7 +2346,12 @@ function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | nul
     }
 
     const parsed = McqQuestionSchema.safeParse(normalizedQuestion)
-    return parsed.success ? parsed.data : null
+    return parsed.success
+        ? {
+            ...parsed.data,
+            answerSource: normalizedQuestion.answerSource,
+        }
+        : null
 }
 
 function coerceGeneratedQuestions(rawQuestions: unknown): { questions: GeneratedQuestion[]; failedCount: number } {
