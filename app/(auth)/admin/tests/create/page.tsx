@@ -1094,12 +1094,22 @@ function AdminTestBuilderForm() {
                             <label htmlFor="admin-file-upload" className="absolute inset-0 cursor-pointer"></label>
                         </div>
                         {file && (
-                            <div className="flex items-center rounded-xl border border-emerald-100 bg-white p-3 text-sm font-bold text-emerald-700 shadow-sm">
-                                <div className="mr-3 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100">✓</div>
-                                {file.name}
+                            <div className="flex items-start rounded-xl border border-emerald-100 bg-white p-3 text-sm font-bold text-emerald-700 shadow-sm">
+                                <div className="mr-3 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100">✓</div>
+                                <div className="min-w-0">
+                                    <p
+                                        className="break-all text-sm font-bold text-emerald-700"
+                                        title={file.name}
+                                    >
+                                        {file.name}
+                                    </p>
+                                    <p className="mt-1 text-xs font-medium text-emerald-600/80">
+                                        Ready for import
+                                    </p>
+                                </div>
                             </div>
                         )}
-                                <div className="rounded-2xl border border-indigo-100 bg-white px-4 py-3 text-sm font-medium text-slate-600 shadow-sm">
+                        <div className="rounded-2xl border border-indigo-100 bg-white px-4 py-3 text-sm font-medium text-slate-600 shadow-sm">
                             Duration and batch assignment stay on the builder after the questions are imported, and published tests can republish a new duration for future attempts.
                         </div>
                         <Button
