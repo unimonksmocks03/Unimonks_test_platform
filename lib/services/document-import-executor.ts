@@ -196,6 +196,23 @@ function mergeVisualReferencesIntoQuestions(
     })
 }
 
+async function safelyExtractVisualReferences(
+    extractVisualReferences: ExecuteDocumentImportPlanHandlers['extractVisualReferences'],
+): Promise<VisualReferenceExtractionResult | null> {
+    try {
+        return await extractVisualReferences()
+    } catch (error) {
+        console.warn('[IMPORT] Visual-reference extraction failed during classifier routing:', error)
+        return {
+            error: true,
+            message: 'Visual-reference extraction could not complete for this document.',
+            pageCount: 0,
+            chunkCount: 0,
+            references: [],
+        }
+    }
+}
+
 function shouldPreferExactExtraction(
     extracted: PreciseDocumentQuestionAnalysis,
     multimodal?: PdfVisionFallbackResult,
@@ -392,7 +409,25 @@ async function executeDocumentImportPlanCore(
     if (input.plan.selectedStrategy === 'HYBRID_RECONCILE' && input.plan.visualReferenceOverlay) {
         const extracted = await handlers.extractTextExact()
         if (hasRecoverableExactExtraction(extracted)) {
-            const visualReferences = await handlers.extractVisualReferences()
+            const visualReferences = await safelyExtractVisualReferences(
+                handlers.extractVisualReferences,
+            )
+            if (!visualReferences) {
+                return {
+                    useLegacyFlow: false,
+                    strategy: 'EXTRACTED',
+                    result: toExtractedResult(extracted),
+                    extracted,
+                    parserStatus: extracted.aiRepairUsed ? 'REPAIRED' : 'OK',
+                    aiFallbackUsed: extracted.aiRepairUsed,
+                    reportParserIssue: false,
+                    warning: extracted.aiRepairUsed
+                        ? 'Hybrid reconcile used exact recovery for question parsing.'
+                        : null,
+                    needsAdminReview: false,
+                    reviewIssueCount: 0,
+                }
+            }
             const mergedQuestions = mergeVisualReferencesIntoQuestions(
                 extracted.questions,
                 visualReferences.references,
@@ -571,7 +606,12 @@ export async function executeDocumentImportPlan(
     }
 
     try {
-        const visualReferences = await handlers.extractVisualReferences()
+        const visualReferences = await safelyExtractVisualReferences(
+            handlers.extractVisualReferences,
+        )
+        if (!visualReferences) {
+            return baseResult
+        }
         if (visualReferences.references && visualReferences.references.length > 0) {
             const mergedQuestions = mergeVisualReferencesIntoQuestions(
                 baseResult.result.questions,

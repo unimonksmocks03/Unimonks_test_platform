@@ -555,3 +555,37 @@ test('executeDocumentImportPlan marks admin review when visual reference extract
     expect(outcome.needsAdminReview).toBe(true)
     expect(outcome.warning).toContain('could not confidently recover every diagram context')
 })
+
+test('executeDocumentImportPlan does not crash when visual reference extraction throws', async () => {
+    const extractTextExact = vi.fn().mockResolvedValue(createExactExtraction({
+        questions: [createQuestion('Study the diagram and answer.')],
+    }))
+    const extractVisualReferences = vi.fn().mockRejectedValue(new Error('canvas runtime failed'))
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: true,
+                generateFromSource: false,
+                reasons: ['diagram-heavy pdf'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact,
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('EXTRACTED')
+    expect(outcome.result?.questions).toHaveLength(1)
+    expect(outcome.needsAdminReview).toBe(true)
+    expect(outcome.warning).toContain('could not confidently recover every diagram context')
+})

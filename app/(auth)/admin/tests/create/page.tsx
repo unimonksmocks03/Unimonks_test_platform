@@ -611,19 +611,28 @@ function AdminTestBuilderForm() {
                 method: "POST",
                 body: formData,
             });
-            const data = await response.json();
+            const contentType = response.headers.get("content-type") || "";
+            const data = contentType.includes("application/json")
+                ? await response.json()
+                : null;
 
             if (!response.ok) {
                 if (response.status === 429) {
                     toast.error("Rate limit reached", {
-                        description: data.message || `Try again in ${data.retryAfter}s.`,
+                        description: data?.message || `Try again in ${data?.retryAfter ?? "a while"}.`,
                     });
                 } else {
                     toast.error("Generation failed", {
-                        description: data.message || "Something went wrong.",
+                        description:
+                            data?.message
+                            || `The server returned ${response.status}. Please try again.`,
                     });
                 }
                 return;
+            }
+
+            if (!data) {
+                throw new Error("Import endpoint returned a non-JSON success response.");
             }
 
             const { test, questionsGenerated, failedCount, strategy, generationTarget, importDiagnostics } = data;
