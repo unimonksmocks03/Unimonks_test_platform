@@ -95,6 +95,13 @@ function toStudentTestCard(test: {
     description: string | null
     durationMinutes: number
     _count: { questions: number }
+    assignments: Array<{
+        batch: {
+            id: string
+            name: string
+            code: string
+        } | null
+    }>
     sessions: AttemptSessionRecord[]
 }) {
     return {
@@ -103,6 +110,9 @@ function toStudentTestCard(test: {
         description: test.description,
         durationMinutes: test.durationMinutes,
         questionCount: test._count.questions,
+        assignedBatches: test.assignments
+            .map((assignment) => assignment.batch)
+            .filter((batch): batch is NonNullable<typeof batch> => batch !== null),
         ...buildAttemptSummary(test.sessions),
     }
 }
@@ -141,6 +151,20 @@ async function getAssignedTestsWithBatches(studentId: string) {
             description: true,
             durationMinutes: true,
             _count: { select: { questions: true } },
+            assignments: {
+                where: batchIds.length > 0
+                    ? { batchId: { in: batchIds } }
+                    : { batchId: null },
+                select: {
+                    batch: {
+                        select: {
+                            id: true,
+                            name: true,
+                            code: true,
+                        },
+                    },
+                },
+            },
             sessions: {
                 where: { studentId },
                 orderBy: { attemptNumber: 'asc' },

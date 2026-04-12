@@ -1,16 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Sparkles, Trophy } from "lucide-react";
+import { ArrowRight, Search, Sparkles, Trophy } from "lucide-react";
 
 import { PLATFORM_POLICY } from "@/lib/config/platform-policy";
 import { apiClient } from "@/lib/api-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+    ALL_TESTS_BATCH_FILTER,
+    buildStudentBatchCards,
+    filterStudentTests,
+} from "@/lib/utils/student-dashboard";
 
 type AttemptSummary = {
     id: string;
@@ -29,6 +35,7 @@ type AssignedTest = {
     description: string | null;
     durationMinutes: number;
     questionCount: number;
+    assignedBatches: BatchInfo[];
     attemptsUsed: number;
     attemptsRemaining: number;
     canStartAttempt: boolean;
@@ -138,6 +145,8 @@ function getPrimaryAction(test: AssignedTest) {
 export default function StudentDashboard() {
     const [data, setData] = useState<DashboardData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [selectedBatchId, setSelectedBatchId] = useState(ALL_TESTS_BATCH_FILTER);
 
     useEffect(() => {
         (async () => {
@@ -155,28 +164,76 @@ export default function StudentDashboard() {
         return <DashboardSkeleton />;
     }
 
-    const featuredTest = data.tests.find((test) => test.hasInProgressSession)
+    const batchCards = buildStudentBatchCards(data.tests, data.batches);
+    const visibleTests = filterStudentTests(data.tests, searchQuery, selectedBatchId);
+    const featuredTest = visibleTests.find((test) => test.hasInProgressSession)
+        ?? visibleTests.find((test) => test.canStartAttempt)
+        ?? visibleTests[0]
+        ?? data.tests.find((test) => test.hasInProgressSession)
         ?? data.tests.find((test) => test.canStartAttempt)
         ?? data.tests[0];
     const featuredAction = featuredTest ? getPrimaryAction(featuredTest) : null;
+    const selectedBatchLabel = useMemo(
+        () => batchCards.find((batch) => batch.id === selectedBatchId)?.name ?? "All Tests",
+        [batchCards, selectedBatchId],
+    );
 
     return (
         <div className="flex flex-col gap-8 w-full max-w-6xl mx-auto pb-10">
             <div className="flex items-center justify-between border-b pb-6" style={{ borderColor: "var(--border-soft)" }}>
                 <div>
                     <h1 className="text-3xl font-serif font-bold text-slate-900 tracking-tight">Student Dashboard</h1>
-                    <p className="text-slate-500 mt-1">Track every paid attempt, resume in-progress mocks, and compare your latest and best scores.</p>
-                    {data.batches.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mt-3">
-                            {data.batches.map((batch) => (
-                                <span key={batch.id} className="inline-flex items-center gap-1 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
-                                    {batch.name} <span className="font-normal text-indigo-400">({batch.code})</span>
-                                </span>
-                            ))}
-                        </div>
-                    )}
+                    <p className="text-slate-500 mt-1">Track every paid attempt, resume in-progress mocks, and jump straight into tests by batch or by name.</p>
                 </div>
             </div>
+
+            <Card className="rounded-3xl border-0 bg-white" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
+                <CardHeader className="border-b bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
+                    <CardTitle className="font-serif text-xl text-slate-800">Find Tests Faster</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-5 p-6">
+                    <div className="relative">
+                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <Input
+                            value={searchQuery}
+                            onChange={(event) => setSearchQuery(event.target.value)}
+                            placeholder="Search your tests by name..."
+                            className="h-12 rounded-2xl border-transparent bg-surface-2 pl-11 text-sm font-medium"
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        {batchCards.map((batch) => {
+                            const isActive = batch.id === selectedBatchId;
+
+                            return (
+                                <button
+                                    key={batch.id}
+                                    type="button"
+                                    onClick={() => setSelectedBatchId(batch.id)}
+                                    className={`rounded-2xl border px-4 py-4 text-left transition ${
+                                        isActive
+                                            ? "border-indigo-200 bg-indigo-50 shadow-sm"
+                                            : "border-slate-200 bg-slate-50/80 hover:border-indigo-100 hover:bg-white"
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div className="text-sm font-semibold text-slate-900">{batch.name}</div>
+                                            <div className="mt-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{batch.code}</div>
+                                        </div>
+                                        <span className={`inline-flex min-w-[2rem] items-center justify-center rounded-full px-2 py-1 text-xs font-bold ${
+                                            isActive ? "bg-indigo-600 text-white" : "bg-white text-slate-700"
+                                        }`}>
+                                            {batch.count}
+                                        </span>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </CardContent>
+            </Card>
 
             {featuredTest ? (
                 <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-indigo-500 via-indigo-600 to-indigo-800 p-8 md:p-10" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
@@ -257,13 +314,24 @@ export default function StudentDashboard() {
             <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] items-start">
                 <Card className="rounded-3xl border-0 bg-white" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
                     <CardHeader className="border-b bg-surface p-8" style={{ borderColor: "var(--border-soft)" }}>
-                        <CardTitle className="font-serif text-xl text-slate-800">Assigned Mock Tests</CardTitle>
+                        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                            <CardTitle className="font-serif text-xl text-slate-800">Assigned Mock Tests</CardTitle>
+                            <div className="text-sm font-medium text-slate-500">
+                                Showing <span className="font-semibold text-slate-900">{visibleTests.length}</span> test{visibleTests.length === 1 ? "" : "s"}
+                                {selectedBatchId !== ALL_TESTS_BATCH_FILTER ? ` in ${selectedBatchLabel}` : ""}
+                                {searchQuery.trim() ? ` matching “${searchQuery.trim()}”` : ""}
+                            </div>
+                        </div>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-6 p-8">
-                        {data.tests.length === 0 ? (
-                            <div className="py-10 text-center text-slate-400">No assigned mocks yet.</div>
+                        {visibleTests.length === 0 ? (
+                            <div className="py-10 text-center text-slate-400">
+                                {data.tests.length === 0
+                                    ? "No assigned mocks yet."
+                                    : "No tests match this batch or search."}
+                            </div>
                         ) : (
-                            data.tests.map((test) => {
+                            visibleTests.map((test) => {
                                 const action = getPrimaryAction(test);
 
                                 return (
@@ -284,6 +352,11 @@ export default function StudentDashboard() {
                                                     <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-wide">
                                                         {test.durationMinutes} min
                                                     </Badge>
+                                                    {test.assignedBatches.map((batch) => (
+                                                        <Badge key={`${test.id}-${batch.id}`} className="rounded-full border-none bg-slate-200 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-slate-700">
+                                                            {batch.name}
+                                                        </Badge>
+                                                    ))}
                                                     <Badge className="rounded-full border-none bg-indigo-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-indigo-700">
                                                         Attempt {getAttemptDisplayNumber(test)} of {MAX_ATTEMPTS}
                                                     </Badge>

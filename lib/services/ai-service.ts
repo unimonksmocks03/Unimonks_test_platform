@@ -771,6 +771,11 @@ function extractAnswerKey(answerSection: string): Map<number, string> {
         answerKey.set(Number.parseInt(match[1], 10), normalizeAnswerIdent(match[2]))
     }
 
+    const compactQuestionAnswerRegex = /(?:^|\s)Q?(\d{1,4})\s*([A-Da-d])(?=\s|$)/gi
+    while ((match = compactQuestionAnswerRegex.exec(searchArea)) !== null) {
+        answerKey.set(Number.parseInt(match[1], 10), normalizeAnswerIdent(match[2]))
+    }
+
     const lines = searchArea.split('\n').map(line => line.trim()).filter(Boolean)
     let pendingQNumbers: number[] = []
     for (const line of lines) {
