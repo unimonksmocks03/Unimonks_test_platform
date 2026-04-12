@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { dbUuid } from '@/lib/validations/db-id.schema'
 
 // ── Create User ──
 export const CreateUserSchema = z.object({
@@ -15,6 +16,7 @@ export const UpdateUserSchema = z.object({
     email: z.string().email().optional(),
     role: z.enum(['ADMIN', 'SUB_ADMIN', 'STUDENT']).optional(),
     status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']).optional(),
+    batchIds: z.array(dbUuid('Each batch ID must be a valid ID')).max(200).optional(),
 }).refine((data) => Object.keys(data).length > 0, {
     message: 'At least one field must be provided for update',
 })

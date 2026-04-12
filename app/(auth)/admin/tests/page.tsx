@@ -99,26 +99,17 @@ export default function AdminTestsPage() {
 
     const [isLoading, setIsLoading] = useState(true);
     const [tests, setTests] = useState<AdminTestItem[]>([]);
+    const [searchIndexTests, setSearchIndexTests] = useState<AdminTestItem[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(urlPage);
+    const [livePage, setLivePage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [search, setSearch] = useState(urlSearch);
     const [appliedSearch, setAppliedSearch] = useState(urlSearch);
     const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]["value"]>(urlStatus);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
-    const visibleTests = useMemo(() => {
-        const query = search.trim();
-
-        if (!query) {
-            return tests;
-        }
-
-        return tests.filter((test) => matchesTestSearch(test.title, query));
-    }, [search, tests]);
-
     const isSearchDirty = search.trim() !== appliedSearch.trim();
-    const resultsBadgeLabel = isSearchDirty ? `${visibleTests.length} shown` : `${total} tests`;
 
     const syncQueryState = useCallback((next: {
         search: string;
@@ -183,6 +174,31 @@ export default function AdminTestsPage() {
         setIsLoading(false);
     }, [syncQueryState]);
 
+    const fetchSearchIndex = useCallback(async (status?: string) => {
+        const collected: AdminTestItem[] = [];
+        let nextPage = 1;
+        let pages = 1;
+
+        do {
+            const response = await apiClient.get<AdminTestsResponse>("/api/admin/tests", {
+                status: status || undefined,
+                page: nextPage,
+                limit: 100,
+            });
+
+            if (!response.ok) {
+                toast.error("Failed to build instant test search", { description: response.message });
+                return;
+            }
+
+            collected.push(...response.data.tests);
+            pages = response.data.totalPages;
+            nextPage += 1;
+        } while (nextPage <= pages);
+
+        setSearchIndexTests(collected);
+    }, []);
+
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- sync local form and pagination state from URL parameters for back/forward navigation
         setSearch(urlSearch);
@@ -192,6 +208,10 @@ export default function AdminTestsPage() {
     }, [urlPage, urlSearch, urlStatus]);
 
     useEffect(() => {
+        setLivePage(1);
+    }, [search, statusFilter]);
+
+    useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional data refetch when filters change
         void fetchTests({
             search: appliedSearch.trim() || undefined,
@@ -199,6 +219,35 @@ export default function AdminTestsPage() {
             page,
         });
     }, [appliedSearch, fetchTests, page, statusFilter]);
+
+    useEffect(() => {
+        void fetchSearchIndex(statusFilter === "ALL" ? undefined : statusFilter);
+    }, [fetchSearchIndex, statusFilter]);
+
+    const liveMatches = useMemo(() => {
+        const query = search.trim();
+        const source = searchIndexTests.length > 0 ? searchIndexTests : tests;
+
+        if (!query) {
+            return source;
+        }
+
+        return source.filter((test) => matchesTestSearch(test.title, query));
+    }, [search, searchIndexTests, tests]);
+
+    const visibleTests = useMemo(() => {
+        if (!isSearchDirty) {
+            return tests;
+        }
+
+        const start = (livePage - 1) * PAGE_SIZE;
+        return liveMatches.slice(start, start + PAGE_SIZE);
+    }, [isSearchDirty, liveMatches, livePage, tests]);
+
+    const displayPage = isSearchDirty ? livePage : page;
+    const displayTotal = isSearchDirty ? liveMatches.length : total;
+    const displayTotalPages = isSearchDirty ? Math.max(1, Math.ceil(liveMatches.length / PAGE_SIZE)) : totalPages;
+    const resultsBadgeLabel = isSearchDirty ? `${displayTotal} matches` : `${total} tests`;
 
     const handlePermanentDelete = async () => {
         if (!deleteTarget) return;
@@ -299,7 +348,7 @@ export default function AdminTestsPage() {
 
             {isSearchDirty ? (
                 <p className="text-sm font-medium text-slate-500">
-                    Narrowing the current page instantly. Press Enter to search all tests.
+                    Instant search is matching across all tests in the current status. Press Enter to apply the filter server-side and keep it in your workflow.
                 </p>
             ) : null}
 
@@ -346,7 +395,7 @@ export default function AdminTestsPage() {
                                 <TableRow>
                                     <TableCell colSpan={8} className="py-12 text-center text-slate-400">
                                         {isSearchDirty
-                                            ? "No tests on this page match. Press Enter to search all tests."
+                                            ? "No tests match this instant search. Press Enter to apply the filter server-side."
                                             : "No tests found for the current filters."}
                                     </TableCell>
                                 </TableRow>
@@ -426,13 +475,18 @@ export default function AdminTestsPage() {
             </Card>
 
             <PaginationNav
-                page={page}
+                page={displayPage}
                 pageSize={PAGE_SIZE}
-                totalItems={total}
-                totalPages={totalPages}
+                totalItems={displayTotal}
+                totalPages={displayTotalPages}
                 itemLabel="tests"
                 isLoading={isLoading}
                 onPageChange={(nextPage) => {
+                    if (isSearchDirty) {
+                        setLivePage(nextPage);
+                        return;
+                    }
+
                     setPage(nextPage);
                     syncQueryState({
                         search: appliedSearch,

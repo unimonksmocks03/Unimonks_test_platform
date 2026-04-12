@@ -31,7 +31,7 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCallback, useDeferredValue, useEffect, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api-client";
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
@@ -45,6 +45,15 @@ type User = {
     role: string;
     status: string;
     createdAt: string;
+    batches: BatchOption[];
+};
+
+type BatchOption = {
+    id: string;
+    name: string;
+    code: string;
+    status: string;
+    kind: "FREE_SYSTEM" | "STANDARD";
 };
 
 type UsersResponse = {
@@ -60,14 +69,25 @@ type CreateUserPayload = {
     role: "STUDENT" | "SUB_ADMIN";
 };
 
+type UpdateUserPayload = {
+    name: string;
+    email: string;
+    role: "ADMIN" | "SUB_ADMIN" | "STUDENT";
+    status: "ACTIVE" | "INACTIVE" | "SUSPENDED";
+    batchIds?: string[];
+};
+
+type BatchesResponse = {
+    batches: BatchOption[];
+    total: number;
+    page: number;
+    totalPages: number;
+};
+
 function formatRoleLabel(role: string) {
     if (role === "ADMIN") return "Admin";
     if (role === "SUB_ADMIN") return "Sub-admin";
     return "Student";
-}
-
-function normalizeSelectValue(value: string) {
-    return value.trim().toUpperCase().replace(/[\s-]+/g, "_");
 }
 
 const PAGE_SIZE = 20;
@@ -78,6 +98,8 @@ export default function UserManagementPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
     const [users, setUsers] = useState<User[]>([]);
+    const [availableBatches, setAvailableBatches] = useState<BatchOption[]>([]);
+    const [isBatchOptionsLoading, setIsBatchOptionsLoading] = useState(true);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
@@ -123,6 +145,35 @@ export default function UserManagementPage() {
         setIsLoading(false);
     }, []);
 
+    const fetchAvailableBatches = useCallback(async () => {
+        setIsBatchOptionsLoading(true);
+        const collected: BatchOption[] = [];
+        let nextPage = 1;
+        let totalPages = 1;
+
+        do {
+            const res = await apiClient.get<BatchesResponse>("/api/admin/batches", {
+                page: nextPage,
+                limit: 100,
+            });
+
+            if (!res.ok) {
+                toast.error("Failed to load batch options", { description: res.message });
+                setIsBatchOptionsLoading(false);
+                return;
+            }
+
+            collected.push(...res.data.batches.filter((batch) => batch.kind === "STANDARD"));
+            totalPages = res.data.totalPages;
+            nextPage += 1;
+        } while (nextPage <= totalPages);
+
+        setAvailableBatches(
+            collected.sort((left, right) => left.name.localeCompare(right.name))
+        );
+        setIsBatchOptionsLoading(false);
+    }, []);
+
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch paginated server data when filters or page change
         void fetchUsers({
@@ -132,6 +183,10 @@ export default function UserManagementPage() {
             page,
         });
     }, [deferredSearchQuery, roleFilter, statusFilter, page, fetchUsers]);
+
+    useEffect(() => {
+        void fetchAvailableBatches();
+    }, [fetchAvailableBatches]);
 
     const submitCreateUser = async (payload: CreateUserPayload) => {
         setCreating(true);
@@ -167,19 +222,7 @@ export default function UserManagementPage() {
         await submitCreateUser(payload);
     };
 
-    const handleSaveUser = async (userId: string, formEl: HTMLDivElement) => {
-        const nameInput = formEl.querySelector<HTMLInputElement>(`[data-field="name"]`);
-        const emailInput = formEl.querySelector<HTMLInputElement>(`[data-field="email"]`);
-
-        const body: Record<string, string> = {};
-        if (nameInput?.value) body.name = nameInput.value;
-        if (emailInput?.value) body.email = emailInput.value;
-
-        const roleSelect = formEl.querySelector<HTMLButtonElement>(`[data-field="role"]`);
-        const statusSelect = formEl.querySelector<HTMLButtonElement>(`[data-field="status"]`);
-        if (roleSelect?.textContent) body.role = normalizeSelectValue(roleSelect.textContent);
-        if (statusSelect?.textContent) body.status = normalizeSelectValue(statusSelect.textContent);
-
+    const handleSaveUser = async (userId: string, body: UpdateUserPayload) => {
         const res = await apiClient.patch(`/api/admin/users/${userId}`, body);
         if (res.ok) {
             toast.success("User Updated");
@@ -423,125 +466,13 @@ export default function UserManagementPage() {
                                         </TableCell>
                                         <TableCell className="text-right pr-8">
                                             <div className="flex items-center justify-end gap-1">
-                                                <Sheet>
-                                                    <SheetTrigger asChild>
-                                                        <Button variant="ghost" size="icon" className="h-9 w-9 shadow-none text-slate-400 hover:text-primary hover:bg-surface-2 rounded-xl">
-                                                            <Edit className="h-4 w-4" />
-                                                        </Button>
-                                                    </SheetTrigger>
-                                                    <SheetContent className="border-l-0 shadow-clay-outer p-0 sm:max-w-md w-full flex flex-col">
-                                                        <div className="p-6 border-b" style={{ borderColor: 'var(--border-soft)' }}>
-                                                            <SheetHeader>
-                                                                <SheetTitle className="font-serif text-2xl text-slate-900">Edit User</SheetTitle>
-                                                                <SheetDescription>
-                                                                    Make changes to {user.name}&apos;s profile here.
-                                                                </SheetDescription>
-                                                            </SheetHeader>
-                                                        </div>
-                                                        <div className="p-6 flex-1 overflow-auto grid gap-6 content-start" id={`edit-form-${user.id}`}>
-                                                            <div className="grid gap-2">
-                                                                <Label className="font-bold text-slate-700">Full Name</Label>
-                                                                <Input
-                                                                    data-field="name"
-                                                                    defaultValue={user.name}
-                                                                    disabled={isOwnerAdminProtected || isSubAdminProtected}
-                                                                    className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100 disabled:text-slate-600"
-                                                                />
-                                                            </div>
-                                                            <div className="grid gap-2">
-                                                                <Label className="font-bold text-slate-700">Email Address</Label>
-                                                                <Input
-                                                                    data-field="email"
-                                                                    defaultValue={user.email}
-                                                                    disabled={isOwnerAdminProtected || isSubAdminProtected}
-                                                                    className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100 disabled:text-slate-600"
-                                                                />
-                                                            </div>
-                                                            <div className="grid gap-2">
-                                                                <Label className="font-bold text-slate-700">Role</Label>
-                                                                {isOwnerAdminRow ? (
-                                                                    <Input
-                                                                        value="Admin (Owner)"
-                                                                        disabled
-                                                                        className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
-                                                                    />
-                                                                ) : isPrimaryAdmin ? (
-                                                                    <Select defaultValue={user.role}>
-                                                                        <SelectTrigger data-field="role" className="rounded-xl h-11 bg-surface-2 border-transparent">
-                                                                            <SelectValue placeholder="Select role" />
-                                                                        </SelectTrigger>
-                                                                        <SelectContent className="rounded-xl">
-                                                                            <SelectItem value="STUDENT">Student</SelectItem>
-                                                                            <SelectItem value="SUB_ADMIN">Sub-admin</SelectItem>
-                                                                        </SelectContent>
-                                                                    </Select>
-                                                                ) : (
-                                                                    <Input
-                                                                        value={formatRoleLabel(user.role)}
-                                                                        disabled
-                                                                        className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
-                                                                    />
-                                                                )}
-                                                            </div>
-                                                            <div className="grid gap-2">
-                                                                <Label className="font-bold text-slate-700">Status</Label>
-                                                                {isOwnerAdminRow || isSubAdminProtected ? (
-                                                                    <Input
-                                                                        value={user.status}
-                                                                        disabled
-                                                                        className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
-                                                                    />
-                                                                ) : (
-                                                                    <Select defaultValue={user.status}>
-                                                                        <SelectTrigger data-field="status" className="rounded-xl h-11 bg-surface-2 border-transparent">
-                                                                            <SelectValue placeholder="Select status" />
-                                                                        </SelectTrigger>
-                                                                        <SelectContent className="rounded-xl">
-                                                                            <SelectItem value="ACTIVE">Active</SelectItem>
-                                                                            <SelectItem value="INACTIVE">Inactive</SelectItem>
-                                                                            <SelectItem value="SUSPENDED">Suspended</SelectItem>
-                                                                        </SelectContent>
-                                                                    </Select>
-                                                                )}
-                                                            </div>
-                                                            {isOwnerAdminProtected ? (
-                                                                <p className="text-xs text-slate-500">
-                                                                    Only the owner admin can change the main admin account details.
-                                                                </p>
-                                                            ) : isOwnerAdminRow ? (
-                                                                <p className="text-xs text-slate-500">
-                                                                    The owner admin account is protected from role, status, and deletion changes.
-                                                                </p>
-                                                            ) : isSubAdminProtected ? (
-                                                                <p className="text-xs text-slate-500">
-                                                                    Only the owner admin can change or revoke a sub-admin account.
-                                                                </p>
-                                                            ) : isSubAdminRow ? (
-                                                                <p className="text-xs text-slate-500">
-                                                                    This user currently has full admin-panel access. The owner admin can downgrade or deactivate it here.
-                                                                </p>
-                                                            ) : null}
-                                                        </div>
-                                                        <div className="p-6 border-t bg-surface-2" style={{ borderColor: 'var(--border-soft)' }}>
-                                                            <SheetFooter className="flex-col sm:flex-row gap-2">
-                                                                <SheetClose asChild>
-                                                                    <Button variant="outline" className="rounded-xl h-12 w-full sm:w-auto border-transparent shadow-sm bg-white">Cancel</Button>
-                                                                </SheetClose>
-                                                                <Button
-                                                                    type="button"
-                                                                    disabled={isOwnerAdminProtected || isSubAdminProtected}
-                                                                    onClick={() => {
-                                                                        const formEl = document.getElementById(`edit-form-${user.id}`);
-                                                                        if (formEl) handleSaveUser(user.id, formEl as HTMLDivElement);
-                                                                    }}
-                                                                    className="rounded-xl h-12 w-full sm:w-auto bg-primary text-white font-bold shadow-clay-inner"
-                                                                >
-                                                                    Save Changes
-                                                                </Button>
-                                                            </SheetFooter>
-                                                        </div>
-                                                    </SheetContent>
-                                                </Sheet>
+                                                <EditUserSheet
+                                                    user={user}
+                                                    isPrimaryAdmin={isPrimaryAdmin}
+                                                    availableBatches={availableBatches}
+                                                    isBatchOptionsLoading={isBatchOptionsLoading}
+                                                    onSave={handleSaveUser}
+                                                />
                                                 {canDeleteUser && (
                                                     <Button
                                                         variant="ghost"
@@ -623,5 +554,269 @@ export default function UserManagementPage() {
                 </AlertDialogContent>
             </AlertDialog>
         </div>
+    );
+}
+
+type EditUserSheetProps = {
+    user: User;
+    isPrimaryAdmin: boolean;
+    availableBatches: BatchOption[];
+    isBatchOptionsLoading: boolean;
+    onSave: (userId: string, payload: UpdateUserPayload) => Promise<void>;
+};
+
+function EditUserSheet({
+    user,
+    isPrimaryAdmin,
+    availableBatches,
+    isBatchOptionsLoading,
+    onSave,
+}: EditUserSheetProps) {
+    const [open, setOpen] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [name, setName] = useState(user.name);
+    const [email, setEmail] = useState(user.email);
+    const [role, setRole] = useState<"ADMIN" | "SUB_ADMIN" | "STUDENT">(user.role as "ADMIN" | "SUB_ADMIN" | "STUDENT");
+    const [status, setStatus] = useState<"ACTIVE" | "INACTIVE" | "SUSPENDED">(user.status as "ACTIVE" | "INACTIVE" | "SUSPENDED");
+    const [batchSearch, setBatchSearch] = useState("");
+    const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>(user.batches.map((batch) => batch.id));
+
+    useEffect(() => {
+        if (!open) {
+            setName(user.name);
+            setEmail(user.email);
+            setRole(user.role as "ADMIN" | "SUB_ADMIN" | "STUDENT");
+            setStatus(user.status as "ACTIVE" | "INACTIVE" | "SUSPENDED");
+            setSelectedBatchIds(user.batches.map((batch) => batch.id));
+            setBatchSearch("");
+        }
+    }, [open, user]);
+
+    const isOwnerAdminRow = user.role === "ADMIN";
+    const isSubAdminRow = user.role === "SUB_ADMIN";
+    const isOwnerAdminProtected = isOwnerAdminRow && !isPrimaryAdmin;
+    const isSubAdminProtected = isSubAdminRow && !isPrimaryAdmin;
+    const batchesVisible = role === "STUDENT";
+
+    const filteredBatches = useMemo(() => {
+        const query = batchSearch.trim().toLowerCase();
+        if (!query) {
+            return availableBatches;
+        }
+
+        return availableBatches.filter((batch) =>
+            batch.name.toLowerCase().includes(query) || batch.code.toLowerCase().includes(query)
+        );
+    }, [availableBatches, batchSearch]);
+
+    const toggleBatch = (batchId: string) => {
+        setSelectedBatchIds((current) =>
+            current.includes(batchId)
+                ? current.filter((id) => id !== batchId)
+                : [...current, batchId]
+        );
+    };
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        await onSave(user.id, {
+            name: name.trim(),
+            email: email.trim(),
+            role,
+            status,
+            batchIds: batchesVisible ? selectedBatchIds : [],
+        });
+        setIsSaving(false);
+        setOpen(false);
+    };
+
+    return (
+        <Sheet open={open} onOpenChange={setOpen}>
+            <SheetTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-9 w-9 shadow-none text-slate-400 hover:text-primary hover:bg-surface-2 rounded-xl">
+                    <Edit className="h-4 w-4" />
+                </Button>
+            </SheetTrigger>
+            <SheetContent className="border-l-0 shadow-clay-outer p-0 sm:max-w-md w-full flex flex-col">
+                <div className="p-6 border-b" style={{ borderColor: 'var(--border-soft)' }}>
+                    <SheetHeader>
+                        <SheetTitle className="font-serif text-2xl text-slate-900">Edit User</SheetTitle>
+                        <SheetDescription>
+                            Make changes to {user.name}&apos;s profile and study-batch access here.
+                        </SheetDescription>
+                    </SheetHeader>
+                </div>
+                <div className="p-6 flex-1 overflow-auto grid gap-6 content-start">
+                    <div className="grid gap-2">
+                        <Label className="font-bold text-slate-700">Full Name</Label>
+                        <Input
+                            value={name}
+                            onChange={(event) => setName(event.target.value)}
+                            disabled={isOwnerAdminProtected || isSubAdminProtected}
+                            className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100 disabled:text-slate-600"
+                        />
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="font-bold text-slate-700">Email Address</Label>
+                        <Input
+                            value={email}
+                            onChange={(event) => setEmail(event.target.value)}
+                            disabled={isOwnerAdminProtected || isSubAdminProtected}
+                            className="rounded-xl h-11 bg-surface-2 border-transparent disabled:bg-slate-100 disabled:text-slate-600"
+                        />
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="font-bold text-slate-700">Role</Label>
+                        {isOwnerAdminRow ? (
+                            <Input
+                                value="Admin (Owner)"
+                                disabled
+                                className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
+                            />
+                        ) : isPrimaryAdmin ? (
+                            <Select
+                                value={role}
+                                onValueChange={(value) => setRole(value as "SUB_ADMIN" | "STUDENT")}
+                            >
+                                <SelectTrigger className="rounded-xl h-11 bg-surface-2 border-transparent">
+                                    <SelectValue placeholder="Select role" />
+                                </SelectTrigger>
+                                <SelectContent className="rounded-xl">
+                                    <SelectItem value="STUDENT">Student</SelectItem>
+                                    <SelectItem value="SUB_ADMIN">Sub-admin</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        ) : (
+                            <Input
+                                value={formatRoleLabel(user.role)}
+                                disabled
+                                className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
+                            />
+                        )}
+                    </div>
+                    <div className="grid gap-2">
+                        <Label className="font-bold text-slate-700">Status</Label>
+                        {isOwnerAdminRow || isSubAdminProtected ? (
+                            <Input
+                                value={status}
+                                disabled
+                                className="rounded-xl h-11 bg-slate-100 border-transparent text-slate-600"
+                            />
+                        ) : (
+                            <Select value={status} onValueChange={(value) => setStatus(value as "ACTIVE" | "INACTIVE" | "SUSPENDED")}>
+                                <SelectTrigger className="rounded-xl h-11 bg-surface-2 border-transparent">
+                                    <SelectValue placeholder="Select status" />
+                                </SelectTrigger>
+                                <SelectContent className="rounded-xl">
+                                    <SelectItem value="ACTIVE">Active</SelectItem>
+                                    <SelectItem value="INACTIVE">Inactive</SelectItem>
+                                    <SelectItem value="SUSPENDED">Suspended</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        )}
+                    </div>
+                    {batchesVisible ? (
+                        <div className="grid gap-3">
+                            <div className="flex items-center justify-between gap-3">
+                                <Label className="font-bold text-slate-700">Assigned Batches</Label>
+                                <span className="text-xs font-medium text-slate-500">
+                                    {selectedBatchIds.length} selected
+                                </span>
+                            </div>
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                <Input
+                                    value={batchSearch}
+                                    onChange={(event) => setBatchSearch(event.target.value)}
+                                    placeholder="Search batches by name or code..."
+                                    className="pl-9 rounded-xl h-11 bg-surface-2 border-transparent"
+                                />
+                            </div>
+                            <div className="max-h-64 overflow-y-auto rounded-2xl border bg-surface-2/60 p-2" style={{ borderColor: 'var(--border-soft)' }}>
+                                {isBatchOptionsLoading ? (
+                                    <div className="space-y-2 p-2">
+                                        {[1, 2, 3].map((index) => (
+                                            <Skeleton key={`batch-option-skeleton-${index}`} className="h-10 rounded-xl" />
+                                        ))}
+                                    </div>
+                                ) : filteredBatches.length === 0 ? (
+                                    <p className="px-3 py-6 text-center text-sm text-slate-500">
+                                        No batches match this search.
+                                    </p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {filteredBatches.map((batch) => {
+                                            const checked = selectedBatchIds.includes(batch.id);
+                                            return (
+                                                <label
+                                                    key={batch.id}
+                                                    className="flex cursor-pointer items-start gap-3 rounded-xl bg-white px-3 py-3 shadow-sm transition hover:bg-slate-50"
+                                                >
+                                                    <Checkbox
+                                                        checked={checked}
+                                                        onCheckedChange={() => toggleBatch(batch.id)}
+                                                        className="mt-0.5 border-slate-300 rounded-[4px] data-[state=checked]:bg-primary"
+                                                    />
+                                                    <div className="flex-1">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="font-medium text-slate-900">{batch.name}</span>
+                                                            <Badge variant="outline" className="rounded-full border-none bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                                                                {batch.code}
+                                                            </Badge>
+                                                        </div>
+                                                        <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+                                                            {batch.status}
+                                                        </p>
+                                                    </div>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                            <p className="text-xs text-slate-500">
+                                This updates the same batch-enrollment records used by Batch Management.
+                            </p>
+                        </div>
+                    ) : user.batches.length > 0 ? (
+                        <p className="text-xs text-slate-500">
+                            Saving this user as {formatRoleLabel(role).toLowerCase()} will remove their current student-batch assignments.
+                        </p>
+                    ) : null}
+                    {isOwnerAdminProtected ? (
+                        <p className="text-xs text-slate-500">
+                            Only the owner admin can change the main admin account details.
+                        </p>
+                    ) : isOwnerAdminRow ? (
+                        <p className="text-xs text-slate-500">
+                            The owner admin account is protected from role, status, and deletion changes.
+                        </p>
+                    ) : isSubAdminProtected ? (
+                        <p className="text-xs text-slate-500">
+                            Only the owner admin can change or revoke a sub-admin account.
+                        </p>
+                    ) : isSubAdminRow ? (
+                        <p className="text-xs text-slate-500">
+                            This user currently has full admin-panel access. The owner admin can downgrade or deactivate it here.
+                        </p>
+                    ) : null}
+                </div>
+                <div className="p-6 border-t bg-surface-2" style={{ borderColor: 'var(--border-soft)' }}>
+                    <SheetFooter className="flex-col sm:flex-row gap-2">
+                        <SheetClose asChild>
+                            <Button variant="outline" className="rounded-xl h-12 w-full sm:w-auto border-transparent shadow-sm bg-white">Cancel</Button>
+                        </SheetClose>
+                        <Button
+                            type="button"
+                            disabled={isOwnerAdminProtected || isSubAdminProtected || isSaving}
+                            onClick={handleSave}
+                            className="rounded-xl h-12 w-full sm:w-auto bg-primary text-white font-bold shadow-clay-inner"
+                        >
+                            {isSaving ? "Saving..." : "Save Changes"}
+                        </Button>
+                    </SheetFooter>
+                </div>
+            </SheetContent>
+        </Sheet>
     );
 }

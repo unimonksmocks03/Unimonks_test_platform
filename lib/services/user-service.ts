@@ -1,3 +1,4 @@
+import { FREE_BATCH_KIND } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
 import { destroyAllSessions } from '@/lib/session'
 import { sendWelcomeEmail } from '@/lib/services/email-service'
@@ -37,6 +38,19 @@ export async function listUsers(query: UserQueryInput) {
                 status: true,
                 createdAt: true,
                 updatedAt: true,
+                batchEnrollments: {
+                    select: {
+                        batch: {
+                            select: {
+                                id: true,
+                                name: true,
+                                code: true,
+                                status: true,
+                                kind: true,
+                            },
+                        },
+                    },
+                },
             },
             orderBy: { createdAt: 'desc' },
             skip,
@@ -46,7 +60,12 @@ export async function listUsers(query: UserQueryInput) {
     ])
 
     return {
-        users,
+        users: users.map(({ batchEnrollments, ...user }) => ({
+            ...user,
+            batches: batchEnrollments
+                .map((enrollment) => enrollment.batch)
+                .filter((batch) => Boolean(batch)),
+        })),
         total,
         page,
         totalPages: Math.ceil(total / limit),
@@ -162,24 +181,109 @@ export async function updateUser(actorRole: Role, id: string, data: UpdateUserIn
         }
     }
 
+    const nextRole = (data.role as Role | undefined) ?? existing.role
+    const batchIds = data.batchIds !== undefined ? [...new Set(data.batchIds)] : undefined
+
+    if (batchIds !== undefined) {
+        if (nextRole !== 'STUDENT' && batchIds.length > 0) {
+            return {
+                error: true,
+                code: 'BATCHS_FOR_STUDENTS_ONLY',
+                message: 'Only student accounts can be assigned to batches',
+            }
+        }
+
+        if (batchIds.length > 0) {
+            const batches = await prisma.batch.findMany({
+                where: {
+                    id: { in: batchIds },
+                },
+                select: {
+                    id: true,
+                    kind: true,
+                },
+            })
+
+            if (batches.length !== batchIds.length) {
+                return {
+                    error: true,
+                    code: 'INVALID_BATCHES',
+                    message: 'One or more selected batches could not be found',
+                }
+            }
+
+            if (batches.some((batch) => batch.kind === FREE_BATCH_KIND)) {
+                return {
+                    error: true,
+                    code: 'SYSTEM_BATCH_PROTECTED',
+                    message: 'Students cannot be enrolled in the protected free-system batch',
+                }
+            }
+        }
+    }
+
     const updateData: Prisma.UserUpdateInput = {}
     if (data.name) updateData.name = data.name
     if (data.email) updateData.email = data.email
     if (data.role) updateData.role = data.role as Role
     if (data.status) updateData.status = data.status as UserStatus
 
-    const user = await prisma.user.update({
-        where: { id },
-        data: updateData,
-        select: {
-            id: true,
-            email: true,
-            name: true,
-            role: true,
-            status: true,
-            createdAt: true,
-            updatedAt: true,
-        },
+    const user = await prisma.$transaction(async (tx) => {
+        const updatedUser = await tx.user.update({
+            where: { id },
+            data: updateData,
+            select: {
+                id: true,
+                email: true,
+                name: true,
+                role: true,
+                status: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+        })
+
+        if (nextRole !== 'STUDENT') {
+            await tx.batchStudent.deleteMany({
+                where: { studentId: id },
+            })
+        } else if (batchIds !== undefined) {
+            await tx.batchStudent.deleteMany({
+                where: { studentId: id },
+            })
+
+            if (batchIds.length > 0) {
+                await tx.batchStudent.createMany({
+                    data: batchIds.map((batchId) => ({
+                        batchId,
+                        studentId: id,
+                    })),
+                    skipDuplicates: true,
+                })
+            }
+        }
+
+        const batchEnrollments = await tx.batchStudent.findMany({
+            where: { studentId: id },
+            select: {
+                batch: {
+                    select: {
+                        id: true,
+                        name: true,
+                        code: true,
+                        status: true,
+                        kind: true,
+                    },
+                },
+            },
+        })
+
+        return {
+            ...updatedUser,
+            batches: batchEnrollments
+                .map((enrollment) => enrollment.batch)
+                .filter((batch) => Boolean(batch)),
+        }
     })
 
     if (existing.status === 'ACTIVE' && user.status !== 'ACTIVE') {

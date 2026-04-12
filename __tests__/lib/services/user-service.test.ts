@@ -6,6 +6,15 @@ const prismaMock = {
         create: vi.fn(),
         update: vi.fn(),
     },
+    batch: {
+        findMany: vi.fn(),
+    },
+    batchStudent: {
+        deleteMany: vi.fn(),
+        createMany: vi.fn(),
+        findMany: vi.fn(),
+    },
+    $transaction: vi.fn(),
 }
 
 const destroyAllSessionsMock = vi.fn()
@@ -27,6 +36,7 @@ const servicePromise = import('../../../lib/services/user-service')
 
 beforeEach(() => {
     vi.clearAllMocks()
+    prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof prismaMock) => Promise<unknown>) => callback(prismaMock))
 })
 
 test('primary admin can create a sub-admin account', async () => {
@@ -127,4 +137,91 @@ test('sub-admin cannot delete another sub-admin account', async () => {
     expect('error' in result && result.code).toBe('OWNER_ADMIN_REQUIRED')
     expect(prismaMock.user.update).not.toHaveBeenCalled()
     expect(destroyAllSessionsMock).not.toHaveBeenCalled()
+})
+
+test('updating a student can replace batch memberships directly from user management', async () => {
+    const { updateUser } = await servicePromise
+
+    prismaMock.user.findUnique.mockResolvedValueOnce({
+        id: 'student-1',
+        email: 'student@example.com',
+        name: 'Student One',
+        role: 'STUDENT',
+        status: 'ACTIVE',
+    })
+    prismaMock.batch.findMany.mockResolvedValueOnce([
+        { id: 'batch-1', kind: 'STANDARD' },
+        { id: 'batch-2', kind: 'STANDARD' },
+    ])
+    prismaMock.user.update.mockResolvedValueOnce({
+        id: 'student-1',
+        email: 'student@example.com',
+        name: 'Student One',
+        role: 'STUDENT',
+        status: 'ACTIVE',
+        createdAt: new Date('2026-03-22T00:00:00.000Z'),
+        updatedAt: new Date('2026-03-23T00:00:00.000Z'),
+    })
+    prismaMock.batchStudent.findMany.mockResolvedValueOnce([
+        {
+            batch: {
+                id: 'batch-1',
+                name: 'Humanities',
+                code: 'HUM-XII',
+                status: 'ACTIVE',
+                kind: 'STANDARD',
+            },
+        },
+        {
+            batch: {
+                id: 'batch-2',
+                name: 'Reasoning',
+                code: 'REASON-XII',
+                status: 'ACTIVE',
+                kind: 'STANDARD',
+            },
+        },
+    ])
+
+    const result = await updateUser('ADMIN', 'student-1', {
+        batchIds: ['batch-1', 'batch-2'],
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.batchStudent.deleteMany).toHaveBeenCalledWith({
+        where: { studentId: 'student-1' },
+    })
+    expect(prismaMock.batchStudent.createMany).toHaveBeenCalledWith({
+        data: [
+            { batchId: 'batch-1', studentId: 'student-1' },
+            { batchId: 'batch-2', studentId: 'student-1' },
+        ],
+        skipDuplicates: true,
+    })
+    expect(result.user.batches).toHaveLength(2)
+})
+
+test('user management rejects assigning the protected free batch to a student', async () => {
+    const { updateUser } = await servicePromise
+
+    prismaMock.user.findUnique.mockResolvedValueOnce({
+        id: 'student-1',
+        email: 'student@example.com',
+        name: 'Student One',
+        role: 'STUDENT',
+        status: 'ACTIVE',
+    })
+    prismaMock.batch.findMany.mockResolvedValueOnce([
+        { id: 'free-batch', kind: 'FREE_SYSTEM' },
+    ])
+
+    const result = await updateUser('ADMIN', 'student-1', {
+        batchIds: ['free-batch'],
+    })
+
+    expect('error' in result && result.code).toBe('SYSTEM_BATCH_PROTECTED')
+    expect(prismaMock.batchStudent.deleteMany).not.toHaveBeenCalled()
+    expect(prismaMock.user.update).not.toHaveBeenCalled()
 })
