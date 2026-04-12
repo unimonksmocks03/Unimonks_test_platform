@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Search, Sparkles, Trophy } from "lucide-react";
 
@@ -173,10 +173,7 @@ export default function StudentDashboard() {
         ?? data.tests.find((test) => test.canStartAttempt)
         ?? data.tests[0];
     const featuredAction = featuredTest ? getPrimaryAction(featuredTest) : null;
-    const selectedBatchLabel = useMemo(
-        () => batchCards.find((batch) => batch.id === selectedBatchId)?.name ?? "All Tests",
-        [batchCards, selectedBatchId],
-    );
+    const selectedBatchLabel = batchCards.find((batch) => batch.id === selectedBatchId)?.name ?? "All Tests";
 
     return (
         <div className="flex flex-col gap-8 w-full max-w-6xl mx-auto pb-10">

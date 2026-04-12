@@ -17,6 +17,7 @@
     "db:bootstrap:owner-admin": "tsx scripts/bootstrap-owner-admin.ts"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.81",
     "@neondatabase/serverless": "^1.0.2",
     "@prisma/adapter-neon": "^6.19.2",
     "@prisma/adapter-pg": "^6.19.2",
