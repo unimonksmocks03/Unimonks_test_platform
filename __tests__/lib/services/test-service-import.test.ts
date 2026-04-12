@@ -194,6 +194,7 @@ beforeEach(() => {
         overallAssessment: 'No additional AI issues found.',
         confidence: 0.95,
     })
+    attachSharedContextsFromPdfMock.mockImplementation(async (_buffer, questions) => questions)
     enrichGeneratedQuestionsMetadataMock.mockResolvedValue({
         questions: [createQuestion('Recovered question stem')],
         description: 'Recovered description',
@@ -325,4 +326,73 @@ test('generateAdminTestFromDocument persists review-required diagnostics to the 
             }),
         }),
     }))
+})
+
+test('generateAdminTestFromDocument skips inline AI verification and metadata enrichment for large classifier imports', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    const extractedQuestions = Array.from({ length: 50 }, (_, index) =>
+        createQuestion(`Recovered question ${index + 1}`, {
+            topic: 'Reasoning',
+            difficulty: index % 3 === 0 ? 'EASY' : index % 3 === 1 ? 'MEDIUM' : 'HARD',
+        }),
+    )
+
+    executeDocumentImportPlanMock.mockResolvedValue({
+        useLegacyFlow: false,
+        strategy: 'EXTRACTED',
+        result: {
+            error: false,
+            message: undefined,
+            questions: extractedQuestions,
+            failedCount: 0,
+            cost: {
+                model: 'gpt-5.4',
+                inputTokens: 500,
+                outputTokens: 100,
+                costUSD: 0.75,
+            },
+        },
+        extracted: {
+            detectedAsMcqDocument: true,
+            answerHintCount: 50,
+            candidateBlockCount: 50,
+            questions: extractedQuestions,
+            expectedQuestionCount: 50,
+            exactMatchAchieved: true,
+            invalidQuestionNumbers: [],
+            missingQuestionNumbers: [],
+            duplicateQuestionNumbers: [],
+            aiRepairUsed: false,
+            cost: undefined,
+            error: false,
+            message: undefined,
+        },
+        parserStatus: 'OK',
+        aiFallbackUsed: false,
+        reportParserIssue: false,
+        warning: null,
+        needsAdminReview: false,
+        reviewIssueCount: 0,
+    })
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('reasoning.pdf'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(verifyExtractedQuestionsWithAIMock).not.toHaveBeenCalled()
+    expect(enrichGeneratedQuestionsMetadataMock).not.toHaveBeenCalled()
+
+    const createCall = prismaMock.test.create.mock.calls.at(-1)?.[0]
+    expect(createCall?.data.importDiagnostics).toMatchObject({
+        fileName: 'reasoning.pdf',
+        metadataAiUsed: false,
+        extractedQuestions: 50,
+        questionsGenerated: 50,
+    })
 })

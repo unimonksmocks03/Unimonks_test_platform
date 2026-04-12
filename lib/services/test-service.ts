@@ -163,6 +163,18 @@ type DocumentGenerationResult =
         chunkCount?: number
     })
 
+type InlineMetadataEnrichmentFallback = {
+    questions: Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>>['questions']
+    description: string
+    suggestedTitle: string | null
+    suggestedDurationMinutes: number | null
+    primaryTopic: string | null
+    difficultyDistribution: { easy: number; medium: number; hard: number } | null
+    aiUsed: boolean
+    cost?: undefined
+    warning?: string
+}
+
 function serviceError(
     code: ServiceErrorCode,
     message: string,
@@ -204,6 +216,97 @@ function buildQuestionImportEvidence(question: {
 
 function buildTestImportDiagnosticsPayload(input: TestImportDiagnosticsPayload): Prisma.InputJsonValue {
     return input as Prisma.InputJsonValue
+}
+
+function buildFallbackDocumentDescriptionForImport(
+    questions: Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>>['questions'],
+    sourceLabel?: string | null,
+) {
+    const totalQuestions = questions.length
+    const topicCounts = new Map<string, number>()
+
+    for (const question of questions) {
+        const topic = typeof question.topic === 'string' && question.topic.trim().length > 0
+            ? question.topic.trim()
+            : 'General aptitude'
+        topicCounts.set(topic, (topicCounts.get(topic) ?? 0) + 1)
+    }
+
+    const topTopics = [...topicCounts.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 3)
+        .map(([topic]) => topic)
+
+    const sourceText = sourceLabel?.replace(/\.(docx|pdf)$/i, '').trim() || 'uploaded document'
+    const topicText = topTopics.length > 0 ? topTopics.join(', ') : 'core syllabus concepts'
+
+    return `This CUET mock test from ${sourceText} covers ${topicText} across ${totalQuestions} questions. It preserves the uploaded paper structure for review before publishing.`.slice(0, 280)
+}
+
+function buildFallbackDifficultyDistribution(
+    questions: Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>>['questions'],
+) {
+    if (questions.length === 0) {
+        return null
+    }
+
+    return questions.reduce(
+        (distribution, question) => {
+            if (question.difficulty === Difficulty.EASY) distribution.easy += 1
+            else if (question.difficulty === Difficulty.HARD) distribution.hard += 1
+            else distribution.medium += 1
+            return distribution
+        },
+        { easy: 0, medium: 0, hard: 0 },
+    )
+}
+
+function buildFallbackMetadataEnrichment(
+    questions: Awaited<ReturnType<typeof extractQuestionsFromDocumentTextPrecisely>>['questions'],
+    sourceLabel?: string | null,
+): InlineMetadataEnrichmentFallback {
+    const topicCounts = new Map<string, number>()
+    for (const question of questions) {
+        const topic = question.topic?.trim()
+        if (topic) {
+            topicCounts.set(topic, (topicCounts.get(topic) ?? 0) + 1)
+        }
+    }
+
+    const primaryTopic = [...topicCounts.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .map(([topic]) => topic)[0] ?? null
+
+    return {
+        questions,
+        description: buildFallbackDocumentDescriptionForImport(questions, sourceLabel),
+        suggestedTitle: null,
+        suggestedDurationMinutes: Math.max(15, questions.length * 2),
+        primaryTopic,
+        difficultyDistribution: buildFallbackDifficultyDistribution(questions),
+        aiUsed: false,
+    }
+}
+
+function shouldRunInlineAiPostProcessing(input: {
+    isPdfUpload: boolean
+    questionCount: number
+    strategy: 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
+    routingMode?: DocumentImportRoutingMode
+}) {
+    if (input.questionCount >= MIN_GENERATED_QUESTIONS) {
+        return false
+    }
+
+    if (input.isPdfUpload) {
+        return false
+    }
+
+    if (input.routingMode === 'CLASSIFIER') {
+        return false
+    }
+
+    return input.strategy === 'AI_GENERATED'
 }
 
 export function classifyBatchAudience(batchKinds: readonly BatchKind[]): BatchAudience {
@@ -1437,8 +1540,15 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             },
         )
 
+    const runInlineAiPostProcessing = shouldRunInlineAiPostProcessing({
+        isPdfUpload,
+        questionCount: result.questions.length,
+        strategy,
+        routingMode: importDiagnostics.routingMode,
+    })
+
     // Cross-model AI verification pass
-    if (verification && result.questions.length > 0) {
+    if (verification && result.questions.length > 0 && runInlineAiPostProcessing) {
         const extractionModel = strategy === 'AI_VISION_FALLBACK' ? 'gpt-4o' : 'gpt-4o-mini'
         const aiVerification = await verifyExtractedQuestionsWithAI(
             result.questions,
@@ -1479,11 +1589,16 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             console.warn('[AI-DOC][ADMIN] Could not attach shared PDF context:', error)
         }
     }
-    const metadataEnrichment = await enrichGeneratedQuestionsMetadata({
-        questions: questionsWithSharedContext,
-        auditUserId: admin.id,
-        sourceLabel: uploadValidation.sanitizedFileName,
-    })
+    const metadataEnrichment = runInlineAiPostProcessing
+        ? await enrichGeneratedQuestionsMetadata({
+            questions: questionsWithSharedContext,
+            auditUserId: admin.id,
+            sourceLabel: uploadValidation.sanitizedFileName,
+        })
+        : buildFallbackMetadataEnrichment(
+            questionsWithSharedContext,
+            uploadValidation.sanitizedFileName,
+        )
     const finalQuestions = metadataEnrichment.questions
     const finalDescription = metadataEnrichment.description
     const testTitle = input.title?.trim()

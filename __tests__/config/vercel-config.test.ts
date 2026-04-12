@@ -9,5 +9,5 @@ test('AI document import function is configured with the extended Vercel timeout
         functions?: Record<string, { maxDuration?: number }>
     }
 
-    expect(vercelConfig.functions?.['app/api/admin/tests/generate-from-doc/route.ts']?.maxDuration).toBe(180)
+    expect(vercelConfig.functions?.['app/api/admin/tests/generate-from-doc/route.ts']?.maxDuration).toBe(300)
 })
