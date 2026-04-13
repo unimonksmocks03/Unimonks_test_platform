@@ -1,4 +1,4 @@
-import { expect, test, vi } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 
 import type { GeneratedQuestion, PreciseDocumentQuestionAnalysis } from '@/lib/services/ai-service.types'
 import type { VerificationIssue, VerificationResult } from '@/lib/services/ai-extraction-schemas'
@@ -117,6 +117,10 @@ function createHandlers(overrides: Partial<ExecutionHandlers> = {}): ExecutionHa
         ...overrides,
     } satisfies ExecutionHandlers
 }
+
+afterEach(() => {
+    vi.useRealTimers()
+})
 
 test('executeDocumentImportPlan uses exact extraction for TEXT_EXACT strategy', async () => {
     const extractTextExact = vi.fn().mockResolvedValue(createExactExtraction())
@@ -375,6 +379,44 @@ test('executeDocumentImportPlan does not run a second visual overlay after multi
     expect(outcome.useLegacyFlow).toBe(false)
     expect(outcome.strategy).toBe('AI_VISION_FALLBACK')
     expect(extractVisualReferences).not.toHaveBeenCalled()
+})
+
+test('executeDocumentImportPlan returns exact questions even when visual reference extraction times out', async () => {
+    vi.useFakeTimers()
+
+    const extractVisualReferences = vi.fn().mockImplementation(() => new Promise(() => {}))
+    const outcomePromise = executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: true,
+                generateFromSource: false,
+                reasons: ['visual pdf with strong text'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact: vi.fn().mockResolvedValue(createExactExtraction({
+                questions: [createQuestion('Exact visual question')],
+            })),
+            extractVisualReferences,
+        }),
+    )
+
+    await vi.advanceTimersByTimeAsync(45_000)
+    const outcome = await outcomePromise
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('EXTRACTED')
+    expect(outcome.result?.questions).toHaveLength(1)
+    expect(outcome.warning).toContain('visual-reference extraction')
+    expect(outcome.needsAdminReview).toBe(true)
 })
 
 test('executeDocumentImportPlan falls back to exact extraction after multimodal failure', async () => {

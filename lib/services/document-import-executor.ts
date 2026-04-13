@@ -62,6 +62,15 @@ type ExecuteDocumentImportPlanHandlers = {
     generateFromPdfVision: (target: number) => Promise<PdfVisionFallbackResult>
 }
 
+const VISUAL_REFERENCE_EXTRACTION_TIMEOUT_MS = 45_000
+
+class VisualReferenceExtractionTimeoutError extends Error {
+    constructor(message = 'Visual-reference extraction timed out before completion.') {
+        super(message)
+        this.name = 'VisualReferenceExtractionTimeoutError'
+    }
+}
+
 function hasUsableQuestions(
     result:
         | GeneratedTextQuestionsResult
@@ -244,16 +253,39 @@ function mergeVisualReferencesIntoQuestions(
 async function safelyExtractVisualReferences(
     extractVisualReferences: ExecuteDocumentImportPlanHandlers['extractVisualReferences'],
 ): Promise<VisualReferenceExtractionResult | null> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    let timedOut = false
     try {
-        return await extractVisualReferences()
+        const extractionPromise = extractVisualReferences()
+        extractionPromise.catch((error) => {
+            if (timedOut) {
+                console.warn('[IMPORT] Visual-reference extraction rejected after timeout:', error)
+            }
+        })
+
+        return await Promise.race<VisualReferenceExtractionResult | null>([
+            extractionPromise,
+            new Promise<VisualReferenceExtractionResult>((_, reject) => {
+                timeoutHandle = setTimeout(() => {
+                    timedOut = true
+                    reject(new VisualReferenceExtractionTimeoutError())
+                }, VISUAL_REFERENCE_EXTRACTION_TIMEOUT_MS)
+            }),
+        ])
     } catch (error) {
         console.warn('[IMPORT] Visual-reference extraction failed during classifier routing:', error)
         return {
             error: true,
-            message: 'Visual-reference extraction could not complete for this document.',
+            message: error instanceof VisualReferenceExtractionTimeoutError
+                ? 'Visual-reference extraction timed out before diagram context could be recovered.'
+                : 'Visual-reference extraction could not complete for this document.',
             pageCount: 0,
             chunkCount: 0,
             references: [],
+        }
+    } finally {
+        if (timeoutHandle) {
+            clearTimeout(timeoutHandle)
         }
     }
 }

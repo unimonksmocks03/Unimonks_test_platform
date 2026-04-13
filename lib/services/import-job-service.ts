@@ -40,6 +40,16 @@ const DOCUMENT_IMPORT_JOB_STATUS = {
     FAILED: 'FAILED',
 } as const satisfies Record<DocumentImportJobStatus, DocumentImportJobStatus>
 
+const DOCUMENT_IMPORT_JOB_TIMEOUT_MS = 210_000
+const STALE_PROCESSING_JOB_TIMEOUT_MS = DOCUMENT_IMPORT_JOB_TIMEOUT_MS + 60_000
+
+class DocumentImportJobTimeoutError extends Error {
+    constructor(message = 'Document import timed out before completion.') {
+        super(message)
+        this.name = 'DocumentImportJobTimeoutError'
+    }
+}
+
 export type CreateDocumentImportJobInput = {
     adminId: string
     file: File
@@ -67,6 +77,85 @@ function serviceError(
 
 function toInputJsonValue(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue
+}
+
+function isStaleProcessingJob(startedAt: Date | null | undefined, now = Date.now()) {
+    if (!startedAt) {
+        return false
+    }
+
+    return now - startedAt.getTime() >= STALE_PROCESSING_JOB_TIMEOUT_MS
+}
+
+async function updateDocumentImportJobFailure(
+    jobId: string,
+    input: {
+        message: string
+        errorCode: string
+        errorMessage: string
+        result?: unknown
+        clearFileData?: boolean
+    },
+) {
+    return prisma.documentImportJob.update({
+        where: { id: jobId },
+        data: {
+            status: DOCUMENT_IMPORT_JOB_STATUS.FAILED,
+            message: input.message,
+            errorCode: input.errorCode,
+            errorMessage: input.errorMessage,
+            result: input.result === undefined
+                ? undefined
+                : input.result === Prisma.JsonNull
+                    ? Prisma.JsonNull
+                    : toInputJsonValue(input.result),
+            completedAt: new Date(),
+            ...(input.clearFileData === false ? {} : { fileData: null }),
+        },
+        select: {
+            id: true,
+            status: true,
+            fileName: true,
+            message: true,
+            errorCode: true,
+            errorMessage: true,
+            testId: true,
+            result: true,
+            createdAt: true,
+            updatedAt: true,
+            startedAt: true,
+            completedAt: true,
+        },
+    })
+}
+
+async function raceDocumentImportJobTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs = DOCUMENT_IMPORT_JOB_TIMEOUT_MS,
+) {
+    let timedOut = false
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    promise.catch((error) => {
+        if (timedOut) {
+            console.warn('[DOCUMENT-IMPORT] Timed-out job promise rejected after timeout:', error)
+        }
+    })
+
+    try {
+        return await Promise.race<T>([
+            promise,
+            new Promise<T>((_, reject) => {
+                timeoutHandle = setTimeout(() => {
+                    timedOut = true
+                    reject(new DocumentImportJobTimeoutError())
+                }, timeoutMs)
+            }),
+        ])
+    } finally {
+        if (timeoutHandle) {
+            clearTimeout(timeoutHandle)
+        }
+    }
 }
 
 async function ensureActiveAdmin(adminId: string) {
@@ -195,36 +284,42 @@ export async function getDocumentImportJob(adminId: string, jobId: string) {
         return serviceError('FORBIDDEN', 'You can only view your own import jobs.')
     }
 
+    if (
+        job.status === DOCUMENT_IMPORT_JOB_STATUS.PROCESSING
+        && isStaleProcessingJob(job.startedAt)
+    ) {
+        const failed = await updateDocumentImportJobFailure(job.id, {
+            message: 'Import timed out during background processing.',
+            errorCode: 'TIMEOUT',
+            errorMessage: 'The background import worker exceeded the allowed execution window.',
+        })
+
+        return {
+            job: mapJob(failed),
+        }
+    }
+
     return {
         job: mapJob(job),
     }
 }
 
 export async function markDocumentImportJobQueueFailed(jobId: string, message: string) {
-    const job = await prisma.documentImportJob.update({
-        where: { id: jobId },
-        data: {
-            status: DOCUMENT_IMPORT_JOB_STATUS.FAILED,
-            message,
-            errorCode: 'QUEUE_FAILED',
-            errorMessage: message,
-            completedAt: new Date(),
-            fileData: null,
-        },
-        select: {
-            id: true,
-            status: true,
-            fileName: true,
-            message: true,
-            errorCode: true,
-            errorMessage: true,
-            testId: true,
-            result: true,
-            createdAt: true,
-            updatedAt: true,
-            startedAt: true,
-            completedAt: true,
-        },
+    const job = await updateDocumentImportJobFailure(jobId, {
+        message,
+        errorCode: 'QUEUE_FAILED',
+        errorMessage: message,
+    })
+
+    return mapJob(job)
+}
+
+export async function markDocumentImportJobUnhandledFailure(jobId: string, error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unexpected import processing error.'
+    const job = await updateDocumentImportJobFailure(jobId, {
+        message: 'Import failed during background processing.',
+        errorCode: error instanceof DocumentImportJobTimeoutError ? 'TIMEOUT' : 'GENERATION_FAILED',
+        errorMessage: message,
     })
 
     return mapJob(job)
@@ -271,35 +366,17 @@ export async function processDocumentImportJob(jobId: string): Promise<ProcessDo
     }
 
     if (!job.fileData) {
-        const failed = await prisma.documentImportJob.update({
-            where: { id: job.id },
-            data: {
-                status: DOCUMENT_IMPORT_JOB_STATUS.FAILED,
-                message: 'Import source file is no longer available for processing.',
-                errorCode: 'BAD_REQUEST',
-                errorMessage: 'Import source file is missing from the queued job.',
-                completedAt: new Date(),
-            },
-            select: {
-                id: true,
-                status: true,
-                fileName: true,
-                message: true,
-                errorCode: true,
-                errorMessage: true,
-                testId: true,
-                result: true,
-                createdAt: true,
-                updatedAt: true,
-                startedAt: true,
-                completedAt: true,
-            },
+        const failed = await updateDocumentImportJobFailure(job.id, {
+            message: 'Import source file is no longer available for processing.',
+            errorCode: 'BAD_REQUEST',
+            errorMessage: 'Import source file is missing from the queued job.',
+            clearFileData: false,
         })
 
         return { kind: 'failed', job: mapJob(failed) }
     }
 
-    const processingJob = await prisma.documentImportJob.update({
+    await prisma.documentImportJob.update({
         where: { id: job.id },
         data: {
             status: DOCUMENT_IMPORT_JOB_STATUS.PROCESSING,
@@ -329,42 +406,22 @@ export async function processDocumentImportJob(jobId: string): Promise<ProcessDo
     })
 
     try {
-        const result = await generateAdminTestFromDocument({
+        const result = await raceDocumentImportJobTimeout(generateAdminTestFromDocument({
             adminId: job.adminId,
             file,
             title: job.requestedTitle,
             requestedCount: job.requestedCount,
             ipAddress: null,
-        })
+        }))
 
         if ('error' in result) {
-            const failed = await prisma.documentImportJob.update({
-                where: { id: job.id },
-                data: {
-                    status: DOCUMENT_IMPORT_JOB_STATUS.FAILED,
-                    message: result.message,
-                    errorCode: result.code,
-                    errorMessage: result.message,
-                    result: result.details
-                        ? toInputJsonValue({ error: true, details: result.details })
-                        : Prisma.JsonNull,
-                    completedAt: new Date(),
-                    fileData: null,
-                },
-                select: {
-                    id: true,
-                    status: true,
-                    fileName: true,
-                    message: true,
-                    errorCode: true,
-                    errorMessage: true,
-                    testId: true,
-                    result: true,
-                    createdAt: true,
-                    updatedAt: true,
-                    startedAt: true,
-                    completedAt: true,
-                },
+            const failed = await updateDocumentImportJobFailure(job.id, {
+                message: result.message,
+                errorCode: result.code,
+                errorMessage: result.message,
+                result: result.details
+                    ? { error: true, details: result.details }
+                    : Prisma.JsonNull,
             })
 
             return { kind: 'failed', job: mapJob(failed) }
@@ -413,31 +470,12 @@ export async function processDocumentImportJob(jobId: string): Promise<ProcessDo
 
         return { kind: 'succeeded', job: mapJob(succeeded) }
     } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unexpected import processing error.'
-        const failed = await prisma.documentImportJob.update({
-            where: { id: job.id },
-            data: {
-                status: DOCUMENT_IMPORT_JOB_STATUS.FAILED,
-                message: 'Import failed during background processing.',
-                errorCode: 'GENERATION_FAILED',
-                errorMessage: message,
-                completedAt: new Date(),
-                fileData: null,
-            },
-            select: {
-                id: true,
-                status: true,
-                fileName: true,
-                message: true,
-                errorCode: true,
-                errorMessage: true,
-                testId: true,
-                result: true,
-                createdAt: true,
-                updatedAt: true,
-                startedAt: true,
-                completedAt: true,
-            },
+        const failed = await updateDocumentImportJobFailure(job.id, {
+            message: error instanceof DocumentImportJobTimeoutError
+                ? 'Import timed out during background processing.'
+                : 'Import failed during background processing.',
+            errorCode: error instanceof DocumentImportJobTimeoutError ? 'TIMEOUT' : 'GENERATION_FAILED',
+            errorMessage: error instanceof Error ? error.message : 'Unexpected import processing error.',
         })
 
         return { kind: 'failed', job: mapJob(failed) }

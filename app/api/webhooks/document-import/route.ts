@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Receiver } from '@upstash/qstash'
 
 import { getQStashEnv } from '@/lib/env'
-import { processDocumentImportJob } from '@/lib/services/import-job-service'
+import {
+    markDocumentImportJobUnhandledFailure,
+    processDocumentImportJob,
+} from '@/lib/services/import-job-service'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -52,6 +55,9 @@ export async function POST(req: NextRequest) {
             reason: outcome.kind === 'noop' ? outcome.reason : undefined,
         })
     } catch (error) {
+        await markDocumentImportJobUnhandledFailure(parsed.jobId, error).catch((finalizeError) => {
+            console.error('[DOCUMENT-IMPORT] Could not finalize failed import job:', finalizeError)
+        })
         console.error('[DOCUMENT-IMPORT] Worker failed before job state could be finalized:', error)
         return NextResponse.json({ error: 'Internal error' }, { status: 500 })
     }

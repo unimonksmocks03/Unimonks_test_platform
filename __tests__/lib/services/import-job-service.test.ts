@@ -1,4 +1,4 @@
-import { beforeEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 const prismaMock = {
     user: {
@@ -35,6 +35,10 @@ beforeEach(() => {
         role: 'ADMIN',
         status: 'ACTIVE',
     })
+})
+
+afterEach(() => {
+    vi.useRealTimers()
 })
 
 test('createDocumentImportJob stores queued job metadata and file bytes', async () => {
@@ -330,6 +334,159 @@ test('processDocumentImportJob stores deterministic service failures without thr
                 status: 'FAILED',
                 errorCode: 'PARSE_ERROR',
                 fileData: null,
+            }),
+        }),
+    )
+})
+
+test('processDocumentImportJob marks timed out workers as failed instead of leaving jobs processing', async () => {
+    vi.useFakeTimers()
+
+    prismaMock.documentImportJob.findUnique.mockResolvedValueOnce({
+        id: 'job-timeout',
+        adminId: 'admin-1',
+        status: 'QUEUED',
+        fileName: 'figure.pdf',
+        mimeType: 'application/pdf',
+        fileSize: 11,
+        fileData: Buffer.from('Mock upload'),
+        requestedTitle: 'Figure import',
+        requestedCount: 50,
+        message: null,
+        errorCode: null,
+        errorMessage: null,
+        testId: null,
+        result: null,
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:00:00.000Z'),
+        startedAt: null,
+        completedAt: null,
+    })
+    prismaMock.documentImportJob.update
+        .mockResolvedValueOnce({
+            id: 'job-timeout',
+            status: 'PROCESSING',
+            fileName: 'figure.pdf',
+            message: 'Import is being processed in the background.',
+            errorCode: null,
+            errorMessage: null,
+            testId: null,
+            result: null,
+            createdAt: new Date('2026-04-13T10:00:00.000Z'),
+            updatedAt: new Date('2026-04-13T10:00:01.000Z'),
+            startedAt: new Date('2026-04-13T10:00:01.000Z'),
+            completedAt: null,
+        })
+        .mockResolvedValueOnce({
+            id: 'job-timeout',
+            status: 'FAILED',
+            fileName: 'figure.pdf',
+            message: 'Import timed out during background processing.',
+            errorCode: 'TIMEOUT',
+            errorMessage: 'Document import timed out before completion.',
+            testId: null,
+            result: null,
+            createdAt: new Date('2026-04-13T10:00:00.000Z'),
+            updatedAt: new Date('2026-04-13T10:03:31.000Z'),
+            startedAt: new Date('2026-04-13T10:00:01.000Z'),
+            completedAt: new Date('2026-04-13T10:03:31.000Z'),
+        })
+
+    generateAdminTestFromDocumentMock.mockImplementation(() => new Promise(() => {}))
+
+    const { processDocumentImportJob } = await servicePromise
+    const processingPromise = processDocumentImportJob('job-timeout')
+    await vi.advanceTimersByTimeAsync(210_000)
+    const result = await processingPromise
+
+    expect(result.kind).toBe('failed')
+    expect(prismaMock.documentImportJob.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+            where: { id: 'job-timeout' },
+            data: expect.objectContaining({
+                status: 'FAILED',
+                errorCode: 'TIMEOUT',
+                message: 'Import timed out during background processing.',
+            }),
+        }),
+    )
+})
+
+test('getDocumentImportJob finalizes stale processing jobs as failed on poll', async () => {
+    prismaMock.documentImportJob.findUnique.mockResolvedValueOnce({
+        id: 'job-stale',
+        adminId: 'admin-1',
+        status: 'PROCESSING',
+        fileName: 'figure.pdf',
+        message: 'Import is being processed in the background.',
+        errorCode: null,
+        errorMessage: null,
+        testId: null,
+        result: null,
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:00:01.000Z'),
+        startedAt: new Date(Date.now() - 280_000),
+        completedAt: null,
+    })
+    prismaMock.documentImportJob.update.mockResolvedValueOnce({
+        id: 'job-stale',
+        status: 'FAILED',
+        fileName: 'figure.pdf',
+        message: 'Import timed out during background processing.',
+        errorCode: 'TIMEOUT',
+        errorMessage: 'The background import worker exceeded the allowed execution window.',
+        testId: null,
+        result: null,
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:05:00.000Z'),
+        startedAt: new Date(Date.now() - 280_000),
+        completedAt: new Date('2026-04-13T10:05:00.000Z'),
+    })
+
+    const { getDocumentImportJob } = await servicePromise
+    const result = await getDocumentImportJob('admin-1', 'job-stale')
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+    expect(result.job.status).toBe('FAILED')
+    expect(prismaMock.documentImportJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'job-stale' },
+            data: expect.objectContaining({
+                status: 'FAILED',
+                errorCode: 'TIMEOUT',
+            }),
+        }),
+    )
+})
+
+test('markDocumentImportJobUnhandledFailure records unexpected worker failures', async () => {
+    prismaMock.documentImportJob.update.mockResolvedValueOnce({
+        id: 'job-crash',
+        status: 'FAILED',
+        fileName: 'figure.pdf',
+        message: 'Import failed during background processing.',
+        errorCode: 'GENERATION_FAILED',
+        errorMessage: 'Worker crashed',
+        testId: null,
+        result: null,
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:00:02.000Z'),
+        startedAt: new Date('2026-04-13T10:00:01.000Z'),
+        completedAt: new Date('2026-04-13T10:00:02.000Z'),
+    })
+
+    const { markDocumentImportJobUnhandledFailure } = await servicePromise
+    const job = await markDocumentImportJobUnhandledFailure('job-crash', new Error('Worker crashed'))
+
+    expect(job.status).toBe('FAILED')
+    expect(prismaMock.documentImportJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'job-crash' },
+            data: expect.objectContaining({
+                status: 'FAILED',
+                errorCode: 'GENERATION_FAILED',
+                errorMessage: 'Worker crashed',
             }),
         }),
     )
