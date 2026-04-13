@@ -108,6 +108,140 @@ test('extractQuestionsFromPdfMultimodal sends the PDF to GPT-4o responses.parse 
     )
 })
 
+test('extractQuestionsFromPdfMultimodal chunks visual PDFs by page window and merges numbered questions', async () => {
+    const { extractQuestionsFromPdfMultimodal } = await aiServicePromise
+
+    mockResponsesParse.mockReset()
+    mockGetDocumentProxy.mockResolvedValueOnce({
+        numPages: 3,
+        cleanup: vi.fn(),
+    })
+    mockExtractText.mockResolvedValueOnce({
+        text: [
+            'Q1 Find the missing figure',
+            'Q2 Find the missing figure',
+            'Q3 Find the missing figure',
+        ],
+    })
+    mockRenderPageAsImage.mockResolvedValue('data:image/png;base64,fake')
+    mockResponsesParse
+        .mockResolvedValueOnce({
+            output_parsed: {
+                questions: [
+                    {
+                        questionNumber: 1,
+                        stem: 'Find the missing figure',
+                        options: [
+                            { id: 'A', text: 'Option A', isCorrect: false },
+                            { id: 'B', text: 'Option B', isCorrect: true },
+                            { id: 'C', text: 'Option C', isCorrect: false },
+                            { id: 'D', text: 'Option D', isCorrect: false },
+                        ],
+                        explanation: 'Pattern points to option B.',
+                        difficulty: 'MEDIUM',
+                        topic: 'Figure Completion',
+                        sharedContext: 'Grid with stars and circles changing left to right.',
+                        sourcePage: 1,
+                        sourceSnippet: 'Q1 Find the missing figure',
+                        answerSource: 'INFERRED',
+                        confidence: 0.88,
+                        sharedContextEvidence: 'Visual pattern visible on page 1.',
+                        extractionMode: 'MULTIMODAL_EXTRACT',
+                    },
+                    {
+                        questionNumber: 2,
+                        stem: 'Find the missing figure',
+                        options: [
+                            { id: 'A', text: 'Option A2', isCorrect: false },
+                            { id: 'B', text: 'Option B2', isCorrect: true },
+                            { id: 'C', text: 'Option C2', isCorrect: false },
+                            { id: 'D', text: 'Option D2', isCorrect: false },
+                        ],
+                        explanation: 'Pattern points to option B2.',
+                        difficulty: 'MEDIUM',
+                        topic: 'Figure Completion',
+                        sharedContext: 'Longer context for question two.',
+                        sourcePage: 2,
+                        sourceSnippet: 'Q2 Find the missing figure',
+                        answerSource: 'INFERRED',
+                        confidence: 0.9,
+                        sharedContextEvidence: 'Visual pattern visible on page 2.',
+                        extractionMode: 'MULTIMODAL_EXTRACT',
+                    },
+                ],
+            },
+            usage: {
+                input_tokens: 300,
+                output_tokens: 180,
+            },
+        })
+        .mockResolvedValueOnce({
+            output_parsed: {
+                questions: [
+                    {
+                        questionNumber: 2,
+                        stem: 'Find the missing figure',
+                        options: [
+                            { id: 'A', text: 'Option A2', isCorrect: false },
+                            { id: 'B', text: 'Option B2', isCorrect: true },
+                            { id: 'C', text: 'Option C2', isCorrect: false },
+                            { id: 'D', text: 'Option D2', isCorrect: false },
+                        ],
+                        explanation: 'Pattern points to option B2.',
+                        difficulty: 'MEDIUM',
+                        topic: 'Figure Completion',
+                        sharedContext: 'Short',
+                        sourcePage: 2,
+                        sourceSnippet: 'Q2',
+                        answerSource: 'INFERRED',
+                        confidence: 0.61,
+                        sharedContextEvidence: 'Short evidence',
+                        extractionMode: 'MULTIMODAL_EXTRACT',
+                    },
+                    {
+                        questionNumber: 3,
+                        stem: 'Find the missing figure',
+                        options: [
+                            { id: 'A', text: 'Option A3', isCorrect: false },
+                            { id: 'B', text: 'Option B3', isCorrect: true },
+                            { id: 'C', text: 'Option C3', isCorrect: false },
+                            { id: 'D', text: 'Option D3', isCorrect: false },
+                        ],
+                        explanation: 'Pattern points to option B3.',
+                        difficulty: 'MEDIUM',
+                        topic: 'Figure Completion',
+                        sharedContext: 'Context for question three.',
+                        sourcePage: 3,
+                        sourceSnippet: 'Q3 Find the missing figure',
+                        answerSource: 'INFERRED',
+                        confidence: 0.91,
+                        sharedContextEvidence: 'Visual pattern visible on page 3.',
+                        extractionMode: 'MULTIMODAL_EXTRACT',
+                    },
+                ],
+            },
+            usage: {
+                input_tokens: 320,
+                output_tokens: 190,
+            },
+        })
+
+    const result = await extractQuestionsFromPdfMultimodal(
+        Buffer.from('fake-pdf'),
+        3,
+        undefined,
+        'visual.pdf',
+        { preferChunkedVisualExtraction: true },
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.questions).toHaveLength(3)
+    expect(result.chunkCount).toBe(2)
+    expect(result.pageCount).toBe(3)
+    expect(result.questions?.[1]?.sharedContext).toBe('Longer context for question two.')
+    expect(mockResponsesParse).toHaveBeenCalledTimes(2)
+})
+
 test('verifyExtractedQuestionsWithAI preserves global question numbering across batches', async () => {
     const { verifyExtractedQuestionsWithAI } = await aiServicePromise
 

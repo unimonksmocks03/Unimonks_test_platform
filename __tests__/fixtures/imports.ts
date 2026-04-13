@@ -213,6 +213,57 @@ Q2. How many students play at least one game?
 Answer: (c)
 `
 
+export const extractableFigureReasoningPdfText = `
+SECTIONAL MOCKTEST
+REASONING
+UNIT : FIGURE COMPLETION
+Q1. Find the missing figure:
+┌─────────┬─────────┬─────────┐
+│ ★ ★ ★ │ ★ ★ ☆ │ ★ ☆ ☆ │
+├─────────┼─────────┼─────────┤
+│ ☆ ★ ★ │ ☆ ★ ☆ │ ☆ ☆ ☆ │
+├─────────┼─────────┼─────────┤
+│ ☆ ☆ ★ │ ☆ ☆ ☆ │ ? │
+└─────────┴─────────┴─────────┘
+(a) ☆ ☆ ☆
+(b) ★ ★ ★
+(c) ☆ ★ ☆
+(d) ★ ☆ ★
+Answer: (a)
+Q2. Find the missing figure:
+┌─────────┬─────────┬─────────┐
+│ ● ○ ○ │ ○ ● ○ │ ○ ○ ● │
+├─────────┼─────────┼─────────┤
+│ ○ ○ ● │ ● ○ ○ │ ○ ● ○ │
+├─────────┼─────────┼─────────┤
+│ ○ ● ○ │ ○ ○ ● │ ? │
+└─────────┴─────────┴─────────┘
+(a) ○ ○ ●
+(b) ● ○ ○
+(c) ○ ● ○
+(d) ● ● ○
+Answer: (b)
+Q3. Find the missing figure:
+┌─────────┬─────────┬─────────┐
+│ △ │ □ │ ○ │
+│ ■ ■ │ ● ● │ ▲ ▲ │
+│ △ △ △ │ □ □ □ │ ○ ○ ○ │
+├─────────┼─────────┼─────────┤
+│ □ │ ○ │ △ │
+│ ● ● │ ▲ ▲ │ ■ ■ │
+│ □ □ □ │ ○ ○ ○ │ △ △ △ │
+├─────────┼─────────┼─────────┤
+│ ○ │ △ │ ? │
+│ ▲ ▲ │ ■ ■ │ ? │
+│ ○ ○ ○ │ △ △ △ │ ? │
+└─────────┴─────────┴─────────┘
+(a) □ / ● ● / □ □ □
+(b) △ / ■ ■ / △ △ △
+(c) ○ / ▲ ▲ / ○ ○ ○
+(d) □ / ▲ ▲ / □ □ □
+Answer: (a)
+`
+
 export const oddOneOutPdfText = `
 SECTIONAL MOCKTEST
 REASONING
@@ -295,7 +346,7 @@ export const importRegressionFixtures: ImportRegressionFixture[] = [
         sourceLabel: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         fileName: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         expectedQuestionCount: 2,
-        expectedStrategy: 'HYBRID_RECONCILE',
+        expectedStrategy: 'MULTIMODAL_EXTRACT',
         tags: ['pdf', 'mcq-paper', 'visual-reference', 'diagram'],
         text: visualReasoningPdfText,
     },

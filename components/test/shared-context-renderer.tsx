@@ -67,6 +67,19 @@ export function SharedContextRenderer({
                         );
                     }
 
+                    if (block.type === "preformatted") {
+                        return (
+                            <div
+                                key={`preformatted-${blockIndex}`}
+                                className={`overflow-x-auto rounded-[20px] border ${styles.tableWrap}`}
+                            >
+                                <pre className="whitespace-pre-wrap px-4 py-4 font-mono text-xs leading-6 text-slate-700">
+                                    {block.text}
+                                </pre>
+                            </div>
+                        );
+                    }
+
                     if (block.type === "table") {
                         const rows = block.rows;
                         const header = block.hasHeader ? rows[0] : null;

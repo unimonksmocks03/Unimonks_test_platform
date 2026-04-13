@@ -49,6 +49,14 @@ export const McqExtractionResponseSchema = z.object({
     questions: z.array(McqQuestionSchema),
 })
 
+export const NumberedMcqQuestionSchema = McqQuestionSchema.extend({
+    questionNumber: z.number().int().positive(),
+})
+
+export const NumberedMcqExtractionResponseSchema = z.object({
+    questions: z.array(NumberedMcqQuestionSchema),
+})
+
 export const VisualReferenceExtractionSchema = z.object({
     questionNumber: z.number().int().positive(),
     sharedContext: z.string().trim().min(3).max(12000),
@@ -88,6 +96,8 @@ export const VerificationResultSchema = z.object({
 export type McqOption = z.infer<typeof McqOptionSchema>
 export type McqQuestion = z.infer<typeof McqQuestionSchema>
 export type McqExtractionResponse = z.infer<typeof McqExtractionResponseSchema>
+export type NumberedMcqQuestion = z.infer<typeof NumberedMcqQuestionSchema>
+export type NumberedMcqExtractionResponse = z.infer<typeof NumberedMcqExtractionResponseSchema>
 export type VisualReferenceExtraction = z.infer<typeof VisualReferenceExtractionSchema>
 export type VisualReferenceExtractionResponse = z.infer<typeof VisualReferenceExtractionResponseSchema>
 export type VerificationIssue = z.infer<typeof VerificationIssueSchema>

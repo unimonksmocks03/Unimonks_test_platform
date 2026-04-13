@@ -6,6 +6,8 @@ import {
     AIVerificationResponseSchema,
     McqExtractionResponseSchema,
     McqQuestionSchema,
+    NumberedMcqExtractionResponseSchema,
+    type NumberedMcqQuestion,
     type VerificationResult,
     VisualReferenceExtractionSchema,
     VisualReferenceExtractionResponseSchema,
@@ -126,6 +128,12 @@ type ParsedStructuredQuestion = {
     optionCount: number
     valid: boolean
     question: GeneratedQuestion | null
+}
+
+type DocumentAnswerHint = {
+    correctOptionId: string
+    answerSource: GeneratedQuestion['answerSource']
+    evidence: string | null
 }
 
 type CanvasModule = typeof import('@napi-rs/canvas')
@@ -260,15 +268,119 @@ function normalizeConfidenceScore(value: number) {
     return Math.max(0, Math.min(1, Math.round(value * 100) / 100))
 }
 
+function looksLikeVisualAsciiBlock(text: string | null | undefined) {
+    if (!text) {
+        return false
+    }
+
+    const normalized = text.replace(/\r\n?/g, '\n').trim()
+    if (!normalized) {
+        return false
+    }
+
+    const lines = normalized.split('\n').map(line => line.trimEnd()).filter(Boolean)
+    if (lines.length < 2) {
+        return false
+    }
+
+    const visualLineCount = lines.filter((line) => (
+        /[┌┐└┘├┤┬┴│─╭╮╰╯]/.test(line)
+        || /[★☆●○■□▲△◆◇◯◎]/.test(line)
+        || /[\\/]/.test(line)
+        || /(?:\?\s*$)|(?:^\s*\?)/.test(line)
+        || /\b(?:figure|diagram)\b/i.test(line)
+    )).length
+
+    const horizontalGlyphCount = (normalized.match(/[┌┐└┘├┤┬┴│─╭╮╰╯★☆●○■□▲△◆◇◯◎\\/]/g) ?? []).length
+    return visualLineCount >= 2 && horizontalGlyphCount >= 6
+}
+
+function looksLikeVisualStemTail(text: string | null | undefined) {
+    if (!text) {
+        return false
+    }
+
+    const normalized = text.replace(/\r\n?/g, '\n').trim()
+    if (!normalized) {
+        return false
+    }
+
+    const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean)
+    if (lines.length === 0) {
+        return false
+    }
+
+    const visualLineCount = lines.filter((line) => (
+        /[┌┐└┘├┤┬┴│─╭╮╰╯]/.test(line)
+        || /[★☆●○■□▲△◆◇◯◎]/.test(line)
+        || /[\\/]/.test(line)
+        || /\b(?:figure|diagram|triangle|square|circle|pattern)\b/i.test(line)
+        || /\?/.test(line)
+    )).length
+
+    const visualGlyphCount = (normalized.match(/[┌┐└┘├┤┬┴│─╭╮╰╯★☆●○■□▲△◆◇◯◎\\/]/g) ?? []).length
+    return visualLineCount >= 1 && visualGlyphCount >= 6
+}
+
+function splitStemAndVisualContext(
+    stem: string | null | undefined,
+    sharedContext: string | null | undefined,
+) {
+    const rawStem = typeof stem === 'string' ? stem.replace(/\r\n?/g, '\n').trim() : ''
+    const rawSharedContext = typeof sharedContext === 'string' ? sharedContext : null
+
+    if (!rawStem) {
+        return {
+            stem: rawStem,
+            sharedContext: rawSharedContext,
+        }
+    }
+
+    const lines = rawStem.split('\n')
+    if (lines.length >= 2) {
+        const visualStartIndex = lines.findIndex((line, index) => index > 0 && looksLikeVisualStemTail(line))
+        if (visualStartIndex >= 1) {
+            const stemText = lines.slice(0, visualStartIndex).join(' ').trim()
+            const visualText = lines.slice(visualStartIndex).join('\n').trim()
+            if (stemText.length >= 3 && looksLikeVisualStemTail(visualText)) {
+                return {
+                    stem: stemText,
+                    sharedContext: normalizeSharedContextText([visualText, rawSharedContext].filter(Boolean).join('\n\n')),
+                }
+            }
+        }
+    }
+
+    const inlineSplit = rawStem.match(/^(.+?\?)\s+([|\\/★☆●○■□▲△◆◇◯◎][\s\S]+)$/)
+    if (inlineSplit && looksLikeVisualStemTail(inlineSplit[2])) {
+        return {
+            stem: inlineSplit[1].trim(),
+            sharedContext: normalizeSharedContextText([inlineSplit[2].trim(), rawSharedContext].filter(Boolean).join('\n\n')),
+        }
+    }
+
+    return {
+        stem: rawStem,
+        sharedContext: rawSharedContext,
+    }
+}
+
 function normalizeSharedContextText(text: string | null | undefined) {
     if (!text) return null
 
-    const normalized = text
+    const normalizedBase = text
         .replace(/\r\n?/g, '\n')
         .replace(/[ \t]+\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
-        .replace(/[ \t]+/g, ' ')
         .trim()
+
+    const normalized = looksLikeVisualAsciiBlock(normalizedBase)
+        ? normalizedBase
+            .replace(/\t/g, '    ')
+            .split('\n')
+            .map((line) => line.replace(/\s+$/g, ''))
+            .join('\n')
+        : normalizedBase.replace(/[ \t]+/g, ' ')
 
     return normalized.length > 0 ? normalized : null
 }
@@ -1551,6 +1663,128 @@ export function extractQuestionsFromDocumentText(text: string): ExtractedQuestio
     return buildStructuredExtractionContext(text).analysis
 }
 
+function answerSourceStrength(answerSource: GeneratedQuestion['answerSource']) {
+    switch (answerSource) {
+        case 'ANSWER_KEY':
+            return 3
+        case 'INLINE_ANSWER':
+            return 2
+        case 'INFERRED':
+            return 1
+        default:
+            return 0
+    }
+}
+
+function extractAnswerHintsFromText(text: string): Map<number, DocumentAnswerHint> {
+    const normalizedText = normalizeDocumentText(text)
+    const { answerSection } = splitDocumentSections(normalizedText)
+    const answerHints = new Map<number, DocumentAnswerHint>()
+
+    const lines = normalizedText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+
+    let currentQuestionNumber: number | null = null
+
+    for (const line of lines) {
+        const questionLabel = stripQuestionLabel(line)
+        if (questionLabel) {
+            currentQuestionNumber = questionLabel.questionNumber
+            if (questionLabel.inlineAnswerId) {
+                answerHints.set(questionLabel.questionNumber, {
+                    correctOptionId: questionLabel.inlineAnswerId,
+                    answerSource: 'INLINE_ANSWER',
+                    evidence: truncateEvidenceText(line),
+                })
+            }
+        }
+
+        const answerMatch = line.match(ANSWER_LINE_REGEX)
+        if (answerMatch && currentQuestionNumber !== null) {
+            answerHints.set(currentQuestionNumber, {
+                correctOptionId: normalizeAnswerIdent(answerMatch[1]),
+                answerSource: 'INLINE_ANSWER',
+                evidence: truncateEvidenceText(line),
+            })
+        }
+    }
+
+    if (answerSection) {
+        const keyedAnswers = extractAnswerKey(answerSection)
+        for (const [questionNumber, correctOptionId] of keyedAnswers.entries()) {
+            if (!answerHints.has(questionNumber)) {
+                answerHints.set(questionNumber, {
+                    correctOptionId,
+                    answerSource: 'ANSWER_KEY',
+                    evidence: truncateEvidenceText(
+                        buildAnswerContextSnippet(answerSection, questionNumber)
+                        ?? `Q${questionNumber} ${correctOptionId}`,
+                    ),
+                })
+            }
+        }
+    }
+
+    return answerHints
+}
+
+export function reconcileGeneratedQuestionsWithTextAnswerHints(
+    questions: GeneratedQuestion[],
+    text: string,
+) {
+    const answerHints = extractAnswerHintsFromText(text)
+    let repairedCount = 0
+
+    const reconciledQuestions = questions.map((question, index) => {
+        const questionNumber = index + 1
+        const answerHint = answerHints.get(questionNumber)
+        if (!answerHint) {
+            return question
+        }
+
+        const currentCorrectOptions = question.options.filter((option) => option.isCorrect)
+        const currentCorrectOptionId = currentCorrectOptions[0]?.id ?? null
+        const shouldRepairCorrectOption =
+            currentCorrectOptions.length !== 1
+            || currentCorrectOptionId !== answerHint.correctOptionId
+            || answerSourceStrength(question.answerSource) < answerSourceStrength(answerHint.answerSource)
+
+        const nextQuestion: GeneratedQuestion = shouldRepairCorrectOption
+            ? {
+                ...question,
+                options: question.options.map((option) => ({
+                    ...option,
+                    isCorrect: option.id === answerHint.correctOptionId,
+                })),
+                answerSource: answerHint.answerSource,
+                confidence: normalizeConfidenceScore(
+                    Math.max(question.confidence ?? 0, answerHint.answerSource === 'ANSWER_KEY' ? 0.97 : 0.94),
+                ),
+                sourceSnippet: question.sourceSnippet ?? answerHint.evidence,
+                sharedContextEvidence: question.sharedContextEvidence ?? answerHint.evidence,
+            }
+            : {
+                ...question,
+                sourceSnippet: question.sourceSnippet ?? answerHint.evidence,
+                sharedContextEvidence: question.sharedContextEvidence ?? answerHint.evidence,
+            }
+
+        if (shouldRepairCorrectOption) {
+            repairedCount += 1
+        }
+
+        return nextQuestion
+    })
+
+    return {
+        questions: reconciledQuestions,
+        repairedCount,
+        answerHintsRecovered: answerHints.size,
+    }
+}
+
 function buildAnswerContextSnippet(answerSection: string, questionNumber: number) {
     if (!answerSection) return null
 
@@ -1749,6 +1983,15 @@ FORMAT HANDLING:
 
 5. HORIZONTAL ANSWER KEYS: Some documents list answers in table format at the end (e.g., "1-B  2-A  3-C").
    Use these to determine the correct option for each question.
+
+6. STEMLESS / IMPLICIT-STEM QUESTIONS:
+   Some questions have NO explicit stem text — just a number (e.g., "Q1.", "1.") followed by options.
+   This is common in "Odd One Out", "Figure Completion", "Ranking" formats.
+   INFER the stem from the section heading or question type:
+   - Under "ODD ONE OUT": use "Which of the following is the odd one out?"
+   - Under "FIGURE COMPLETION": use "Which figure completes the pattern?"
+   - Under "RANKING": use "Arrange the following in the correct order."
+   NEVER return a stem shorter than 10 characters.
 
 If MCQs are present:
 - Extract each question stem exactly as written (preserve multi-line stems, assertion/reason pairs, numbered statements, etc.)
@@ -2385,7 +2628,12 @@ function generateRuleBasedFeedback(
 function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | null | undefined): GeneratedQuestion | null {
     if (!question) return null
 
-    const normalizedStem = normalizeStem(question.stem ?? '')
+    const splitVisualContext = splitStemAndVisualContext(
+        typeof question.stem === 'string' ? question.stem : '',
+        question.sharedContext ?? null,
+    )
+
+    const normalizedStem = normalizeStem(splitVisualContext.stem ?? '')
     const normalizedOptions = Array.isArray(question.options)
         ? question.options.map((option, index) => ({
             id: String(option?.id ?? ['A', 'B', 'C', 'D'][index] ?? '').toUpperCase(),
@@ -2400,7 +2648,7 @@ function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | nul
         explanation: typeof question.explanation === 'string' ? question.explanation.trim() : '',
         difficulty: normalizeDifficultyLabel(question.difficulty),
         topic: normalizeTopicLabel(question.topic, normalizedStem),
-        sharedContext: normalizeSharedContextText(question.sharedContext),
+        sharedContext: normalizeSharedContextText(splitVisualContext.sharedContext),
         sourcePage: Number.isInteger(question.sourcePage) && Number(question.sourcePage) > 0
             ? Number(question.sourcePage)
             : null,
@@ -2468,6 +2716,155 @@ function deduplicateQuestions(questions: GeneratedQuestion[]): GeneratedQuestion
         seen.add(key)
         return true
     })
+}
+
+function buildOverlappingPageChunks(
+    pageNumbers: number[],
+    size = 2,
+    overlap = 1,
+) {
+    if (pageNumbers.length === 0) {
+        return []
+    }
+
+    if (pageNumbers.length <= size) {
+        return [pageNumbers]
+    }
+
+    const step = Math.max(1, size - overlap)
+    const chunks: number[][] = []
+    for (let index = 0; index < pageNumbers.length; index += step) {
+        const chunk = pageNumbers.slice(index, index + size)
+        if (chunk.length === 0) {
+            continue
+        }
+
+        const lastChunk = chunks[chunks.length - 1]
+        if (
+            lastChunk
+            && lastChunk.length === chunk.length
+            && lastChunk.every((value, chunkIndex) => value === chunk[chunkIndex])
+        ) {
+            continue
+        }
+
+        chunks.push(chunk)
+        if (chunk[chunk.length - 1] === pageNumbers[pageNumbers.length - 1]) {
+            break
+        }
+    }
+
+    return chunks
+}
+
+function scoreNumberedQuestionCandidate(question: GeneratedQuestion) {
+    const sharedContextLength = question.sharedContext?.length ?? 0
+    const snippetLength = question.sourceSnippet?.length ?? 0
+    const explanationLength = question.explanation?.length ?? 0
+    const optionLength = question.options.reduce((sum, option) => sum + option.text.length, 0)
+    const evidenceLength = question.sharedContextEvidence?.length ?? 0
+    const confidence = typeof question.confidence === 'number' ? question.confidence * 100 : 0
+
+    return (
+        optionLength
+        + Math.min(sharedContextLength, 1500)
+        + Math.min(snippetLength, 300)
+        + Math.min(explanationLength, 200)
+        + Math.min(evidenceLength, 600)
+        + confidence
+    )
+}
+
+function coerceNumberedGeneratedQuestions(
+    rawQuestions: unknown,
+): { questions: Array<{ questionNumber: number; question: GeneratedQuestion }>; failedCount: number } {
+    if (!Array.isArray(rawQuestions)) {
+        return { questions: [], failedCount: 0 }
+    }
+
+    const questions: Array<{ questionNumber: number; question: GeneratedQuestion }> = []
+    let failedCount = 0
+
+    for (const rawQuestion of rawQuestions) {
+        const parsed = NumberedMcqExtractionResponseSchema.shape.questions.element.safeParse(rawQuestion)
+        if (!parsed.success) {
+            failedCount += 1
+            continue
+        }
+
+        const numberedQuestion = parsed.data as NumberedMcqQuestion
+        const validatedQuestion = toValidatedGeneratedQuestion(numberedQuestion)
+        if (!validatedQuestion) {
+            failedCount += 1
+            continue
+        }
+
+        questions.push({
+            questionNumber: numberedQuestion.questionNumber,
+            question: validatedQuestion,
+        })
+    }
+
+    return { questions, failedCount }
+}
+
+function mergeChunkedMultimodalQuestions(
+    questionEntries: Array<{ questionNumber: number; question: GeneratedQuestion }>,
+) {
+    const byQuestionNumber = new Map<number, GeneratedQuestion>()
+
+    for (const entry of questionEntries) {
+        if (!Number.isInteger(entry.questionNumber) || entry.questionNumber <= 0) {
+            continue
+        }
+
+        const previous = byQuestionNumber.get(entry.questionNumber)
+        if (!previous || scoreNumberedQuestionCandidate(entry.question) > scoreNumberedQuestionCandidate(previous)) {
+            byQuestionNumber.set(entry.questionNumber, entry.question)
+        }
+    }
+
+    return Array.from(byQuestionNumber.entries())
+        .sort((left, right) => left[0] - right[0])
+        .map(([, question]) => question)
+}
+
+function shouldPreferChunkedMultimodalResult(
+    chunked: PdfVisionFallbackResult,
+    expectedCount: number,
+) {
+    if (chunked.error || !chunked.questions || chunked.questions.length === 0) {
+        return false
+    }
+
+    if (chunked.questions.length >= expectedCount) {
+        return true
+    }
+
+    return chunked.questions.length >= Math.max(8, Math.floor(expectedCount * 0.5))
+}
+
+function countPdfVerificationErrors(result: PdfVisionFallbackResult) {
+    return result.verification?.issues.filter((issue) => issue.severity === 'ERROR').length ?? 0
+}
+
+function shouldPreferPdfResult(
+    candidate: PdfVisionFallbackResult,
+    baseline: PdfVisionFallbackResult,
+) {
+    const candidateQuestions = candidate.questions?.length ?? 0
+    const baselineQuestions = baseline.questions?.length ?? 0
+    if (candidateQuestions !== baselineQuestions) {
+        return candidateQuestions > baselineQuestions
+    }
+
+    const candidateErrors = countPdfVerificationErrors(candidate)
+    const baselineErrors = countPdfVerificationErrors(baseline)
+    if (candidateErrors !== baselineErrors) {
+        return candidateErrors < baselineErrors
+    }
+
+    return (candidate.chunkCount ?? 0) > (baseline.chunkCount ?? 0)
 }
 
 function mergeCosts(...costs: Array<CostInfo | undefined>) {
@@ -2830,7 +3227,11 @@ Return strict JSON matching the schema.`
     }
 }
 
-export async function extractQuestionsFromPdfMultimodal(
+type PdfMultimodalExtractionOptions = {
+    preferChunkedVisualExtraction?: boolean
+}
+
+async function extractQuestionsFromPdfMultimodalOneShot(
     buffer: Buffer,
     expectedCount: number = 50,
     auditUserId?: string,
@@ -2866,7 +3267,7 @@ export async function extractQuestionsFromPdfMultimodal(
         const response = await openai.responses.parse({
             model,
             temperature: 0,
-            max_output_tokens: 12000,
+            max_output_tokens: 16000,
             input: [
                 {
                     role: 'system',
@@ -2897,12 +3298,15 @@ FORMAT HANDLING RULES:
    D. A is false but R is true
 
 3. VENN DIAGRAMS & DATA TABLES:
-   Describe the visual content textually in "sharedContext".
+   Put the actual OCR-visible diagram/table block into "sharedContext" first, preserving line breaks and spacing exactly when the PDF already contains ASCII/box-drawing text.
+   After the preserved block, you may add 1 short explanatory sentence if needed.
    For Venn diagrams: describe the sets, overlaps, labels, and any numbers shown.
    For data tables: reproduce the full table structure in text with row/column headers and values.
 
 4. FIGURE COMPLETION / FIGURE SERIES:
-   Describe the visual pattern in "sharedContext" (shapes, rotation, progression).
+   If the OCR excerpt already shows the figure using ASCII, Unicode shapes, slashes, stars, circles, or box-drawing characters, copy that exact figure block into "sharedContext" before any explanation.
+   Preserve spacing and line breaks inside that block.
+   Then describe the visual pattern in "sharedContext" (shapes, rotation, progression).
    Note what the missing element should look like based on the pattern.
 
 5. PASSAGE-BASED QUESTIONS:
@@ -2925,12 +3329,28 @@ FORMAT HANDLING RULES:
    Look for "Consider the following statements: I. ... II. ... III. ..."
    The stem must include all statements. Options combine statement numbers (e.g., "Only I and III").
 
+10. STEMLESS / IMPLICIT-STEM QUESTIONS:
+   Some questions have NO explicit stem text — just a number (e.g., "Q1.", "1.") followed directly by options or figures.
+   This is common in "Odd One Out", "Find the Missing", "Figure Completion", "Figure Formation", "Counting Triangles/Figures" formats.
+   INFER the stem from the section heading or question type:
+   - Under "ODD ONE OUT" or "ODD MAN OUT": use "Which of the following is the odd one out?"
+   - Under "FIGURE COMPLETION": use "Which figure completes the pattern?"
+   - Under "FIGURE FORMATION" or "COUNTING TRIANGLES": use the specific counting question visible in the figure context.
+   - Under "RANKING" or "ARRANGEMENT": use "Arrange the following in the correct order."
+   NEVER return a stem shorter than 10 characters. If you cannot infer a meaningful stem, describe what the question is asking based on the visual context.
+
+11. VISUAL OPTIONS:
+   When answer choices are figures, symbols, or patterns (not text), describe each option textually.
+   For example: "Option A: Three filled circles arranged in a triangle" or "Option B: Star followed by square followed by circle."
+   Include the visual description of each option in the option text field.
+
 GENERAL RULES:
 - Return up to ${expectedCount} complete questions.
 - Preserve the stem wording as closely as possible — do NOT paraphrase.
 - Normalize answer labels to A, B, C, D in the order they appear.
 - Each question must have exactly 4 options and exactly 1 correct option (isCorrect: true).
 - Include "confidence" (0-1), "sourcePage", "sourceSnippet", and "answerSource" for each question.
+- When a figure is textually representable from OCR, prefer preserving the actual OCR figure block in "sharedContext" over replacing it with a generic prose summary.
 - "answerSource" must be one of: "ANSWER_KEY", "INLINE_ANSWER", or "INFERRED".
 - If a question cannot be recovered confidently, skip it instead of fabricating details.
 - Ignore headers, footers, decorative text, and page numbers.
@@ -2990,6 +3410,231 @@ Return strict JSON with a top-level "questions" array only.`,
     } finally {
         await pdf.cleanup()
     }
+}
+
+async function extractQuestionsFromPdfMultimodalChunked(
+    buffer: Buffer,
+    expectedCount: number = 50,
+    auditUserId?: string,
+    fileName: string = 'uploaded.pdf',
+): Promise<PdfVisionFallbackResult> {
+    if (!openai) {
+        return {
+            error: true,
+            message: 'OpenAI API key not configured. Please set OPENAI_API_KEY.',
+            pageCount: 0,
+            chunkCount: 0,
+            mode: 'EXTRACTED',
+        }
+    }
+
+    const { extractText, getDocumentProxy, renderPageAsImage } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(buffer))
+    const model = 'gpt-4o'
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+
+    try {
+        const pageCount = pdf.numPages
+        if (pageCount === 0) {
+            return {
+                error: true,
+                message: 'PDF has no pages available for multimodal extraction.',
+                pageCount: 0,
+                chunkCount: 0,
+                mode: 'EXTRACTED',
+            }
+        }
+
+        const textResult = await extractText(pdf, { mergePages: false }).catch(() => ({ text: [] as string[] }))
+        const pageTexts = Array.isArray(textResult.text) ? textResult.text : [textResult.text]
+        const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
+        const pageChunks = buildOverlappingPageChunks(pageNumbers, 2, 1)
+        const extractedQuestions: Array<{ questionNumber: number; question: GeneratedQuestion }> = []
+        let failedCount = 0
+        let chunkFailures = 0
+        let lastFailure: AIChunkFailure | null = null
+
+        for (const pageChunk of pageChunks) {
+            const userContent: Array<
+                | { type: 'input_text'; text: string }
+                | { type: 'input_image'; image_url: string; detail: 'auto' }
+            > = [
+                {
+                    type: 'input_text',
+                    text: `Extract the existing MCQs visible on these PDF pages with high precision.
+
+This document may contain visual reasoning questions such as figure completion, figure formation, Venn diagrams, mirror/water images, paper folding, odd-one-out, or diagram-based counting.
+
+STEMLESS / IMPLICIT-STEM QUESTIONS:
+Some questions have NO explicit stem text — just a number (e.g., "Q1.", "1.") followed directly by options or figures.
+This is common in "Odd One Out", "Figure Completion", "Figure Formation", "Counting Triangles" formats.
+INFER the stem from the section heading or question type:
+- Under "ODD ONE OUT": use "Which of the following is the odd one out?"
+- Under "FIGURE COMPLETION": use "Which figure completes the pattern?"
+- Under "FIGURE FORMATION" or triangle counting: use the specific counting question from the figure context.
+NEVER return a stem shorter than 10 characters.
+
+VISUAL OPTIONS:
+When answer choices are figures, symbols, or patterns (not text), describe each option textually.
+Example: "Option A: Three filled circles in a triangle" or "Option B: Star, square, circle pattern."
+
+OCR FIGURE PRESERVATION:
+If the OCR excerpt already contains a figure using ASCII/Unicode shapes, stars, circles, slashes, or box-drawing characters, copy that figure block into "sharedContext" exactly as shown.
+Preserve spacing and line breaks for that figure block before adding any short explanation.
+
+Rules:
+- Return only questions that are visible on the provided pages.
+- Each question must include its true questionNumber from the paper.
+- If adjacent chunks overlap and the same question appears again, that is okay; preserve the same questionNumber.
+- Keep the stem focused on the actual question prompt. Move the figure/diagram/table description into sharedContext.
+- If the answer choices are visual, describe each option textually and keep exactly 4 options.
+- Preserve answer keys from the page if present. answerSource must be ANSWER_KEY, INLINE_ANSWER, or INFERRED.
+- Include sourcePage, sourceSnippet, confidence, and sharedContextEvidence.
+- Do not fabricate unseen questions or missing options.
+- Skip unusable questions instead of hallucinating.
+
+Return strict JSON with a top-level "questions" array only.`,
+                },
+            ]
+
+            for (const pageNumber of pageChunk) {
+                const pageText = normalizeDocumentText(pageTexts[pageNumber - 1] ?? '')
+                const imageUrl = await renderPageAsImage(pdf, pageNumber, {
+                    canvasImport: loadCanvasModuleDynamically,
+                    scale: 1.85,
+                    toDataURL: true,
+                })
+
+                userContent.push({
+                    type: 'input_text',
+                    text: `Page ${pageNumber} OCR excerpt:\n${truncateForPrompt(pageText, 2400) ?? 'No OCR text available.'}`,
+                })
+                userContent.push({
+                    type: 'input_image',
+                    image_url: imageUrl,
+                    detail: 'auto',
+                })
+            }
+
+            try {
+                const response = await openai.responses.parse({
+                    model,
+                    temperature: 0,
+                    max_output_tokens: 8000,
+                    input: [
+                        {
+                            role: 'system',
+                            content: 'You extract existing CUET-style MCQs from specific PDF page windows and return only strict structured output.',
+                        },
+                        {
+                            role: 'user',
+                            content: userContent,
+                        },
+                    ],
+                    text: {
+                        format: zodTextFormat(
+                            NumberedMcqExtractionResponseSchema,
+                            'numbered_mcq_extraction_response',
+                        ),
+                    },
+                })
+
+                const cost = calculateCost(model, response.usage)
+                totalCost.inputTokens += cost.inputTokens
+                totalCost.outputTokens += cost.outputTokens
+                totalCost.costUSD += cost.costUSD
+
+                const normalized = coerceNumberedGeneratedQuestions(response.output_parsed?.questions ?? [])
+                extractedQuestions.push(...normalized.questions)
+                failedCount += normalized.failedCount
+            } catch (error) {
+                chunkFailures += 1
+                lastFailure = toAIChunkFailure(error)
+                console.error('[AI] Chunked multimodal PDF extraction failed for page chunk:', pageChunk, error)
+            }
+        }
+
+        const mergedQuestions = mergeChunkedMultimodalQuestions(extractedQuestions)
+        const verification = verifyExtractedQuestions(mergedQuestions, expectedCount)
+
+        if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
+            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', totalCost)
+        }
+
+        if (mergedQuestions.length === 0) {
+            return {
+                mode: 'EXTRACTED',
+                error: true,
+                message: lastFailure?.message ?? 'Chunked multimodal extraction could not recover any usable questions.',
+                pageCount,
+                chunkCount: pageChunks.length,
+                questions: [],
+                failedCount: Math.max(1, failedCount || expectedCount),
+                cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+            }
+        }
+
+        return {
+            mode: 'EXTRACTED',
+            questions: mergedQuestions,
+            failedCount,
+            cost: totalCost,
+            pageCount,
+            chunkCount: pageChunks.length,
+            verification,
+            ...(chunkFailures > 0
+                ? {
+                    message: `Chunked multimodal extraction skipped ${chunkFailures} page chunk(s) while recovering the visual question set.`,
+                }
+                : {}),
+        }
+    } catch (error) {
+        const failure = toAIChunkFailure(error)
+        console.error('[AI] Chunked multimodal PDF extraction failed:', error)
+        return {
+            mode: 'EXTRACTED',
+            error: true,
+            message: failure.message,
+            pageCount: pdf.numPages,
+            chunkCount: 0,
+            questions: [],
+            failedCount: Math.max(1, expectedCount),
+            cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+        }
+    } finally {
+        await pdf.cleanup()
+    }
+}
+
+export async function extractQuestionsFromPdfMultimodal(
+    buffer: Buffer,
+    expectedCount: number = 50,
+    auditUserId?: string,
+    fileName: string = 'uploaded.pdf',
+    options: PdfMultimodalExtractionOptions = {},
+): Promise<PdfVisionFallbackResult> {
+    if (!options.preferChunkedVisualExtraction) {
+        return extractQuestionsFromPdfMultimodalOneShot(buffer, expectedCount, auditUserId, fileName)
+    }
+
+    const chunked = await extractQuestionsFromPdfMultimodalChunked(
+        buffer,
+        expectedCount,
+        auditUserId,
+        fileName,
+    )
+    if (shouldPreferChunkedMultimodalResult(chunked, expectedCount)) {
+        return chunked
+    }
+
+    const oneShot = await extractQuestionsFromPdfMultimodalOneShot(
+        buffer,
+        expectedCount,
+        auditUserId,
+        fileName,
+    )
+
+    return shouldPreferPdfResult(chunked, oneShot) ? chunked : oneShot
 }
 
 function normalizeVisualReferences(rawReferences: unknown) {
@@ -3078,10 +3723,17 @@ export async function extractVisualReferencesFromPdfImages(
 VISUAL TYPE HANDLING:
 
 1. VENN DIAGRAMS: Describe the sets, their labels, overlap regions, and any numbers/items shown in each region.
+   If OCR already contains a text/box-drawing Venn diagram, copy that diagram block first with spacing preserved.
    Example sharedContext: "Venn diagram with Set A (Mammals) and Set B (Aquatic). Overlap contains: Whale, Dolphin. A only: Cat, Dog. B only: Fish, Shark."
 
 2. FIGURE SERIES / COMPLETION: Describe the visual pattern (shapes, rotations, size progression, shading changes).
-   Example: "Figure series shows a triangle rotating 45 degrees clockwise in each step, with alternating shading."
+   If OCR already contains an ASCII/Unicode figure, preserve that figure block exactly in sharedContext before the explanation.
+   Do NOT replace a visible figure with a generic summary like "pattern of shapes" — keep the actual OCR-visible symbols/line-work first.
+   Example:
+   "★ ☆ ☆
+    ★ ★ ☆
+    ?"
+   Pattern: one additional star appears in each row from left to right.
 
 3. MIRROR IMAGE / WATER IMAGE: Describe the original figure and the axis of reflection.
    Example: "Original figure is the letter 'R' with a dot above. Mirror axis is vertical."
@@ -3099,6 +3751,8 @@ Rules:
 - Return only question numbers that depend on a visual, figure, Venn diagram, embedded image, chart, graph, map, or non-linear visual prompt.
 - Do not return normal text-only questions.
 - sharedContext must capture the visual information a student must see before answering, described textually.
+- sharedContext should be student-usable, not vague. Prefer a faithful OCR/block reconstruction plus 1 short interpretation line.
+- When OCR already contains a diagram/table/figure block, preserve that block with line breaks and spacing instead of replacing it with a generic summary.
 - sourcePage must identify the page the visual appears on.
 - sourceSnippet should quote a short OCR/instruction snippet that proves the visual belongs to that question set.
 - sharedContextEvidence should briefly explain what visual cue is being carried into the question.
@@ -3131,7 +3785,7 @@ Rules:
                 const response = await openai.responses.parse({
                     model,
                     temperature: 0,
-                    max_output_tokens: 2500,
+                    max_output_tokens: 4000,
                     input: [
                         {
                             role: 'system',

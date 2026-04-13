@@ -11,6 +11,7 @@ import {
     generateQuestionsFromPdfVisionFallback,
     generateQuestionsFromText,
     parseDocumentToText,
+    reconcileGeneratedQuestionsWithTextAnswerHints,
     verifyExtractedQuestions,
     verifyExtractedQuestionsWithAI,
 } from '@/lib/services/ai-service'
@@ -136,6 +137,7 @@ type TestImportDiagnosticsPayload = DocumentImportDiagnostics & {
     questionsGenerated: number
     failedCount: number
     generationTarget: number | null
+    detectedQuestionCount: number | null
     costUSD: number
     metadataWarning: string | null
     primaryTopic: string | null
@@ -1259,6 +1261,11 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         classification: importDiagnostics.classification,
         isPdfUpload,
     })
+    const effectiveGenerationTarget =
+        importDiagnostics.classification.documentType === 'MCQ_PAPER'
+        && importDiagnostics.classification.detectedQuestionCount
+            ? importDiagnostics.classification.detectedQuestionCount
+            : uploadValidation.generationTarget
     importDiagnostics.routingMode = importPlan.routingMode
     importDiagnostics.selectedStrategy = importPlan.selectedStrategy
 
@@ -1273,7 +1280,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             isPdfUpload,
             textLength: text.length,
             parseFailed: Boolean(parseError),
-            generationTarget: uploadValidation.generationTarget,
+            generationTarget: effectiveGenerationTarget,
         },
         {
             extractTextExact: async () => {
@@ -1290,6 +1297,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 target,
                 admin.id,
                 uploadValidation.sanitizedFileName,
+                { preferChunkedVisualExtraction: importPlan.visualReferenceOverlay },
             ),
             extractVisualReferences: () => extractVisualReferencesFromPdfImages(
                 buffer,
@@ -1375,7 +1383,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
 
             const multimodal = await extractQuestionsFromPdfMultimodal(
                 buffer,
-                extracted.expectedQuestionCount ?? uploadValidation.generationTarget,
+                extracted.expectedQuestionCount ?? effectiveGenerationTarget,
                 admin.id,
                 uploadValidation.sanitizedFileName,
             )
@@ -1420,7 +1428,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
 
                 const fallback = await generateQuestionsFromText(
                     text,
-                    uploadValidation.generationTarget,
+                    effectiveGenerationTarget,
                     admin.id,
                 )
 
@@ -1486,7 +1494,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                     failedCount: countExtractedValidationFailures(extracted),
                     cost: extracted.cost,
                 }
-                : await generateQuestionsFromText(text, uploadValidation.generationTarget, admin.id)
+                : await generateQuestionsFromText(text, effectiveGenerationTarget, admin.id)
 
             if (
                 isPdfUpload
@@ -1495,8 +1503,9 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             ) {
                 const fallback = await generateQuestionsFromPdfVisionFallback(
                     buffer,
-                    uploadValidation.generationTarget,
+                    effectiveGenerationTarget,
                     admin.id,
+                    uploadValidation.sanitizedFileName,
                 )
 
                 if (!fallback.error && fallback.questions && fallback.questions.length > 0) {
@@ -1527,6 +1536,18 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             'GENERATION_FAILED',
             result.message || 'Failed to generate questions.',
         )
+    }
+
+    if (isPdfUpload && text.length >= 50 && strategy !== 'AI_GENERATED') {
+        const reconciledAnswers = reconcileGeneratedQuestionsWithTextAnswerHints(result.questions, text)
+        if (reconciledAnswers.repairedCount > 0) {
+            result.questions = reconciledAnswers.questions
+            importDiagnostics.warning = importDiagnostics.warning
+                ? `${importDiagnostics.warning} Reconciled ${reconciledAnswers.repairedCount} question answer(s) from the PDF text layer.`
+                : `Reconciled ${reconciledAnswers.repairedCount} question answer(s) from the PDF text layer.`
+        } else {
+            result.questions = reconciledAnswers.questions
+        }
     }
 
     let verification: VerificationResult | undefined = strategy === 'AI_GENERATED'
@@ -1635,7 +1656,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 extractedQuestions: extracted.questions.length,
                 questionsGenerated: finalQuestions.length,
                 failedCount: result.failedCount || 0,
-                generationTarget: strategy === 'AI_GENERATED' ? uploadValidation.generationTarget : null,
+                generationTarget: strategy === 'AI_GENERATED' ? effectiveGenerationTarget : null,
+                detectedQuestionCount: importDiagnostics.classification?.detectedQuestionCount ?? null,
                 costUSD: (result.cost?.costUSD || 0) + (metadataEnrichment.cost?.costUSD || 0),
                 metadataWarning: metadataEnrichment.warning || null,
                 primaryTopic: metadataEnrichment.primaryTopic ?? null,
@@ -1684,7 +1706,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 extractedQuestions: extracted.questions.length,
                 questionsGenerated: finalQuestions.length,
                 failedCount: result.failedCount || 0,
-                generationTarget: strategy === 'AI_GENERATED' ? uploadValidation.generationTarget : null,
+                generationTarget: strategy === 'AI_GENERATED' ? effectiveGenerationTarget : null,
+                detectedQuestionCount: importDiagnostics.classification?.detectedQuestionCount ?? null,
                 costUSD: (result.cost?.costUSD || 0) + (metadataEnrichment.cost?.costUSD || 0),
                 metadataAiUsed: metadataEnrichment.aiUsed,
                 metadataWarning: metadataEnrichment.warning || null,
@@ -1699,7 +1722,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         test,
         strategy,
         extractedQuestions: extracted.questions.length,
-        generationTarget: strategy === 'AI_GENERATED' ? uploadValidation.generationTarget : null,
+        generationTarget: strategy === 'AI_GENERATED' ? effectiveGenerationTarget : null,
         questionsGenerated: finalQuestions.length,
         failedCount: result.failedCount || 0,
         cost: result.cost,

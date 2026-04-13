@@ -153,6 +153,37 @@ function countVerificationErrors(verification?: VerificationResult) {
     return verification.issues.filter((issue) => issue.severity === 'ERROR').length
 }
 
+function looksLikeVisualReferenceBlock(text: string | null | undefined) {
+    if (!text) {
+        return false
+    }
+
+    const normalized = text.replace(/\r\n?/g, '\n').trim()
+    if (!normalized) {
+        return false
+    }
+
+    const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean)
+    const glyphCount = (normalized.match(/[┌┐└┘├┤┬┴│─╭╮╰╯★☆●○■□▲△◆◇◯◎\\/]/g) ?? []).length
+    const visualLineCount = lines.filter((line) => (
+        /[┌┐└┘├┤┬┴│─╭╮╰╯★☆●○■□▲△◆◇◯◎\\/]/.test(line)
+        || /\?/.test(line)
+        || /\b(?:figure|diagram|pattern|triangle|square|circle|overlap|set\s+[ab])\b/i.test(line)
+    )).length
+
+    return glyphCount >= 6 || visualLineCount >= 2
+}
+
+function scoreVisualReferenceCandidate(reference: VisualReferenceExtraction) {
+    const sharedContext = reference.sharedContext ?? ''
+    const evidence = reference.sharedContextEvidence ?? reference.sourceSnippet ?? ''
+    const confidence = typeof reference.confidence === 'number' ? reference.confidence * 100 : 0
+    const visualBonus = looksLikeVisualReferenceBlock(sharedContext) ? 5000 : 0
+    const evidenceBonus = looksLikeVisualReferenceBlock(evidence) ? 800 : 0
+
+    return visualBonus + evidenceBonus + Math.min(sharedContext.length, 2000) + Math.min(evidence.length, 800) + confidence
+}
+
 function mergeVisualReferencesIntoQuestions(
     questions: GeneratedQuestion[],
     references: VisualReferenceExtraction[] | undefined,
@@ -168,7 +199,7 @@ function mergeVisualReferencesIntoQuestions(
         }
 
         const previous = byQuestionNumber.get(reference.questionNumber)
-        if (!previous || (reference.sharedContext?.length ?? 0) > (previous.sharedContext?.length ?? 0)) {
+        if (!previous || scoreVisualReferenceCandidate(reference) > scoreVisualReferenceCandidate(previous)) {
             byQuestionNumber.set(reference.questionNumber, reference)
         }
     }
@@ -179,9 +210,18 @@ function mergeVisualReferencesIntoQuestions(
             return question
         }
 
+        const mergedSharedContext = [
+            looksLikeVisualReferenceBlock(reference.sharedContext) ? reference.sharedContext : null,
+            question.sharedContext,
+            !looksLikeVisualReferenceBlock(reference.sharedContext) ? reference.sharedContext : null,
+        ]
+            .filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index)
+            .join('\n\n')
+            .trim()
+
         return {
             ...question,
-            sharedContext: reference.sharedContext || question.sharedContext || null,
+            sharedContext: mergedSharedContext || question.sharedContext || reference.sharedContext || null,
             sourcePage: reference.sourcePage ?? question.sourcePage ?? null,
             sharedContextEvidence:
                 reference.sharedContextEvidence

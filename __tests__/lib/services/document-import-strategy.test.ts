@@ -2,6 +2,7 @@ import { expect, test } from 'vitest'
 
 import {
     answerInHeaderPsychologyMcqText,
+    extractableFigureReasoningPdfText,
     humanGeoDocxLikeMcqText,
     studyMaterialNotesText,
     tableHeavyQuantPdfText,
@@ -108,6 +109,23 @@ test('resolveDocumentImportPlan enables visual reference overlay for diagram-hea
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         text: visualReasoningPdfText,
+    })
+
+    const plan = resolveDocumentImportPlan({
+        classifierRoutingEnabled: true,
+        classification,
+        isPdfUpload: true,
+    })
+
+    expect(plan.selectedStrategy).toBe('MULTIMODAL_EXTRACT')
+    expect(plan.runMultimodalFirst).toBe(true)
+    expect(plan.visualReferenceOverlay).toBe(true)
+})
+
+test('resolveDocumentImportPlan keeps diagram-heavy PDFs with strong OCR on hybrid reconcile plus overlay', () => {
+    const classification = classifyDocumentForImport({
+        fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
+        text: extractableFigureReasoningPdfText,
     })
 
     const plan = resolveDocumentImportPlan({

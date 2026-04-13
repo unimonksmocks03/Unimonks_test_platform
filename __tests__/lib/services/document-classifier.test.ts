@@ -2,6 +2,7 @@ import { expect, test } from 'vitest'
 
 import {
     answerInHeaderPsychologyMcqText,
+    extractableFigureReasoningPdfText,
     humanGeoDocxLikeMcqText,
     lowTextScannedPdfText,
     oddOneOutPdfText,
@@ -61,10 +62,22 @@ test('classifyDocumentForImport routes table-heavy MCQ papers to multimodal extr
     expect(result.layoutRisk).toBe('HIGH')
 })
 
-test('classifyDocumentForImport routes visual reasoning papers to hybrid reconcile', () => {
+test('classifyDocumentForImport routes weak visual reasoning papers to multimodal extraction', () => {
     const result = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         text: visualReasoningPdfText,
+    })
+
+    expect(result.documentType).toBe('MCQ_PAPER')
+    expect(result.hasVisualReferences).toBe(true)
+    expect(result.preferredStrategy).toBe('MULTIMODAL_EXTRACT')
+    expect(result.layoutRisk).toBe('HIGH')
+})
+
+test('classifyDocumentForImport routes diagram-heavy reasoning papers with strong OCR to hybrid reconcile', () => {
+    const result = classifyDocumentForImport({
+        fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
+        text: extractableFigureReasoningPdfText,
     })
 
     expect(result.documentType).toBe('MCQ_PAPER')

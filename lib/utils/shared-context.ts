@@ -3,6 +3,11 @@ export type SharedContextParagraphBlock = {
     text: string;
 };
 
+export type SharedContextPreformattedBlock = {
+    type: "preformatted";
+    text: string;
+};
+
 export type SharedContextTableBlock = {
     type: "table";
     rows: string[][];
@@ -26,6 +31,7 @@ export type SharedContextListBlock = {
 
 export type SharedContextBlock =
     | SharedContextParagraphBlock
+    | SharedContextPreformattedBlock
     | SharedContextTableBlock
     | SharedContextListBlock;
 
@@ -34,6 +40,23 @@ const LIST_HEADER = /^(list|column)\s+([ivxlcdm]+|\d+|[a-z])\b[:.]?$/i;
 const LIST_ITEM = /^\(?([a-z0-9]+)\)?[.)-]\s+(.+)$/i;
 const NUMERICISH_TOKEN = /^-?\d+(?:\.\d+)?(?:\/\d+(?:\.\d+)?)?%?$/;
 const YEAR_TOKEN = /^(19|20)\d{2}$/;
+const VISUAL_CHAR = /[┌┐└┘├┤┬┴│─╭╮╰╯★☆●○■□▲△◆◇◯◎\\/]/;
+
+function looksLikePreformattedVisualBlock(text: string) {
+    const normalized = text.replace(/\r\n/g, "\n").trim();
+    if (!normalized) {
+        return false;
+    }
+
+    const lines = normalized.split("\n").map((line) => line.replace(/\s+$/g, "")).filter(Boolean);
+    if (lines.length < 2) {
+        return false;
+    }
+
+    const visualLines = lines.filter((line) => VISUAL_CHAR.test(line) || /\?/.test(line)).length;
+    const visualGlyphCount = (normalized.match(/[┌┐└┘├┤┬┴│─╭╮╰╯★☆●○■□▲△◆◇◯◎\\/]/g) ?? []).length;
+    return visualLines >= 2 && visualGlyphCount >= 6;
+}
 
 function normalizeLine(line: string) {
     return line.replace(/\t/g, " ").replace(/\s+$/g, "");
@@ -241,7 +264,11 @@ function flushParagraphs(buffer: string[], blocks: SharedContextBlock[]) {
 
     for (const chunk of chunks) {
         if (chunk.trim()) {
-            blocks.push({ type: "paragraph", text: chunk.trim() });
+            blocks.push(
+                looksLikePreformattedVisualBlock(chunk)
+                    ? { type: "preformatted", text: chunk.trimEnd() }
+                    : { type: "paragraph", text: chunk.trim() },
+            );
         }
     }
 

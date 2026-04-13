@@ -8,6 +8,7 @@ export type RecommendedExtractionStrategy =
 
 export type DocumentClassificationResult = {
     documentType: DocumentType
+    detectedQuestionCount: number | null
     layoutRisk: DocumentLayoutRisk
     hasTables: boolean
     hasPassages: boolean
@@ -76,10 +77,11 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     const lowerFileName = input.fileName.toLowerCase()
     const isPdf = lowerFileName.endsWith('.pdf')
     const nonEmptyLines = getNonEmptyLines(normalizedText)
+    const oddOneOutSignature = `${normalizedText}\n${lowerFileName}`
 
     const questionCount = countMatches(
         normalizedText,
-        /(?:^|\n)\s*(?:question\s*|ques(?:tion)?\s*|q\s*)?\d+\s*(?:[.):\-]|\banswer\b)/gi,
+        /(?:^|\n)\s*(?:question\s*|ques(?:tion)?\s*|ues\s*|q\s*)?\d+\s*(?:[.):\-]|\banswer\b)/gi,
     )
     const inlineOptionBurstCount = nonEmptyLines.filter((line) => {
         const optionMarkers = line.match(/\([A-Da-d1-4]\)|[A-Da-d1-4][.)\-:]/g) ?? []
@@ -110,11 +112,25 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     const hasTables = /\b(table(?!\s+tennis\b)|data interpretation|chart|graph|dataset|tabulation)\b/i.test(normalizedText)
         || tableLikeRowCount >= 2
     const hasPassages = /(read the passage|following passage|based on the passage|study the following passage|case study based|case-study based|case based)/i.test(normalizedText)
-    const hasVisualReferences =
-        /\b(venn diagram|diagram-based|figure completion|figure formation|figure series|embedded figure|mirror image|paper folding|paper cutting|water image|cube(?:s)? and dice|analogy figure|choose the figure|select the figure|which figure)\b/i.test(normalizedText)
+    const isOddOneOutOnly = /\bodd\s*[- ]\s*one\s*out\b|\bodd\s+man\s+out\b|\bfind\s+the\s+odd\b/i.test(oddOneOutSignature)
+    const hasDiagramReasoning = !isOddOneOutOnly && (
+        /\b(venn diagram|figure completion|figure formation|figure series|embedded figure|mirror image|paper folding|paper cutting|water image|cube(?:s)? and dice|counting (?:triangle|square|figure)|how many triangles|how many squares|how many rectangles|how many circles|how many lines)\b/i.test(normalizedText)
+        || /\b(venn|figure completion|figure formation|mirror image|paper folding|water image|triangle counting|square counting)\b/i.test(lowerFileName)
+    )
+    const hasVisualReferences = !isOddOneOutOnly && (
+        /\b(venn diagram|diagram-based|figure completion|figure formation|figure series|embedded figure|mirror image|paper folding|paper cutting|water image|cube(?:s)? and dice|analogy figure|choose the figure|select the figure|which figure|counting (?:triangle|square|figure)|how many triangles|how many squares)\b/i.test(normalizedText)
         || /\b(venn|diagram|figure|formation|completion)\b/i.test(lowerFileName)
+    )
     const hasMatchFollowing = /(match the following|match the correct pair|list i|list ii)/i.test(normalizedText)
     const hasAssertionReason = /\bassertion\b/i.test(normalizedText) && /\breason\b/i.test(normalizedText)
+    const hasStrongExtractableMcqText =
+        questionCount >= 3
+        && (
+            optionCount >= Math.max(12, questionCount * 2)
+            || inlineOptionBurstCount >= Math.max(1, Math.floor(questionCount * 0.3))
+            || answerHintCount >= Math.max(3, Math.floor(questionCount * 0.4))
+            || hasAnswerKeySection
+        )
     const fragmentedLineCount = nonEmptyLines.filter((line) => line.length <= 8).length
     const isScannedLike = Boolean(input.parseFailed)
         || (isPdf && normalizedText.length < 300 && questionCount === 0 && optionCount < 4 && inlineOptionBurstCount === 0)
@@ -122,7 +138,6 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     const isMixedLayout =
         (hasTables || hasPassages || hasVisualReferences)
         && (hasMatchFollowing || hasAssertionReason)
-
     const looksLikeMcqPaper =
         (
             questionCount >= 3
@@ -165,8 +180,14 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
         preferredStrategy = 'GENERATE_FROM_SOURCE'
     } else if (isScannedLike) {
         preferredStrategy = 'MULTIMODAL_EXTRACT'
+    } else if (hasDiagramReasoning) {
+        preferredStrategy = hasStrongExtractableMcqText
+            ? 'HYBRID_RECONCILE'
+            : 'MULTIMODAL_EXTRACT'
     } else if (hasVisualReferences) {
-        preferredStrategy = 'HYBRID_RECONCILE'
+        preferredStrategy = hasStrongExtractableMcqText
+            ? 'HYBRID_RECONCILE'
+            : 'MULTIMODAL_EXTRACT'
     } else if (hasTables || hasPassages || isMixedLayout) {
         preferredStrategy = 'MULTIMODAL_EXTRACT'
     } else if (hasMatchFollowing || hasAssertionReason) {
@@ -181,6 +202,12 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     if (hasTables) reasons.push('Detected table/data-heavy layout')
     if (hasPassages) reasons.push('Detected passage/case-study layout')
     if (hasVisualReferences) reasons.push('Detected visual-reference or diagram-heavy layout')
+    if (hasDiagramReasoning) reasons.push(
+        hasStrongExtractableMcqText
+            ? 'Detected diagram-heavy reasoning format with strong OCR signals; using hybrid reconcile so exact parsing drives questions and visual extraction augments references.'
+            : 'Detected diagram-heavy reasoning format that should be extracted visually first',
+    )
+    if (hasVisualReferences && hasStrongExtractableMcqText) reasons.push('Detected strong OCR/text signals, so visual references can be layered onto exact extraction')
     if (hasMatchFollowing) reasons.push('Detected match-the-following/list-based format')
     if (hasAssertionReason) reasons.push('Detected assertion-reason format')
     if (isScannedLike) reasons.push('Low-text or parse-failed PDF resembles scanned content')
@@ -188,6 +215,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
 
     return {
         documentType,
+        detectedQuestionCount: questionCount > 0 ? questionCount : null,
         layoutRisk,
         hasTables,
         hasPassages,
