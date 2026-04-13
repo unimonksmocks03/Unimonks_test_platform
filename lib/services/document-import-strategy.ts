@@ -71,7 +71,7 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         visualReferenceOverlay:
             input.isPdfUpload
             && input.classification.hasVisualReferences
-            && selectedStrategy === 'MULTIMODAL_EXTRACT',
+            && selectedStrategy === 'HYBRID_RECONCILE',
         generateFromSource: selectedStrategy === 'GENERATE_FROM_SOURCE',
         reasons: [
             `Classifier selected ${selectedStrategy} for this document.`,

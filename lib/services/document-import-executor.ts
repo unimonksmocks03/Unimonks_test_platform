@@ -625,6 +625,7 @@ export async function executeDocumentImportPlan(
         || baseResult.failure
         || !baseResult.result?.questions?.length
         || !input.plan.visualReferenceOverlay
+        || baseResult.strategy !== 'EXTRACTED'
     ) {
         return baseResult
     }

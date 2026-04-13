@@ -3231,6 +3231,7 @@ Return strict JSON matching the schema.`
 
 type PdfMultimodalExtractionOptions = {
     preferChunkedVisualExtraction?: boolean
+    allowOneShotFallbackAfterChunked?: boolean
 }
 
 async function extractQuestionsFromPdfMultimodalOneShot(
@@ -3626,6 +3627,10 @@ export async function extractQuestionsFromPdfMultimodal(
         fileName,
     )
     if (shouldPreferChunkedMultimodalResult(chunked, expectedCount)) {
+        return chunked
+    }
+
+    if (options.allowOneShotFallbackAfterChunked === false) {
         return chunked
     }
 

@@ -331,6 +331,52 @@ test('executeDocumentImportPlan uses multimodal extraction first for risky PDFs'
     expect(generateFromText).not.toHaveBeenCalled()
 })
 
+test('executeDocumentImportPlan does not run a second visual overlay after multimodal extraction succeeds', async () => {
+    const extractMultimodal = vi.fn().mockResolvedValue({
+        mode: 'EXTRACTED',
+        questions: [createQuestion('Multimodal question')],
+        failedCount: 0,
+        pageCount: 4,
+        chunkCount: 1,
+        verification: createVerificationResult(),
+    })
+    const extractVisualReferences = vi.fn().mockResolvedValue({
+        references: [
+            {
+                questionNumber: 1,
+                sharedContext: 'Diagram reference',
+                sourcePage: 1,
+                sourceSnippet: 'diagram',
+                sharedContextEvidence: 'diagram',
+                confidence: 0.9,
+            },
+        ],
+        pageCount: 1,
+        chunkCount: 1,
+    })
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                ...multimodalFirstPlan,
+                visualReferenceOverlay: true,
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractMultimodal,
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('AI_VISION_FALLBACK')
+    expect(extractVisualReferences).not.toHaveBeenCalled()
+})
+
 test('executeDocumentImportPlan falls back to exact extraction after multimodal failure', async () => {
     const extractMultimodal = vi.fn().mockResolvedValue({
         mode: 'EXTRACTED',

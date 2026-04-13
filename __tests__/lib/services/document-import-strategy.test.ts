@@ -122,7 +122,7 @@ test('resolveDocumentImportPlan normalizes non-pdf multimodal preference into hy
     expect(plan.visualReferenceOverlay).toBe(false)
 })
 
-test('resolveDocumentImportPlan enables visual reference overlay for diagram-heavy PDFs', () => {
+test('resolveDocumentImportPlan keeps multimodal-first diagram-heavy PDFs without extra overlay', () => {
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         text: visualReasoningPdfText,
@@ -136,10 +136,10 @@ test('resolveDocumentImportPlan enables visual reference overlay for diagram-hea
 
     expect(plan.selectedStrategy).toBe('MULTIMODAL_EXTRACT')
     expect(plan.runMultimodalFirst).toBe(true)
-    expect(plan.visualReferenceOverlay).toBe(true)
+    expect(plan.visualReferenceOverlay).toBe(false)
 })
 
-test('resolveDocumentImportPlan keeps diagram-heavy PDFs with strong OCR on hybrid reconcile without overlay', () => {
+test('resolveDocumentImportPlan enables visual reference overlay for diagram-heavy PDFs with strong OCR', () => {
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
         text: extractableFigureReasoningPdfText,
@@ -153,7 +153,7 @@ test('resolveDocumentImportPlan keeps diagram-heavy PDFs with strong OCR on hybr
 
     expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
     expect(plan.runMultimodalFirst).toBe(false)
-    expect(plan.visualReferenceOverlay).toBe(false)
+    expect(plan.visualReferenceOverlay).toBe(true)
 })
 
 test('resolveDocumentImportPlan assigns STABLE lane to clean text-exact papers', () => {

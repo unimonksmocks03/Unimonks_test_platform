@@ -507,7 +507,10 @@ test('generateAdminTestFromDocument prefers chunked multimodal extraction for hy
         50,
         'admin-1',
         'figure-completion.pdf',
-        { preferChunkedVisualExtraction: true },
+        {
+            preferChunkedVisualExtraction: true,
+            allowOneShotFallbackAfterChunked: false,
+        },
     )
 })
 
@@ -569,6 +572,9 @@ test('generateAdminTestFromDocument prefers chunked multimodal extraction for le
         expect.any(Number),
         'admin-1',
         'venn.pdf',
-        { preferChunkedVisualExtraction: true },
+        {
+            preferChunkedVisualExtraction: true,
+            allowOneShotFallbackAfterChunked: false,
+        },
     )
 })

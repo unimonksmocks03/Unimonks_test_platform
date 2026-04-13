@@ -169,6 +169,22 @@ function shouldPreferChunkedPdfExtraction(input: PdfMultimodalPreferenceInput) {
     )
 }
 
+function shouldAllowOneShotFallbackAfterChunkedExtraction(input: PdfMultimodalPreferenceInput) {
+    if (!input.isPdfUpload) {
+        return true
+    }
+
+    if (!shouldPreferChunkedPdfExtraction(input)) {
+        return true
+    }
+
+    return !(
+        input.classification.hasVisualReferences
+        || input.plan.selectedStrategy === 'MULTIMODAL_EXTRACT'
+        || input.plan.visualReferenceOverlay
+    )
+}
+
 type GeneratedTextQuestionsResult = Awaited<ReturnType<typeof generateQuestionsFromText>>
 
 type DocumentGenerationResult =
@@ -1289,6 +1305,11 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         plan: importPlan,
         classification: importDiagnostics.classification,
     })
+    const allowOneShotFallbackAfterChunked = shouldAllowOneShotFallbackAfterChunkedExtraction({
+        isPdfUpload,
+        plan: importPlan,
+        classification: importDiagnostics.classification,
+    })
     const effectiveGenerationTarget =
         importDiagnostics.classification.documentType === 'MCQ_PAPER'
         && importDiagnostics.classification.detectedQuestionCount
@@ -1325,7 +1346,10 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 target,
                 admin.id,
                 uploadValidation.sanitizedFileName,
-                { preferChunkedVisualExtraction: preferChunkedPdfExtraction },
+                {
+                    preferChunkedVisualExtraction: preferChunkedPdfExtraction,
+                    allowOneShotFallbackAfterChunked,
+                },
             ),
             extractVisualReferences: () => extractVisualReferencesFromPdfImages(
                 buffer,
@@ -1414,7 +1438,10 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 extracted.expectedQuestionCount ?? effectiveGenerationTarget,
                 admin.id,
                 uploadValidation.sanitizedFileName,
-                { preferChunkedVisualExtraction: preferChunkedPdfExtraction },
+                {
+                    preferChunkedVisualExtraction: preferChunkedPdfExtraction,
+                    allowOneShotFallbackAfterChunked,
+                },
             )
 
             if (!multimodal.error && multimodal.questions && multimodal.questions.length > 0) {
