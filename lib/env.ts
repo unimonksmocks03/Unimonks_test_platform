@@ -56,6 +56,7 @@ type QStashEnv =
         token: string
         currentSigningKey: string
         nextSigningKey: string
+        baseUrl?: string
     }
 
 let databaseEnvCache: DatabaseEnv | null = null
@@ -238,9 +239,26 @@ export function getQStashEnv(): QStashEnv {
         return qstashEnvCache
     }
 
-    if (process.env.QSTASH_URL) {
+    const productionParsed = z.object({
+        QSTASH_TOKEN: nonEmptyString.optional(),
+        QSTASH_CURRENT_SIGNING_KEY: nonEmptyString.optional(),
+        QSTASH_NEXT_SIGNING_KEY: nonEmptyString.optional(),
+        QSTASH_URL: httpUrlSchema.optional(),
+    }).safeParse(process.env)
+
+    if (!productionParsed.success) {
+        throw new Error(formatEnvIssues('qstash', productionParsed.error.issues))
+    }
+
+    const hasProductionToken = !!productionParsed.data.QSTASH_TOKEN
+    const hasSigningKeys = !!productionParsed.data.QSTASH_CURRENT_SIGNING_KEY && !!productionParsed.data.QSTASH_NEXT_SIGNING_KEY
+
+    if (hasProductionToken || hasSigningKeys) {
         const parsed = z.object({
-            QSTASH_URL: httpUrlSchema,
+            QSTASH_TOKEN: nonEmptyString,
+            QSTASH_CURRENT_SIGNING_KEY: nonEmptyString,
+            QSTASH_NEXT_SIGNING_KEY: nonEmptyString,
+            QSTASH_URL: httpUrlSchema.optional(),
         }).safeParse(process.env)
 
         if (!parsed.success) {
@@ -248,29 +266,26 @@ export function getQStashEnv(): QStashEnv {
         }
 
         qstashEnvCache = {
-            mode: 'local',
+            mode: 'production',
+            token: parsed.data.QSTASH_TOKEN,
+            currentSigningKey: parsed.data.QSTASH_CURRENT_SIGNING_KEY,
+            nextSigningKey: parsed.data.QSTASH_NEXT_SIGNING_KEY,
             baseUrl: parsed.data.QSTASH_URL,
         }
 
         return qstashEnvCache
     }
 
-    const parsed = z.object({
-        QSTASH_TOKEN: nonEmptyString,
-        QSTASH_CURRENT_SIGNING_KEY: nonEmptyString,
-        QSTASH_NEXT_SIGNING_KEY: nonEmptyString,
-    }).safeParse(process.env)
+    if (productionParsed.data.QSTASH_URL) {
+        qstashEnvCache = {
+            mode: 'local',
+            baseUrl: productionParsed.data.QSTASH_URL,
+        }
 
-    if (!parsed.success) {
-        throw new Error(formatEnvIssues('qstash', parsed.error.issues))
+        return qstashEnvCache
     }
 
-    qstashEnvCache = {
-        mode: 'production',
-        token: parsed.data.QSTASH_TOKEN,
-        currentSigningKey: parsed.data.QSTASH_CURRENT_SIGNING_KEY,
-        nextSigningKey: parsed.data.QSTASH_NEXT_SIGNING_KEY,
-    }
-
-    return qstashEnvCache
+    throw new Error(
+        '[env:qstash] Invalid environment configuration\n- QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY, and QSTASH_NEXT_SIGNING_KEY are required for production, or set only QSTASH_URL for local mode.'
+    )
 }

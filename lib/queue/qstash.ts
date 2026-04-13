@@ -22,7 +22,10 @@ const qstashEnv = getQStashEnv()
 const qstashClient = new Client({
     ...(qstashEnv.mode === 'local'
         ? { baseUrl: qstashEnv.baseUrl, token: 'dev' }
-        : { token: qstashEnv.token }
+        : {
+            token: qstashEnv.token,
+            ...(qstashEnv.baseUrl ? { baseUrl: qstashEnv.baseUrl } : {}),
+        }
     ),
 })
 
