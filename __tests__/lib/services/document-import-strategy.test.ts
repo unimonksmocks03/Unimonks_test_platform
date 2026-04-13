@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 
 import {
     answerInHeaderPsychologyMcqText,
@@ -10,8 +10,13 @@ import {
 } from '@/__tests__/fixtures/imports'
 import { classifyDocumentForImport } from '@/lib/services/document-classifier'
 import {
+    isClassifierRoutingEnabled,
     resolveDocumentImportPlan,
 } from '@/lib/services/document-import-strategy'
+
+afterEach(() => {
+    vi.unstubAllEnvs()
+})
 
 test('resolveDocumentImportPlan keeps legacy routing inert when classifier routing is disabled', () => {
     const classification = classifyDocumentForImport({
@@ -30,6 +35,18 @@ test('resolveDocumentImportPlan keeps legacy routing inert when classifier routi
     expect(plan.visualReferenceOverlay).toBe(false)
     expect(plan.generateFromSource).toBe(false)
     expect(plan.selectedStrategy).toBe(classification.preferredStrategy)
+})
+
+test('isClassifierRoutingEnabled defaults to enabled when the env is unset', () => {
+    vi.stubEnv('DOCUMENT_IMPORT_CLASSIFIER_ROUTING', undefined)
+
+    expect(isClassifierRoutingEnabled()).toBe(true)
+})
+
+test('isClassifierRoutingEnabled can still be disabled explicitly', () => {
+    vi.stubEnv('DOCUMENT_IMPORT_CLASSIFIER_ROUTING', 'false')
+
+    expect(isClassifierRoutingEnabled()).toBe(false)
 })
 
 test('resolveDocumentImportPlan promotes risky table-heavy PDFs to multimodal-first when classifier routing is enabled', () => {

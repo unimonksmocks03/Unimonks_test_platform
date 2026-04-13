@@ -36,7 +36,7 @@ function normalizeStrategyForFileType(
 }
 
 export function isClassifierRoutingEnabled() {
-    return process.env.DOCUMENT_IMPORT_CLASSIFIER_ROUTING === 'true'
+    return process.env.DOCUMENT_IMPORT_CLASSIFIER_ROUTING !== 'false'
 }
 
 export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput): DocumentImportPlan {
