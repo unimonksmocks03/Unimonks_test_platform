@@ -2,13 +2,40 @@ import { NextRequest, NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
 
 import { withAuth } from '@/lib/middleware/auth-guard'
-import { generateAdminTestFromDocument } from '@/lib/services/test-service'
-import { mapTestServiceError } from '@/app/api/admin/tests/_lib/route-helpers'
+import {
+    createDocumentImportJob,
+    markDocumentImportJobQueueFailed,
+} from '@/lib/services/import-job-service'
+import { enqueueDocumentImportJob } from '@/lib/queue/qstash'
 import { Role } from '@prisma/client'
 
 export const maxDuration = 300
 
-// POST /api/admin/tests/generate-from-doc — import a document into a draft test
+function mapImportJobError(
+    error:
+        | { error: true; code: 'BAD_REQUEST'; message: string }
+        | { error: true; code: 'FORBIDDEN' | 'INACTIVE_ADMIN'; message: string }
+        | { error: true; code: 'NOT_FOUND' | 'QUEUE_FAILED'; message: string }
+) {
+    const status = (() => {
+        switch (error.code) {
+            case 'FORBIDDEN':
+            case 'INACTIVE_ADMIN':
+                return 403
+            case 'NOT_FOUND':
+                return 404
+            case 'QUEUE_FAILED':
+                return 503
+            case 'BAD_REQUEST':
+            default:
+                return 400
+        }
+    })()
+
+    return NextResponse.json(error, { status })
+}
+
+// POST /api/admin/tests/generate-from-doc — enqueue a document import job
 async function postHandler(
     req: NextRequest,
     ctx: { userId: string; role: Role }
@@ -38,19 +65,37 @@ async function postHandler(
         ? Number.parseInt(countEntry, 10)
         : undefined
 
-    const result = await generateAdminTestFromDocument({
+    const result = await createDocumentImportJob({
         adminId: ctx.userId,
         file: fileEntry,
         title: typeof titleEntry === 'string' ? titleEntry : undefined,
         requestedCount,
-        ipAddress: req.headers.get('x-forwarded-for'),
     })
 
     if ('error' in result) {
-        return mapTestServiceError(result)
+        return mapImportJobError(result)
     }
 
-    return NextResponse.json(result, { status: 201 })
+    try {
+        await enqueueDocumentImportJob(result.job.id)
+    } catch (error) {
+        console.error('[AI][ADMIN] Failed to enqueue document import job:', error)
+        await markDocumentImportJobQueueFailed(
+            result.job.id,
+            'Could not queue the import job. Please try again.',
+        )
+
+        return NextResponse.json(
+            {
+                error: true,
+                code: 'QUEUE_FAILED',
+                message: 'Could not queue the import job. Please try again.',
+            },
+            { status: 503 },
+        )
+    }
+
+    return NextResponse.json(result, { status: 202 })
 }
 
 export const POST = withAuth(postHandler, ['ADMIN'])

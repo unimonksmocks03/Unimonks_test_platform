@@ -66,4 +66,21 @@ export async function enqueueForceSubmit(sessionId: string, studentId: string, n
     })
 }
 
+/**
+ * Enqueue a document import job for background processing.
+ *
+ * The worker uses the jobId to load the file bytes from the database, so the
+ * QStash payload stays small and deterministic.
+ */
+export async function enqueueDocumentImportJob(jobId: string) {
+    const baseUrl = getBaseUrl()
+    return qstashClient.publishJSON({
+        url: `${baseUrl}/api/webhooks/document-import`,
+        body: { jobId },
+        retries: 3,
+        deduplicationId: `document-import:${jobId}`,
+        failureCallback: `${baseUrl}/api/webhooks/qstash-dlq`,
+    })
+}
+
 export { qstashClient }

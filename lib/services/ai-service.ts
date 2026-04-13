@@ -2018,7 +2018,9 @@ Return strict JSON only — no markdown, no prose:
       "explanation": "...",
       "difficulty": "EASY",
       "topic": "short topic tag",
-      "sharedContext": "passage or table text if applicable, otherwise null",
+      "sharedContext": "passage, table, or diagram text if applicable, otherwise null",
+      "sharedContextEvidence": "brief note on what shared content this question depends on, or null",
+      "sourceSnippet": "short verbatim excerpt from the source that anchors this question",
       "answerSource": "ANSWER_KEY",
       "confidence": 0.95
     }

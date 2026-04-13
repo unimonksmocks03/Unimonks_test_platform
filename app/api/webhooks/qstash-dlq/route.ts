@@ -70,6 +70,15 @@ export async function POST(req: NextRequest) {
             userId = session?.studentId ?? null
         }
 
+        const jobId = payload.jobId as string | undefined
+        if (!userId && jobId) {
+            const job = await prisma.documentImportJob.findUnique({
+                where: { id: jobId },
+                select: { adminId: true },
+            })
+            userId = job?.adminId ?? null
+        }
+
         if (userId) {
             await prisma.auditLog.create({
                 data: {

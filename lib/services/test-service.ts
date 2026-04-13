@@ -16,7 +16,7 @@ import {
     verifyExtractedQuestionsWithAI,
 } from '@/lib/services/ai-service'
 import type { VerificationResult } from '@/lib/services/ai-extraction-schemas'
-import { mergeAIVerificationIssues } from '@/lib/services/import-verifier'
+import { mergeAIVerificationIssues, resolveImportVerificationOutcome } from '@/lib/services/import-verifier'
 import type { DocumentClassificationResult } from '@/lib/services/document-classifier'
 import { classifyDocumentForImport } from '@/lib/services/document-classifier'
 import { executeDocumentImportPlan } from '@/lib/services/document-import-executor'
@@ -109,6 +109,8 @@ type DocumentImportDiagnostics = {
     aiFallbackUsed: boolean
     reportParserIssue: boolean
     warning: string | null
+    decision?: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+    failureReason?: string | null
     classification?: DocumentClassificationResult
     routingMode?: DocumentImportRoutingMode
     selectedStrategy?: DocumentClassificationResult['preferredStrategy']
@@ -142,6 +144,8 @@ type TestImportDiagnosticsPayload = DocumentImportDiagnostics & {
     metadataWarning: string | null
     primaryTopic: string | null
     difficultyDistribution: { easy: number; medium: number; hard: number } | null
+    decision: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+    failureReason: string | null
     reviewStatus: string | null
     verification: VerificationResult | null
 }
@@ -1550,16 +1554,14 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         }
     }
 
-    let verification: VerificationResult | undefined = strategy === 'AI_GENERATED'
-        ? undefined
-        : verifyExtractedQuestions(
-            result.questions,
-            extracted.expectedQuestionCount,
-            {
-                extractionAnalysis: extracted,
-                comparisonQuestions: strategy === 'AI_VISION_FALLBACK' ? extracted.questions : undefined,
-            },
-        )
+    let verification: VerificationResult | undefined = verifyExtractedQuestions(
+        result.questions,
+        strategy === 'AI_GENERATED' ? null : extracted.expectedQuestionCount,
+        {
+            extractionAnalysis: strategy === 'AI_GENERATED' ? undefined : extracted,
+            comparisonQuestions: strategy === 'AI_VISION_FALLBACK' ? extracted.questions : undefined,
+        },
+    )
 
     const runInlineAiPostProcessing = shouldRunInlineAiPostProcessing({
         isPdfUpload,
@@ -1590,16 +1592,43 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         }
     }
 
-    if (verification && (!verification.passed || verification.reviewRecommended)) {
+    let importDecision = resolveImportVerificationOutcome(verification)
+    if (importDecision.decision === 'EXACT_ACCEPTED' && needsAdminReview) {
+        importDecision = {
+            decision: 'REVIEW_REQUIRED',
+            message: importDiagnostics.warning || 'Import completed, but the draft needs manual review before publishing.',
+            errorCount: 0,
+            warningCount: Math.max(reviewIssueCount, 1),
+        }
+    }
+
+    if (importDecision.decision === 'FAILED_WITH_REASON') {
+        return serviceError(
+            strategy === 'AI_GENERATED' ? 'GENERATION_FAILED' : 'PARSE_ERROR',
+            importDecision.message || 'Import verification failed. Please review the source document and retry.',
+            {
+                strategy,
+                verification,
+                routingMode: importDiagnostics.routingMode ?? null,
+                selectedStrategy: importDiagnostics.selectedStrategy ?? null,
+            },
+        )
+    }
+
+    if (importDecision.decision === 'REVIEW_REQUIRED') {
         needsAdminReview = true
-        reviewIssueCount = verification.issues.length
+        reviewIssueCount = verification?.issues.length ?? Math.max(reviewIssueCount, 1)
         importDiagnostics.reviewRequired = true
         importDiagnostics.reviewIssueCount = reviewIssueCount
         importDiagnostics.reportParserIssue = true
         importDiagnostics.warning = importDiagnostics.warning
             ? `${importDiagnostics.warning} Verification also found ${reviewIssueCount} issue(s), so the draft needs admin review.`
-            : `Verification found ${reviewIssueCount} issue(s), so the draft has been flagged for admin review before publishing.`
+            : importDecision.message
+                ? `${importDecision.message} The draft has been flagged for admin review before publishing.`
+                : `Verification found ${reviewIssueCount} issue(s), so the draft has been flagged for admin review before publishing.`
     }
+    importDiagnostics.decision = importDecision.decision
+    importDiagnostics.failureReason = importDecision.message
 
     const baseTitle = uploadValidation.sanitizedFileName.replace(/\.(docx|pdf)$/i, '')
     let questionsWithSharedContext = result.questions
@@ -1662,6 +1691,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 metadataWarning: metadataEnrichment.warning || null,
                 primaryTopic: metadataEnrichment.primaryTopic ?? null,
                 difficultyDistribution: metadataEnrichment.difficultyDistribution ?? null,
+                decision: importDecision.decision,
+                failureReason: importDecision.message,
                 reviewStatus: needsAdminReview ? 'NEEDS_REVIEW' : null,
                 verification: verification ?? null,
             }),
@@ -1711,6 +1742,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 costUSD: (result.cost?.costUSD || 0) + (metadataEnrichment.cost?.costUSD || 0),
                 metadataAiUsed: metadataEnrichment.aiUsed,
                 metadataWarning: metadataEnrichment.warning || null,
+                decision: importDecision.decision,
+                failureReason: importDecision.message,
                 reviewStatus: needsAdminReview ? 'NEEDS_REVIEW' : null,
                 reviewIssueCount,
             } as Prisma.InputJsonValue,

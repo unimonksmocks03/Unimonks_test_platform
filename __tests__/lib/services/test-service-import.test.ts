@@ -248,6 +248,8 @@ test('generateAdminTestFromDocument persists per-question evidence and durable i
         fileName: 'history.docx',
         strategy: 'EXTRACTED',
         parserStatus: 'OK',
+        decision: 'EXACT_ACCEPTED',
+        failureReason: null,
         routingMode: 'CLASSIFIER',
         selectedStrategy: 'TEXT_EXACT',
         extractedQuestionCandidates: 1,
@@ -302,6 +304,7 @@ test('generateAdminTestFromDocument persists review-required diagnostics to the 
     expect(createCall.data.reviewStatus).toBe('NEEDS_REVIEW')
     expect(createCall.data.importDiagnostics).toMatchObject({
         fileName: 'review.docx',
+        decision: 'REVIEW_REQUIRED',
         reviewRequired: true,
         reviewIssueCount: 1,
         reviewStatus: 'NEEDS_REVIEW',
@@ -321,11 +324,50 @@ test('generateAdminTestFromDocument persists review-required diagnostics to the 
     expect(prismaMock.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({
             metadata: expect.objectContaining({
+                decision: 'REVIEW_REQUIRED',
                 reviewStatus: 'NEEDS_REVIEW',
                 reviewIssueCount: 1,
             }),
         }),
     }))
+})
+
+test('generateAdminTestFromDocument fails fast when verification reports structural errors', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    verifyExtractedQuestionsMock.mockReturnValue(createVerification({
+        passed: false,
+        reviewRecommended: true,
+        issues: [
+            {
+                questionNumber: 0,
+                issue: 'Missing numbered questions: 49, 50',
+                category: 'STRUCTURAL',
+                severity: 'ERROR',
+                code: 'NUMBERING_GAP',
+            },
+        ],
+        issueSummary: {
+            structural: 1,
+            evidence: 0,
+            cross: 0,
+            errors: 1,
+            warnings: 0,
+        },
+    }))
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('broken.docx'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect('error' in result).toBe(true)
+    if (!('error' in result)) return
+
+    expect(result.code).toBe('PARSE_ERROR')
+    expect(result.message).toContain('Missing numbered questions')
+    expect(prismaMock.test.create).not.toHaveBeenCalled()
 })
 
 test('generateAdminTestFromDocument skips inline AI verification and metadata enrichment for large classifier imports', async () => {

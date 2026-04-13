@@ -87,6 +87,41 @@ type BatchesResponse = {
     }>;
 };
 
+type ImportJobStatus = "QUEUED" | "PROCESSING" | "SUCCEEDED" | "FAILED";
+
+type ImportJobResultPayload = {
+    test: { id: string; reviewStatus: string | null };
+    strategy: "EXTRACTED" | "AI_GENERATED" | "AI_VISION_FALLBACK";
+    extractedQuestions: number;
+    generationTarget: number | null;
+    questionsGenerated: number;
+    failedCount: number;
+    importDiagnostics?: {
+        reviewRequired?: boolean;
+        aiFallbackUsed?: boolean;
+        warning?: string | null;
+    } | null;
+};
+
+type ImportJobSummary = {
+    id: string;
+    status: ImportJobStatus;
+    fileName: string;
+    message: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    testId: string | null;
+    result: ImportJobResultPayload | null;
+    createdAt: string;
+    updatedAt: string;
+    startedAt: string | null;
+    completedAt: string | null;
+};
+
+type ImportJobResponse = {
+    job: ImportJobSummary;
+};
+
 type SaveDraftOptions = {
     showSuccessToast?: boolean;
 };
@@ -168,6 +203,7 @@ function AdminTestBuilderForm() {
     const [openAIModal, setOpenAIModal] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [file, setFile] = useState<File | null>(null);
+    const [importJob, setImportJob] = useState<ImportJobSummary | null>(null);
 
     const [testId, setTestId] = useState<string | null>(editId);
     const [testName, setTestName] = useState("");
@@ -582,6 +618,106 @@ function AdminTestBuilderForm() {
         }
     };
 
+    const handleImportJobSuccess = useCallback((payload: ImportJobResultPayload) => {
+        const { test, questionsGenerated, failedCount, strategy, generationTarget, importDiagnostics } = payload;
+
+        if (importDiagnostics?.reviewRequired) {
+            toast.warning("Review recommended", {
+                description:
+                    importDiagnostics.warning ||
+                    "This import completed, but verification found issues. Review the draft carefully before publishing.",
+            });
+        } else if (importDiagnostics?.aiFallbackUsed) {
+            toast.warning("AI took the lead", {
+                description:
+                    importDiagnostics.warning ||
+                    "The parser path struggled with this document, so AI fallback handled the extraction. Please inform engineering so the parser can be improved.",
+            });
+        }
+
+        if (failedCount > 0) {
+            toast.warning("Generated with warnings", {
+                description: `${questionsGenerated} question(s) created, ${failedCount} failed validation.`,
+            });
+        } else if (strategy === "EXTRACTED") {
+            toast.success("Question paper imported", {
+                description: `${questionsGenerated} question(s) extracted directly from the document.`,
+            });
+        } else if (strategy === "AI_VISION_FALLBACK") {
+            toast.success("AI fallback import complete", {
+                description: `${questionsGenerated} question(s) prepared after the AI fallback took over from the parser path.`,
+            });
+        } else {
+            toast.success("AI generation complete", {
+                description: `${questionsGenerated} question(s) generated${generationTarget ? ` (target ${generationTarget})` : ""}.`,
+            });
+        }
+
+        router.push(`/admin/tests/create?edit=${test.id}`);
+    }, [router]);
+
+    useEffect(() => {
+        if (!importJob || (importJob.status !== "QUEUED" && importJob.status !== "PROCESSING")) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const poll = async () => {
+            const response = await apiClient.get<ImportJobResponse>(`/api/admin/tests/import-jobs/${importJob.id}`);
+            if (cancelled) return;
+
+            if (!response.ok) {
+                setIsGenerating(false);
+                setImportJob(null);
+                toast.error("Import status failed", {
+                    description: response.message,
+                });
+                return;
+            }
+
+            const nextJob = response.data.job;
+            setImportJob(nextJob);
+
+            if (nextJob.status === "SUCCEEDED") {
+                setIsGenerating(false);
+                setImportJob(null);
+                setFile(null);
+
+                if (!nextJob.result) {
+                    toast.error("Generation failed", {
+                        description: "The import completed without a result payload.",
+                    });
+                    return;
+                }
+
+                handleImportJobSuccess(nextJob.result);
+                return;
+            }
+
+            if (nextJob.status === "FAILED") {
+                setIsGenerating(false);
+                setImportJob(null);
+                toast.error("Generation failed", {
+                    description:
+                        nextJob.errorMessage
+                        || nextJob.message
+                        || "The import job failed in the background. Please try again.",
+                });
+            }
+        };
+
+        void poll();
+        const intervalId = window.setInterval(() => {
+            void poll();
+        }, 2500);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(intervalId);
+        };
+    }, [handleImportJobSuccess, importJob]);
+
     const handleAIGenerate = async () => {
         if (!file) {
             toast.error("Please upload a .docx or .pdf file first.");
@@ -602,6 +738,7 @@ function AdminTestBuilderForm() {
             description: "We will extract existing MCQs first and fall back to AI generation when needed. Large PDFs can take a couple of minutes.",
         });
 
+        let jobQueued = false;
         try {
             const formData = new FormData();
             formData.append("file", file);
@@ -635,48 +772,22 @@ function AdminTestBuilderForm() {
                 throw new Error("Import endpoint returned a non-JSON success response.");
             }
 
-            const { test, questionsGenerated, failedCount, strategy, generationTarget, importDiagnostics } = data;
-
-            if (importDiagnostics?.reviewRequired) {
-                toast.warning("Review recommended", {
-                    description:
-                        importDiagnostics.warning ||
-                        "This import completed, but verification found issues. Review the draft carefully before publishing.",
-                });
-            } else if (importDiagnostics?.aiFallbackUsed) {
-                toast.warning("AI took the lead", {
-                    description:
-                        importDiagnostics.warning ||
-                        "The parser path struggled with this document, so AI fallback handled the extraction. Please inform engineering so the parser can be improved.",
-                });
-            }
-
-            if (failedCount > 0) {
-                toast.warning("Generated with warnings", {
-                    description: `${questionsGenerated} question(s) created, ${failedCount} failed validation.`,
-                });
-            } else if (strategy === "EXTRACTED") {
-                toast.success("Question paper imported", {
-                    description: `${questionsGenerated} question(s) extracted directly from the document.`,
-                });
-            } else if (strategy === "AI_VISION_FALLBACK") {
-                toast.success("AI fallback import complete", {
-                    description: `${questionsGenerated} question(s) prepared after the AI fallback took over from the parser path.`,
-                });
-            } else {
-                toast.success("AI generation complete", {
-                    description: `${questionsGenerated} question(s) generated${generationTarget ? ` (target ${generationTarget})` : ""}.`,
-                });
-            }
-
-            router.push(`/admin/tests/create?edit=${test.id}`);
+            const payload = data as ImportJobResponse;
+            setImportJob(payload.job);
+            jobQueued = true;
+            toast.success("Import queued", {
+                description: "The document is being processed in the background. We’ll open the draft as soon as it is ready.",
+            });
         } catch (error) {
             console.error("[AI][ADMIN] Document upload failed:", error);
             toast.error("Upload failed", {
                 description: "Could not process the document. Please try again.",
             });
+            setImportJob(null);
         } finally {
-            setIsGenerating(false);
+            if (!jobQueued) {
+                setIsGenerating(false);
+            }
         }
     };
 
@@ -747,7 +858,7 @@ function AdminTestBuilderForm() {
                     <Loader2 className="relative z-10 mb-6 h-16 w-16 animate-spin text-indigo-200" />
                     <h2 className="relative z-10 text-2xl font-serif font-bold">Building your draft...</h2>
                     <p className="relative z-10 mt-2 font-medium text-indigo-200">
-                        Extracting questions and preparing an admin-owned draft test.
+                        {importJob?.message || "Extracting questions and preparing an admin-owned draft test."}
                     </p>
                 </div>
             )}

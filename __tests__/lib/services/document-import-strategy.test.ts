@@ -139,7 +139,7 @@ test('resolveDocumentImportPlan enables visual reference overlay for diagram-hea
     expect(plan.visualReferenceOverlay).toBe(true)
 })
 
-test('resolveDocumentImportPlan keeps diagram-heavy PDFs with strong OCR on hybrid reconcile plus overlay', () => {
+test('resolveDocumentImportPlan keeps diagram-heavy PDFs with strong OCR on hybrid reconcile without overlay', () => {
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
         text: extractableFigureReasoningPdfText,
@@ -154,4 +154,68 @@ test('resolveDocumentImportPlan keeps diagram-heavy PDFs with strong OCR on hybr
     expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
     expect(plan.runMultimodalFirst).toBe(false)
     expect(plan.visualReferenceOverlay).toBe(false)
+})
+
+test('resolveDocumentImportPlan assigns STABLE lane to clean text-exact papers', () => {
+    const classification = classifyDocumentForImport({
+        fileName: 'physics-1-mcq.pdf',
+        text: humanGeoDocxLikeMcqText,
+    })
+
+    const plan = resolveDocumentImportPlan({
+        classifierRoutingEnabled: true,
+        classification,
+        isPdfUpload: true,
+    })
+
+    expect(plan.lane).toBe('STABLE')
+    expect(plan.selectedStrategy).toBe('TEXT_EXACT')
+})
+
+test('resolveDocumentImportPlan assigns ADVANCED lane to multimodal-first PDFs', () => {
+    const classification = classifyDocumentForImport({
+        fileName: 'quant-data-interpretation.pdf',
+        text: tableHeavyQuantPdfText,
+    })
+
+    const plan = resolveDocumentImportPlan({
+        classifierRoutingEnabled: true,
+        classification,
+        isPdfUpload: true,
+    })
+
+    expect(plan.lane).toBe('ADVANCED')
+    expect(plan.selectedStrategy).toBe('MULTIMODAL_EXTRACT')
+})
+
+test('resolveDocumentImportPlan assigns ADVANCED lane to hybrid reconcile papers', () => {
+    const classification = classifyDocumentForImport({
+        fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
+        text: extractableFigureReasoningPdfText,
+    })
+
+    const plan = resolveDocumentImportPlan({
+        classifierRoutingEnabled: true,
+        classification,
+        isPdfUpload: true,
+    })
+
+    expect(plan.lane).toBe('ADVANCED')
+    expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
+})
+
+test('resolveDocumentImportPlan assigns STABLE lane when classifier routing is disabled', () => {
+    const classification = classifyDocumentForImport({
+        fileName: 'quant-data-interpretation.pdf',
+        text: tableHeavyQuantPdfText,
+    })
+
+    const plan = resolveDocumentImportPlan({
+        classifierRoutingEnabled: false,
+        classification,
+        isPdfUpload: true,
+    })
+
+    expect(plan.routingMode).toBe('LEGACY')
+    expect(plan.lane).toBe('STABLE')
 })

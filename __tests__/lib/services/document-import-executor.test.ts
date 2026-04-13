@@ -81,6 +81,7 @@ function createExactExtraction(overrides: Partial<PreciseDocumentQuestionAnalysi
 
 const multimodalFirstPlan: DocumentImportPlan = {
     routingMode: 'CLASSIFIER',
+    lane: 'ADVANCED',
     selectedStrategy: 'MULTIMODAL_EXTRACT',
     runMultimodalFirst: true,
     visualReferenceOverlay: false,
@@ -90,6 +91,7 @@ const multimodalFirstPlan: DocumentImportPlan = {
 
 const sourceGenerationPlan: DocumentImportPlan = {
     routingMode: 'CLASSIFIER',
+    lane: 'ADVANCED',
     selectedStrategy: 'GENERATE_FROM_SOURCE',
     runMultimodalFirst: false,
     visualReferenceOverlay: false,
@@ -123,6 +125,7 @@ test('executeDocumentImportPlan uses exact extraction for TEXT_EXACT strategy', 
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'STABLE',
                 selectedStrategy: 'TEXT_EXACT',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: false,
@@ -156,6 +159,7 @@ test('executeDocumentImportPlan accepts a near-complete exact recovery for TEXT_
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'STABLE',
                 selectedStrategy: 'TEXT_EXACT',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: false,
@@ -192,6 +196,7 @@ test('executeDocumentImportPlan accepts a near-complete exact recovery even when
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'STABLE',
                 selectedStrategy: 'TEXT_EXACT',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: false,
@@ -210,6 +215,86 @@ test('executeDocumentImportPlan accepts a near-complete exact recovery even when
     expect(outcome.strategy).toBe('EXTRACTED')
     expect(outcome.result?.questions).toHaveLength(50)
     expect(outcome.result?.failedCount).toBe(0)
+})
+
+test('executeDocumentImportPlan returns legacy flow for stable-lane TEXT_EXACT PDFs when exact parser fails', async () => {
+    const extractTextExact = vi.fn().mockResolvedValue(createExactExtraction({
+        detectedAsMcqDocument: false,
+        candidateBlockCount: 0,
+        questions: [],
+        expectedQuestionCount: null,
+        exactMatchAchieved: false,
+        error: true,
+        message: 'Parser could not recover any questions',
+    }))
+    const extractMultimodal = vi.fn()
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'STABLE',
+                selectedStrategy: 'TEXT_EXACT',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: false,
+                generateFromSource: false,
+                reasons: ['clean paper'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact,
+            extractMultimodal,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(true)
+    expect(extractTextExact).toHaveBeenCalledOnce()
+    expect(extractMultimodal).not.toHaveBeenCalled()
+})
+
+test('executeDocumentImportPlan fails explicitly for stable-lane TEXT_EXACT non-PDFs when exact parser fails', async () => {
+    const extractTextExact = vi.fn().mockResolvedValue(createExactExtraction({
+        detectedAsMcqDocument: false,
+        candidateBlockCount: 0,
+        questions: [],
+        expectedQuestionCount: null,
+        exactMatchAchieved: false,
+        error: true,
+        message: 'Parser could not recover any questions',
+    }))
+    const extractMultimodal = vi.fn()
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'STABLE',
+                selectedStrategy: 'TEXT_EXACT',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: false,
+                generateFromSource: false,
+                reasons: ['clean paper'],
+            },
+            isPdfUpload: false,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact,
+            extractMultimodal,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.failure).toBeDefined()
+    expect(outcome.failure?.code).toBe('PARSE_ERROR')
+    expect(extractTextExact).toHaveBeenCalledOnce()
+    expect(extractMultimodal).not.toHaveBeenCalled()
 })
 
 test('executeDocumentImportPlan uses multimodal extraction first for risky PDFs', async () => {
@@ -312,6 +397,7 @@ test('executeDocumentImportPlan returns recoverable exact extraction immediately
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
                 selectedStrategy: 'HYBRID_RECONCILE',
                 runMultimodalFirst: true,
                 visualReferenceOverlay: false,
@@ -352,6 +438,7 @@ test('executeDocumentImportPlan does not run PDF multimodal extraction for non-P
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
                 selectedStrategy: 'HYBRID_RECONCILE',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: false,
@@ -459,6 +546,7 @@ test('executeDocumentImportPlan overlays visual references onto exact extraction
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
                 selectedStrategy: 'HYBRID_RECONCILE',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: true,
@@ -494,6 +582,7 @@ test('executeDocumentImportPlan keeps exact extraction and warns when no visual 
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
                 selectedStrategy: 'HYBRID_RECONCILE',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: true,
@@ -533,6 +622,7 @@ test('executeDocumentImportPlan marks admin review when visual reference extract
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
                 selectedStrategy: 'HYBRID_RECONCILE',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: true,
@@ -566,6 +656,7 @@ test('executeDocumentImportPlan does not crash when visual reference extraction 
         {
             plan: {
                 routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
                 selectedStrategy: 'HYBRID_RECONCILE',
                 runMultimodalFirst: false,
                 visualReferenceOverlay: true,
@@ -588,4 +679,135 @@ test('executeDocumentImportPlan does not crash when visual reference extraction 
     expect(outcome.result?.questions).toHaveLength(1)
     expect(outcome.needsAdminReview).toBe(true)
     expect(outcome.warning).toContain('could not confidently recover every diagram context')
+})
+
+test('executeDocumentImportPlan preserves strong exact-parsed sharedContext when visual reference merges', async () => {
+    const exactContext = 'The following table shows the production of cars by 5 companies over 5 years:\nCompany 2018 2019 2020 2021 2022\nA 45 50 40 55 60'
+    const exactEvidence = 'Table extracted from exact parser'
+    const extractTextExact = vi.fn().mockResolvedValue(createExactExtraction({
+        questions: [{
+            ...createQuestion('What is the total production of Company A?'),
+            sharedContext: exactContext,
+            sharedContextEvidence: exactEvidence,
+            sourceSnippet: 'Q1. What is the total production',
+            confidence: 0.95,
+        }],
+        expectedQuestionCount: 1,
+        candidateBlockCount: 1,
+        answerHintCount: 1,
+    }))
+    const extractVisualReferences = vi.fn().mockResolvedValue({
+        references: [
+            {
+                questionNumber: 1,
+                sharedContext: 'Data table showing car production figures.',
+                sourcePage: 2,
+                sourceSnippet: 'Production of Cars',
+                sharedContextEvidence: 'Visual reference from page 2 chart',
+                confidence: 0.85,
+            },
+        ],
+        pageCount: 3,
+        chunkCount: 2,
+    })
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: true,
+                generateFromSource: false,
+                reasons: ['table-heavy pdf'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact,
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('EXTRACTED')
+    const question = outcome.result?.questions?.[0]
+    // Strong exact-parsed context must survive the merge
+    expect(question?.sharedContext).toContain('production of cars')
+    // Visual reference context is appended, not replacing
+    expect(question?.sharedContext).toContain('Data table showing car production')
+    // Both evidence sources are preserved (concatenated)
+    expect(question?.sharedContextEvidence).toContain(exactEvidence)
+    expect(question?.sharedContextEvidence).toContain('Visual reference from page 2')
+    // Original sourceSnippet from exact parsing is preserved
+    expect(question?.sourceSnippet).toBe('Q1. What is the total production')
+    // Confidence takes the higher value
+    expect(question?.confidence).toBe(0.95)
+})
+
+test('executeDocumentImportPlan adds visual context to questions that have none', async () => {
+    const extractTextExact = vi.fn().mockResolvedValue(createExactExtraction({
+        questions: [{
+            ...createQuestion('Study the following diagram and answer.'),
+            sharedContext: null,
+            sharedContextEvidence: null,
+            sourceSnippet: null,
+            confidence: 0.7,
+        }],
+        expectedQuestionCount: 1,
+        candidateBlockCount: 1,
+        answerHintCount: 1,
+    }))
+    const extractVisualReferences = vi.fn().mockResolvedValue({
+        references: [
+            {
+                questionNumber: 1,
+                sharedContext: 'Venn diagram with Set A (Mammals) and Set B (Aquatic). Overlap: Whale, Dolphin.',
+                sourcePage: 3,
+                sourceSnippet: 'Study the following diagram',
+                sharedContextEvidence: 'Venn diagram on page 3',
+                confidence: 0.9,
+            },
+        ],
+        pageCount: 4,
+        chunkCount: 2,
+    })
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: true,
+                generateFromSource: false,
+                reasons: ['diagram-heavy pdf'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact,
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    const question = outcome.result?.questions?.[0]
+    // Visual context fills the gap
+    expect(question?.sharedContext).toContain('Venn diagram')
+    expect(question?.sharedContext).toContain('Whale, Dolphin')
+    // Evidence and snippet come from the visual reference
+    expect(question?.sharedContextEvidence).toContain('Venn diagram on page 3')
+    expect(question?.sourceSnippet).toBe('Study the following diagram')
+    // Confidence upgraded from visual reference
+    expect(question?.confidence).toBe(0.9)
+    expect(question?.sourcePage).toBe(3)
 })

@@ -25,6 +25,15 @@ export type VerificationContext = {
     comparisonQuestions?: GeneratedQuestion[] | null
 }
 
+export type ImportVerificationDecision = 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+
+export type ImportVerificationOutcome = {
+    decision: ImportVerificationDecision
+    message: string | null
+    errorCount: number
+    warningCount: number
+}
+
 const SHARED_CONTEXT_REFERENCE_PATTERN = /\b(?:following|above|below)\s+(?:table|data|chart|graph|passage|information)\b|\b(?:table|data|chart|graph|passage|information)\s+(?:given|shown|below|above)\b|\blist i\b|\blist ii\b/i
 const OPTION_ID_SEQUENCE = ['A', 'B', 'C', 'D']
 const LOW_CONFIDENCE_THRESHOLD = 0.55
@@ -172,6 +181,30 @@ function buildIssueSummary(issues: VerificationIssue[]) {
             warnings: 0,
         },
     )
+}
+
+function buildIssueMergeKey(issue: VerificationIssue) {
+    return `${issue.questionNumber}:${issue.category}:${issue.code ?? issue.issue}`
+}
+
+function buildVerificationOutcomeMessage(
+    issues: VerificationIssue[],
+    severity: VerificationIssueSeverity,
+) {
+    const relevantIssues = issues.filter((issue) => issue.severity === severity).slice(0, 3)
+    if (relevantIssues.length === 0) {
+        return null
+    }
+
+    return relevantIssues
+        .map((issue) => {
+            if (issue.questionNumber > 0) {
+                return `Q${issue.questionNumber}: ${issue.issue}`
+            }
+
+            return issue.issue
+        })
+        .join(' | ')
 }
 
 function getCorrectOptionId(question: GeneratedQuestion) {
@@ -558,6 +591,45 @@ export function verifyExtractedQuestionsV2(
     }
 }
 
+export function resolveImportVerificationOutcome(
+    verification: VerificationResult | null | undefined,
+): ImportVerificationOutcome {
+    if (!verification) {
+        return {
+            decision: 'EXACT_ACCEPTED',
+            message: null,
+            errorCount: 0,
+            warningCount: 0,
+        }
+    }
+
+    const issueSummary = verification.issueSummary ?? buildIssueSummary(verification.issues)
+    if (issueSummary.errors > 0) {
+        return {
+            decision: 'FAILED_WITH_REASON',
+            message: buildVerificationOutcomeMessage(verification.issues, 'ERROR'),
+            errorCount: issueSummary.errors,
+            warningCount: issueSummary.warnings,
+        }
+    }
+
+    if (issueSummary.warnings > 0 || verification.reviewRecommended) {
+        return {
+            decision: 'REVIEW_REQUIRED',
+            message: buildVerificationOutcomeMessage(verification.issues, 'WARNING'),
+            errorCount: issueSummary.errors,
+            warningCount: issueSummary.warnings,
+        }
+    }
+
+    return {
+        decision: 'EXACT_ACCEPTED',
+        message: null,
+        errorCount: issueSummary.errors,
+        warningCount: issueSummary.warnings,
+    }
+}
+
 export function mergeAIVerificationIssues(
     codeVerification: VerificationResult,
     aiVerification: AIVerificationResult,
@@ -567,12 +639,10 @@ export function mergeAIVerificationIssues(
     }
 
     // Deduplicate: skip AI issues where code already flagged the same question + category
-    const existingKeys = new Set(
-        codeVerification.issues.map(issue => `${issue.questionNumber}:${issue.category}`),
-    )
+    const existingKeys = new Set(codeVerification.issues.map(buildIssueMergeKey))
 
     const newAIIssues = aiVerification.issues.filter(issue => {
-        const key = `${issue.questionNumber}:${issue.category}`
+        const key = buildIssueMergeKey(issue)
         return !existingKeys.has(key)
     })
 
@@ -581,13 +651,7 @@ export function mergeAIVerificationIssues(
     }
 
     const mergedIssues = [...codeVerification.issues, ...newAIIssues]
-    const issueSummary = {
-        structural: mergedIssues.filter(i => i.category === 'STRUCTURAL').length,
-        evidence: mergedIssues.filter(i => i.category === 'EVIDENCE').length,
-        cross: mergedIssues.filter(i => i.category === 'CROSS').length,
-        errors: mergedIssues.filter(i => i.severity === 'ERROR').length,
-        warnings: mergedIssues.filter(i => i.severity === 'WARNING').length,
-    }
+    const issueSummary = buildIssueSummary(mergedIssues)
 
     return {
         totalQuestions: codeVerification.totalQuestions,

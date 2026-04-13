@@ -219,15 +219,20 @@ function mergeVisualReferencesIntoQuestions(
             .join('\n\n')
             .trim()
 
+        const mergedEvidence = [
+            question.sharedContextEvidence,
+            reference.sharedContextEvidence || reference.sourceSnippet,
+        ]
+            .filter((value, i, arr): value is string => Boolean(value) && arr.indexOf(value) === i)
+            .join(' | ')
+            .trim()
+
         return {
             ...question,
             sharedContext: mergedSharedContext || question.sharedContext || reference.sharedContext || null,
             sourcePage: reference.sourcePage ?? question.sourcePage ?? null,
-            sharedContextEvidence:
-                reference.sharedContextEvidence
-                || reference.sourceSnippet
-                || question.sharedContextEvidence
-                || null,
+            sourceSnippet: question.sourceSnippet || reference.sourceSnippet || null,
+            sharedContextEvidence: mergedEvidence || null,
             confidence: typeof reference.confidence === 'number'
                 ? Math.max(question.confidence ?? 0, reference.confidence)
                 : question.confidence ?? null,
@@ -387,35 +392,24 @@ async function executeDocumentImportPlanCore(
             }
         }
 
-        if (!input.isPdfUpload) {
+        // STABLE lane: never escalate to multimodal for TEXT_EXACT documents.
+        // PDF: fall back to legacy flow — the PDF parser may have structural
+        // issues the legacy path can work around differently.
+        if (input.isPdfUpload) {
             return { useLegacyFlow: true }
         }
 
-        const multimodal = await handlers.extractMultimodal(
-            extracted.expectedQuestionCount ?? input.generationTarget,
-        )
-        if (hasUsableQuestions(multimodal)) {
-            const needsAdminReview = Boolean(
-                multimodal.verification
-                && (!multimodal.verification.passed || multimodal.verification.reviewRecommended),
-            )
-            return {
-                useLegacyFlow: false,
-                strategy: 'AI_VISION_FALLBACK',
-                result: toPdfResult(multimodal),
-                extracted,
-                parserStatus: extracted.error ? 'FAILED' : 'WEAK_OUTPUT',
-                aiFallbackUsed: true,
-                reportParserIssue: true,
-                warning: extracted.error
-                    ? 'The exact parser could not recover this PDF, so multimodal extraction took over.'
-                    : 'The exact parser produced weak output for this PDF, so multimodal extraction took over.',
-                needsAdminReview,
-                reviewIssueCount: multimodal.verification?.issues.length ?? 0,
-            }
+        // Non-PDF: the classifier identified a clean text MCQ paper but the
+        // exact parser could not recover it. Fail explicitly rather than
+        // silently bouncing to a different code path.
+        return {
+            useLegacyFlow: false,
+            failure: {
+                code: 'PARSE_ERROR',
+                message: extracted.message
+                    || 'The document was classified as a text-extractable MCQ paper, but the parser could not recover usable questions.',
+            },
         }
-
-        return { useLegacyFlow: true }
     }
 
     if (input.plan.selectedStrategy === 'HYBRID_RECONCILE') {

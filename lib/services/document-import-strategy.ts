@@ -4,9 +4,11 @@ import type {
 } from '@/lib/services/document-classifier'
 
 export type DocumentImportRoutingMode = 'LEGACY' | 'CLASSIFIER'
+export type DocumentImportLane = 'STABLE' | 'ADVANCED'
 
 export type DocumentImportPlan = {
     routingMode: DocumentImportRoutingMode
+    lane: DocumentImportLane
     selectedStrategy: RecommendedExtractionStrategy
     runMultimodalFirst: boolean
     visualReferenceOverlay: boolean
@@ -48,6 +50,7 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
     if (!input.classifierRoutingEnabled) {
         return {
             routingMode: 'LEGACY',
+            lane: 'STABLE',
             selectedStrategy,
             runMultimodalFirst: false,
             visualReferenceOverlay: false,
@@ -56,8 +59,13 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         }
     }
 
+    const lane: DocumentImportLane = selectedStrategy === 'TEXT_EXACT'
+        ? 'STABLE'
+        : 'ADVANCED'
+
     return {
         routingMode: 'CLASSIFIER',
+        lane,
         selectedStrategy,
         runMultimodalFirst: input.isPdfUpload && selectedStrategy === 'MULTIMODAL_EXTRACT',
         visualReferenceOverlay:
@@ -67,6 +75,7 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         generateFromSource: selectedStrategy === 'GENERATE_FROM_SOURCE',
         reasons: [
             `Classifier selected ${selectedStrategy} for this document.`,
+            `Import lane: ${lane}.`,
             ...(selectedStrategy !== input.classification.preferredStrategy
                 ? [`Normalized ${input.classification.preferredStrategy} to ${selectedStrategy} for this file type.`]
                 : []),
