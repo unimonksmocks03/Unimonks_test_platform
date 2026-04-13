@@ -64,9 +64,12 @@ vi.mock('@/lib/services/document-import-executor', () => ({
 
 const servicePromise = import('../../../lib/services/test-service')
 
-function createFile(name = 'history.docx') {
+function createFile(
+    name = 'history.docx',
+    type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+) {
     return new File(['Mock upload'], name, {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        type,
     })
 }
 
@@ -437,4 +440,135 @@ test('generateAdminTestFromDocument skips inline AI verification and metadata en
         extractedQuestions: 50,
         questionsGenerated: 50,
     })
+})
+
+test('generateAdminTestFromDocument prefers chunked multimodal extraction for hybrid visual PDFs in classifier flow', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    classifyDocumentForImportMock.mockReturnValue({
+        ...createClassification(),
+        hasVisualReferences: true,
+        preferredStrategy: 'HYBRID_RECONCILE',
+    })
+    resolveDocumentImportPlanMock.mockReturnValue({
+        routingMode: 'CLASSIFIER',
+        lane: 'ADVANCED',
+        selectedStrategy: 'HYBRID_RECONCILE',
+        runMultimodalFirst: false,
+        visualReferenceOverlay: false,
+        generateFromSource: false,
+        reasons: ['visual reasoning pdf'],
+    })
+    extractQuestionsFromPdfMultimodalMock.mockResolvedValue({
+        error: false,
+        message: undefined,
+        questions: [createQuestion('Recovered visual question')],
+        failedCount: 0,
+        cost: undefined,
+        verification: createVerification(),
+        pageCount: 5,
+        chunkCount: 3,
+    })
+    executeDocumentImportPlanMock.mockImplementationOnce(async (_input, handlers) => {
+        await handlers.extractMultimodal(50)
+        return {
+            useLegacyFlow: false,
+            strategy: 'AI_VISION_FALLBACK',
+            result: {
+                error: false,
+                message: undefined,
+                questions: [createQuestion('Recovered visual question')],
+                failedCount: 0,
+                cost: undefined,
+                verification: createVerification(),
+                pageCount: 5,
+                chunkCount: 3,
+            },
+            parserStatus: 'OK',
+            aiFallbackUsed: false,
+            reportParserIssue: false,
+            warning: null,
+            needsAdminReview: false,
+            reviewIssueCount: 0,
+        }
+    })
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('figure-completion.pdf', 'application/pdf'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(extractQuestionsFromPdfMultimodalMock).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        50,
+        'admin-1',
+        'figure-completion.pdf',
+        { preferChunkedVisualExtraction: true },
+    )
+})
+
+test('generateAdminTestFromDocument prefers chunked multimodal extraction for legacy weak visual PDFs', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    classifyDocumentForImportMock.mockReturnValue({
+        ...createClassification(),
+        hasVisualReferences: true,
+        preferredStrategy: 'HYBRID_RECONCILE',
+    })
+    resolveDocumentImportPlanMock.mockReturnValue({
+        routingMode: 'CLASSIFIER',
+        lane: 'ADVANCED',
+        selectedStrategy: 'HYBRID_RECONCILE',
+        runMultimodalFirst: false,
+        visualReferenceOverlay: false,
+        generateFromSource: false,
+        reasons: ['visual reasoning pdf'],
+    })
+    executeDocumentImportPlanMock.mockResolvedValueOnce({ useLegacyFlow: true })
+    extractQuestionsFromDocumentTextPreciselyMock.mockResolvedValueOnce({
+        detectedAsMcqDocument: false,
+        answerHintCount: 0,
+        candidateBlockCount: 10,
+        questions: [createQuestion('Only recovered question')],
+        expectedQuestionCount: null,
+        exactMatchAchieved: false,
+        invalidQuestionNumbers: [],
+        missingQuestionNumbers: [],
+        duplicateQuestionNumbers: [],
+        aiRepairUsed: false,
+        cost: undefined,
+        error: true,
+        message: 'Weak parser output',
+    })
+    extractQuestionsFromPdfMultimodalMock.mockResolvedValueOnce({
+        error: false,
+        message: undefined,
+        questions: [createQuestion('Recovered visual question')],
+        failedCount: 0,
+        cost: undefined,
+        verification: createVerification(),
+        pageCount: 5,
+        chunkCount: 3,
+    })
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('venn.pdf', 'application/pdf'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(extractQuestionsFromPdfMultimodalMock).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        expect.any(Number),
+        'admin-1',
+        'venn.pdf',
+        { preferChunkedVisualExtraction: true },
+    )
 })

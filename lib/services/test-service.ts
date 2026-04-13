@@ -150,6 +150,25 @@ type TestImportDiagnosticsPayload = DocumentImportDiagnostics & {
     verification: VerificationResult | null
 }
 
+type PdfMultimodalPreferenceInput = {
+    isPdfUpload: boolean
+    plan: ReturnType<typeof resolveDocumentImportPlan>
+    classification: DocumentClassificationResult
+}
+
+function shouldPreferChunkedPdfExtraction(input: PdfMultimodalPreferenceInput) {
+    if (!input.isPdfUpload) {
+        return false
+    }
+
+    return (
+        input.plan.selectedStrategy === 'HYBRID_RECONCILE'
+        || input.plan.visualReferenceOverlay
+        || input.classification.hasVisualReferences
+        || input.classification.isScannedLike
+    )
+}
+
 type GeneratedTextQuestionsResult = Awaited<ReturnType<typeof generateQuestionsFromText>>
 
 type DocumentGenerationResult =
@@ -1265,6 +1284,11 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         classification: importDiagnostics.classification,
         isPdfUpload,
     })
+    const preferChunkedPdfExtraction = shouldPreferChunkedPdfExtraction({
+        isPdfUpload,
+        plan: importPlan,
+        classification: importDiagnostics.classification,
+    })
     const effectiveGenerationTarget =
         importDiagnostics.classification.documentType === 'MCQ_PAPER'
         && importDiagnostics.classification.detectedQuestionCount
@@ -1301,7 +1325,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 target,
                 admin.id,
                 uploadValidation.sanitizedFileName,
-                { preferChunkedVisualExtraction: importPlan.visualReferenceOverlay },
+                { preferChunkedVisualExtraction: preferChunkedPdfExtraction },
             ),
             extractVisualReferences: () => extractVisualReferencesFromPdfImages(
                 buffer,
@@ -1390,6 +1414,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                 extracted.expectedQuestionCount ?? effectiveGenerationTarget,
                 admin.id,
                 uploadValidation.sanitizedFileName,
+                { preferChunkedVisualExtraction: preferChunkedPdfExtraction },
             )
 
             if (!multimodal.error && multimodal.questions && multimodal.questions.length > 0) {
