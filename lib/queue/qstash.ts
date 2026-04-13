@@ -33,6 +33,11 @@ function getBaseUrl(): string {
     return getAppEnv().NEXT_PUBLIC_APP_URL
 }
 
+function toSafeDeduplicationId(prefix: string, id: string): string {
+    const normalizedId = id.replace(/[^a-zA-Z0-9_-]/g, '-')
+    return `${prefix}-${normalizedId}`
+}
+
 /**
  * Enqueue an AI feedback generation job.
  *
@@ -46,7 +51,7 @@ export async function enqueueAIFeedback(sessionId: string) {
         url: `${baseUrl}/api/webhooks/ai-feedback`,
         body: { sessionId },
         retries: 3,
-        deduplicationId: `ai-feedback:${sessionId}`,
+        deduplicationId: toSafeDeduplicationId('ai-feedback', sessionId),
         failureCallback: `${baseUrl}/api/webhooks/qstash-dlq`,
     })
 }
@@ -64,7 +69,7 @@ export async function enqueueForceSubmit(sessionId: string, studentId: string, n
         body: { sessionId, studentId },
         retries: 3,
         ...(notBefore ? { notBefore } : {}),
-        deduplicationId: `force-submit:${sessionId}`,
+        deduplicationId: toSafeDeduplicationId('force-submit', sessionId),
         failureCallback: `${baseUrl}/api/webhooks/qstash-dlq`,
     })
 }
@@ -81,9 +86,9 @@ export async function enqueueDocumentImportJob(jobId: string) {
         url: `${baseUrl}/api/webhooks/document-import`,
         body: { jobId },
         retries: 3,
-        deduplicationId: `document-import:${jobId}`,
+        deduplicationId: toSafeDeduplicationId('document-import', jobId),
         failureCallback: `${baseUrl}/api/webhooks/qstash-dlq`,
     })
 }
 
-export { qstashClient }
+export { qstashClient, toSafeDeduplicationId }
