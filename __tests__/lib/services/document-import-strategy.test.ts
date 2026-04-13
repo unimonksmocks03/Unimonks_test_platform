@@ -153,5 +153,5 @@ test('resolveDocumentImportPlan keeps diagram-heavy PDFs with strong OCR on hybr
 
     expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
     expect(plan.runMultimodalFirst).toBe(false)
-    expect(plan.visualReferenceOverlay).toBe(true)
+    expect(plan.visualReferenceOverlay).toBe(false)
 })

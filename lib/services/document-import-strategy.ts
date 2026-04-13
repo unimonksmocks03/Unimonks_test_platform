@@ -62,7 +62,8 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         runMultimodalFirst: input.isPdfUpload && selectedStrategy === 'MULTIMODAL_EXTRACT',
         visualReferenceOverlay:
             input.isPdfUpload
-            && input.classification.hasVisualReferences,
+            && input.classification.hasVisualReferences
+            && selectedStrategy === 'MULTIMODAL_EXTRACT',
         generateFromSource: selectedStrategy === 'GENERATE_FROM_SOURCE',
         reasons: [
             `Classifier selected ${selectedStrategy} for this document.`,

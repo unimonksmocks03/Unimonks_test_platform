@@ -418,9 +418,59 @@ async function executeDocumentImportPlanCore(
         return { useLegacyFlow: true }
     }
 
-    if (input.plan.selectedStrategy === 'HYBRID_RECONCILE' && !input.isPdfUpload) {
+    if (input.plan.selectedStrategy === 'HYBRID_RECONCILE') {
         const extracted = await handlers.extractTextExact()
         if (hasRecoverableExactExtraction(extracted)) {
+            if (input.isPdfUpload && input.plan.visualReferenceOverlay) {
+                const visualReferences = await safelyExtractVisualReferences(
+                    handlers.extractVisualReferences,
+                )
+                if (!visualReferences) {
+                    return {
+                        useLegacyFlow: false,
+                        strategy: 'EXTRACTED',
+                        result: toExtractedResult(extracted),
+                        extracted,
+                        parserStatus: extracted.aiRepairUsed ? 'REPAIRED' : 'OK',
+                        aiFallbackUsed: extracted.aiRepairUsed,
+                        reportParserIssue: false,
+                        warning: extracted.aiRepairUsed
+                            ? 'Hybrid reconcile used exact recovery for question parsing.'
+                            : null,
+                        needsAdminReview: false,
+                        reviewIssueCount: 0,
+                    }
+                }
+                const mergedQuestions = mergeVisualReferencesIntoQuestions(
+                    extracted.questions,
+                    visualReferences.references,
+                )
+                const mergedExtraction: PreciseDocumentQuestionAnalysis = {
+                    ...extracted,
+                    questions: mergedQuestions,
+                }
+
+                const extractedVisualCount = visualReferences.references?.length ?? 0
+                return {
+                    useLegacyFlow: false,
+                    strategy: 'EXTRACTED',
+                    result: toExtractedResult(mergedExtraction),
+                    extracted: mergedExtraction,
+                    parserStatus: extracted.aiRepairUsed ? 'REPAIRED' : 'OK',
+                    aiFallbackUsed: extracted.aiRepairUsed || extractedVisualCount > 0,
+                    reportParserIssue: Boolean(visualReferences.error && visualReferences.message),
+                    warning: visualReferences.error
+                        ? 'Exact parsing recovered the questions, but visual-reference extraction could not confidently recover every diagram context.'
+                        : extractedVisualCount === 0
+                            ? 'Exact parsing recovered the questions, but no diagram references were detected from the page images. Review visual questions carefully.'
+                            : extracted.aiRepairUsed
+                                ? 'Hybrid reconcile used exact recovery for question parsing and page-image extraction for diagram references.'
+                                : 'Hybrid reconcile used exact parsing plus page-image extraction for diagram references.',
+                    needsAdminReview: Boolean(visualReferences.error),
+                    reviewIssueCount: visualReferences.error ? 1 : 0,
+                }
+            }
+
             return {
                 useLegacyFlow: false,
                 strategy: 'EXTRACTED',
@@ -443,59 +493,8 @@ async function executeDocumentImportPlanCore(
             }
         }
 
-        return { useLegacyFlow: true }
-    }
-
-    if (input.plan.selectedStrategy === 'HYBRID_RECONCILE' && input.plan.visualReferenceOverlay) {
-        const extracted = await handlers.extractTextExact()
-        if (hasRecoverableExactExtraction(extracted)) {
-            const visualReferences = await safelyExtractVisualReferences(
-                handlers.extractVisualReferences,
-            )
-            if (!visualReferences) {
-                return {
-                    useLegacyFlow: false,
-                    strategy: 'EXTRACTED',
-                    result: toExtractedResult(extracted),
-                    extracted,
-                    parserStatus: extracted.aiRepairUsed ? 'REPAIRED' : 'OK',
-                    aiFallbackUsed: extracted.aiRepairUsed,
-                    reportParserIssue: false,
-                    warning: extracted.aiRepairUsed
-                        ? 'Hybrid reconcile used exact recovery for question parsing.'
-                        : null,
-                    needsAdminReview: false,
-                    reviewIssueCount: 0,
-                }
-            }
-            const mergedQuestions = mergeVisualReferencesIntoQuestions(
-                extracted.questions,
-                visualReferences.references,
-            )
-            const mergedExtraction: PreciseDocumentQuestionAnalysis = {
-                ...extracted,
-                questions: mergedQuestions,
-            }
-
-            const extractedVisualCount = visualReferences.references?.length ?? 0
-            return {
-                useLegacyFlow: false,
-                strategy: 'EXTRACTED',
-                result: toExtractedResult(mergedExtraction),
-                extracted: mergedExtraction,
-                parserStatus: extracted.aiRepairUsed ? 'REPAIRED' : 'OK',
-                aiFallbackUsed: extracted.aiRepairUsed || extractedVisualCount > 0,
-                reportParserIssue: Boolean(visualReferences.error && visualReferences.message),
-                warning: visualReferences.error
-                    ? 'Exact parsing recovered the questions, but visual-reference extraction could not confidently recover every diagram context.'
-                    : extractedVisualCount === 0
-                        ? 'Exact parsing recovered the questions, but no diagram references were detected from the page images. Review visual questions carefully.'
-                        : extracted.aiRepairUsed
-                            ? 'Hybrid reconcile used exact recovery for question parsing and page-image extraction for diagram references.'
-                            : 'Hybrid reconcile used exact parsing plus page-image extraction for diagram references.',
-                needsAdminReview: Boolean(visualReferences.error),
-                reviewIssueCount: visualReferences.error ? 1 : 0,
-            }
+        if (!input.isPdfUpload) {
+            return { useLegacyFlow: true }
         }
     }
 

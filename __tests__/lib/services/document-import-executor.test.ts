@@ -279,7 +279,7 @@ test('executeDocumentImportPlan falls back to exact extraction after multimodal 
     expect(outcome.result?.questions).toHaveLength(1)
 })
 
-test('executeDocumentImportPlan prefers exact extraction when hybrid reconcile finds a fuller set', async () => {
+test('executeDocumentImportPlan returns recoverable exact extraction immediately for hybrid reconcile PDFs', async () => {
     const extractMultimodal = vi.fn().mockResolvedValue({
         mode: 'EXTRACTED',
         questions: [createQuestion('Multimodal question')],
@@ -331,7 +331,7 @@ test('executeDocumentImportPlan prefers exact extraction when hybrid reconcile f
 
     expect(outcome.useLegacyFlow).toBe(false)
     expect(outcome.strategy).toBe('EXTRACTED')
-    expect(extractMultimodal).toHaveBeenCalledOnce()
+    expect(extractMultimodal).not.toHaveBeenCalled()
     expect(extractTextExact).toHaveBeenCalledOnce()
     expect(outcome.result?.questions).toHaveLength(2)
 })
