@@ -12,6 +12,7 @@ export type DocumentImportPlan = {
     selectedStrategy: RecommendedExtractionStrategy
     runMultimodalFirst: boolean
     visualReferenceOverlay: boolean
+    manualVisualReferenceCapture?: boolean
     generateFromSource: boolean
     reasons: string[]
 }
@@ -95,10 +96,17 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
             selectedStrategy,
             runMultimodalFirst: false,
             visualReferenceOverlay: false,
+            manualVisualReferenceCapture: false,
             generateFromSource: false,
             reasons: ['Classifier-driven routing is disabled; using legacy import flow.'],
         }
     }
+
+    const manualVisualReferenceCapture =
+        input.isPdfUpload
+        && input.classification.hasDiagramReasoning
+        && !input.classification.isScannedLike
+        && selectedStrategy === 'HYBRID_RECONCILE'
 
     const lane: DocumentImportLane = selectedStrategy === 'TEXT_EXACT'
         ? 'STABLE'
@@ -108,15 +116,23 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         routingMode: 'CLASSIFIER',
         lane,
         selectedStrategy,
-        runMultimodalFirst: input.isPdfUpload && selectedStrategy === 'MULTIMODAL_EXTRACT',
+        runMultimodalFirst:
+            input.isPdfUpload
+            && selectedStrategy === 'MULTIMODAL_EXTRACT'
+            && !manualVisualReferenceCapture,
         visualReferenceOverlay:
             input.isPdfUpload
             && input.classification.hasVisualReferences
-            && selectedStrategy === 'HYBRID_RECONCILE',
+            && selectedStrategy === 'HYBRID_RECONCILE'
+            && !manualVisualReferenceCapture,
+        manualVisualReferenceCapture,
         generateFromSource: selectedStrategy === 'GENERATE_FROM_SOURCE',
         reasons: [
             `Classifier selected ${selectedStrategy} for this document.`,
             `Import lane: ${lane}.`,
+            ...(manualVisualReferenceCapture
+                ? ['Diagram-heavy PDF will create a draft from text extraction first and require manual visual-reference capture.']
+                : []),
             ...(normalizedStrategy !== input.classification.preferredStrategy
                 ? [`Normalized ${input.classification.preferredStrategy} to ${normalizedStrategy} for this file type.`]
                 : []),

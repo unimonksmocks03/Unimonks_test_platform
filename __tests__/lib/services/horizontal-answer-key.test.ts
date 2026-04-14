@@ -56,6 +56,27 @@ Q2. How many squares are visible?
 Answer: (b)
 `
 
+const repeatedFullSequenceText = [
+    ...Array.from({ length: 10 }, (_, index) => {
+        const questionNumber = index + 1
+        return `Q${questionNumber}. First paper question ${questionNumber}
+(A) One
+(B) Two
+(C) Three
+(D) Four
+ANSWER (A) One`
+    }),
+    ...Array.from({ length: 10 }, (_, index) => {
+        const questionNumber = index + 1
+        return `Q${questionNumber}. Second paper question ${questionNumber}
+(A) Wrong
+(B) Wrong
+(C) Wrong
+(D) Wrong
+ANSWER (B) Wrong`
+    }),
+].join('\n\n')
+
 test('extractQuestionsFromDocumentTextPrecisely resolves compact horizontal answer keys like Q1B', async () => {
     const { extractQuestionsFromDocumentTextPrecisely } = await aiServicePromise
 
@@ -67,6 +88,18 @@ test('extractQuestionsFromDocumentTextPrecisely resolves compact horizontal answ
     expect(result.questions[0].answerSource).toBe('ANSWER_KEY')
     expect(result.questions[1].options.find((option) => option.isCorrect)?.id).toBe('A')
     expect(result.questions[2].options.find((option) => option.isCorrect)?.id).toBe('A')
+})
+
+test('extractQuestionsFromDocumentTextPrecisely keeps the first complete numbered sequence when the document repeats a full paper', async () => {
+    const { extractQuestionsFromDocumentTextPrecisely } = await aiServicePromise
+
+    const result = await extractQuestionsFromDocumentTextPrecisely(repeatedFullSequenceText)
+
+    expect(result.exactMatchAchieved).toBe(true)
+    expect(result.questions).toHaveLength(10)
+    expect(result.duplicateQuestionNumbers).toEqual([])
+    expect(result.questions[0]?.stem).toContain('First paper question 1')
+    expect(result.questions[9]?.stem).toContain('First paper question 10')
 })
 
 test('reconcileGeneratedQuestionsWithTextAnswerHints repairs missing correct options from the document answer key', async () => {

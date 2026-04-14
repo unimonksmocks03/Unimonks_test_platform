@@ -473,6 +473,21 @@ async function executeDocumentImportPlanCore(
     if (input.plan.selectedStrategy === 'HYBRID_RECONCILE') {
         const extracted = await handlers.extractTextExact()
         if (hasRecoverableExactExtraction(extracted)) {
+            if (input.plan.manualVisualReferenceCapture) {
+                return {
+                    useLegacyFlow: false,
+                    strategy: 'EXTRACTED',
+                    result: toExtractedResult(extracted),
+                    extracted,
+                    parserStatus: extracted.aiRepairUsed ? 'REPAIRED' : 'OK',
+                    aiFallbackUsed: extracted.aiRepairUsed,
+                    reportParserIssue: false,
+                    warning: 'Created the draft from text extraction. Questions that depend on figures or diagrams are marked for manual image attachment.',
+                    needsAdminReview: false,
+                    reviewIssueCount: 0,
+                }
+            }
+
             const shouldSkipVisualOverlay =
                 input.isPdfUpload
                 && input.plan.visualReferenceOverlay

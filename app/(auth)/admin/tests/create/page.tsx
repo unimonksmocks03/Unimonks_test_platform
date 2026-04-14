@@ -1,14 +1,16 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+    AlertCircle,
     Layers3,
     Loader2,
     Plus,
     Save,
     Send,
     Trash2,
+    Upload,
     UploadCloud,
     Wand2,
 } from "lucide-react";
@@ -196,6 +198,43 @@ function audienceLabel(audience: BatchAudience) {
     return audience;
 }
 
+function isVisualReference(reference: QuestionReferencePayload) {
+    return reference.mode !== "TEXT" || reference.kind === "DIAGRAM" || reference.kind === "GRAPH" || reference.kind === "MAP";
+}
+
+function getPreferredVisualReference(question: Question) {
+    return question.references?.find((reference) => isVisualReference(reference)) ?? null;
+}
+
+function questionNeedsVisualReference(question: Question) {
+    const visualReference = getPreferredVisualReference(question);
+    return Boolean(visualReference && !visualReference.assetUrl);
+}
+
+function mergeQuestionReferences(currentQuestions: Question[], nextQuestion: Question) {
+    const updatedReferences = new Map(
+        (nextQuestion.references ?? [])
+            .filter((reference) => reference.id)
+            .map((reference) => [reference.id, reference] as const),
+    );
+
+    return currentQuestions.map((question) => {
+        const mergedReferences = (question.references ?? []).map((reference) => updatedReferences.get(reference.id) ?? reference);
+        if (question.dbId === nextQuestion.dbId) {
+            return {
+                ...question,
+                ...nextQuestion,
+                references: mergedReferences.length > 0 ? mergedReferences : nextQuestion.references ?? [],
+            };
+        }
+
+        return {
+            ...question,
+            references: mergedReferences,
+        };
+    });
+}
+
 function formatImportStage(stage: ImportJobStage | null | undefined) {
     switch (stage) {
         case "PROCESSING_CLASSIFICATION":
@@ -264,8 +303,11 @@ function AdminTestBuilderForm() {
     const [isPublishing, setIsPublishing] = useState(false);
     const [openAIModal, setOpenAIModal] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isUploadingReferenceImage, setIsUploadingReferenceImage] = useState(false);
+    const [isReferenceDropActive, setIsReferenceDropActive] = useState(false);
     const [file, setFile] = useState<File | null>(null);
     const [importJob, setImportJob] = useState<ImportJobSummary | null>(null);
+    const referenceFileInputRef = useRef<HTMLInputElement | null>(null);
 
     const [testId, setTestId] = useState<string | null>(editId);
     const [testName, setTestName] = useState("");
@@ -357,6 +399,8 @@ function AdminTestBuilderForm() {
     }, [editId, loadTest]);
 
     const activeQuestion = questions[activeQIndex] || emptyQuestion();
+    const activeVisualReference = getPreferredVisualReference(activeQuestion);
+    const activeQuestionNeedsVisualReference = questionNeedsVisualReference(activeQuestion);
     const isBusy = isSavingDraft || isAssigning || isPublishing || isGenerating;
     const isPublishedTest = testStatus === "PUBLISHED";
     const normalizedDuration = String(Number.parseInt(testDuration, 10) || 60);
@@ -384,6 +428,103 @@ function AdminTestBuilderForm() {
         }));
         updateActiveQuestion({ options: nextOptions });
     };
+
+    const uploadReferenceImage = useCallback(async (referenceFile: File | null | undefined) => {
+        if (!referenceFile) {
+            return;
+        }
+
+        if (isContentLocked || isBusy || isUploadingReferenceImage) {
+            return;
+        }
+
+        if (!testId || !activeQuestion.dbId) {
+            toast.error("Save the draft first", {
+                description: "Question reference images can be attached after the draft question has been saved.",
+            });
+            return;
+        }
+
+        const normalizedType = referenceFile.type.toLowerCase();
+        if (!["image/png", "image/jpeg", "image/webp"].includes(normalizedType)) {
+            toast.error("Unsupported image type", {
+                description: "Please upload or paste a PNG, JPEG, or WEBP image.",
+            });
+            return;
+        }
+
+        setIsUploadingReferenceImage(true);
+        try {
+            const formData = new FormData();
+            formData.append("file", referenceFile);
+
+            const response = await fetch(`/api/admin/tests/${testId}/questions/${activeQuestion.dbId}/reference-image`, {
+                method: "POST",
+                body: formData,
+            });
+            const data = await response.json().catch(() => null);
+
+            if (!response.ok || !data?.question) {
+                toast.error("Reference upload failed", {
+                    description: data?.message || `The server returned ${response.status}. Please try again.`,
+                });
+                return;
+            }
+
+            const updatedQuestion: Question = {
+                dbId: data.question.id,
+                stem: data.question.stem,
+                sharedContext: data.question.sharedContext || "",
+                references: data.question.references || [],
+                options: normalizeOptions(data.question.options),
+                difficulty: data.question.difficulty,
+                topic: data.question.topic || "",
+                explanation: data.question.explanation || "",
+                saved: true,
+            };
+
+            setQuestions((currentQuestions) => mergeQuestionReferences(currentQuestions, updatedQuestion));
+            toast.success("Visual reference saved", {
+                description: "The uploaded image is now attached to this question.",
+            });
+        } catch (error) {
+            console.error("[ADMIN][TEST] Reference image upload failed:", error);
+            toast.error("Reference upload failed", {
+                description: "Could not upload the image. Please try again.",
+            });
+        } finally {
+            setIsUploadingReferenceImage(false);
+            setIsReferenceDropActive(false);
+            if (referenceFileInputRef.current) {
+                referenceFileInputRef.current.value = "";
+            }
+        }
+    }, [activeQuestion, isBusy, isContentLocked, isUploadingReferenceImage, testId]);
+
+    const handleReferenceFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        const nextFile = event.target.files?.[0];
+        void uploadReferenceImage(nextFile);
+    }, [uploadReferenceImage]);
+
+    const handleReferenceDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        setIsReferenceDropActive(false);
+        const nextFile = event.dataTransfer.files?.[0];
+        void uploadReferenceImage(nextFile);
+    }, [uploadReferenceImage]);
+
+    const handleReferencePaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+        const pastedFile = [...event.clipboardData.items]
+            .find((item) => item.type.startsWith("image/"))
+            ?.getAsFile();
+
+        if (!pastedFile) {
+            return;
+        }
+
+        event.preventDefault();
+        void uploadReferenceImage(pastedFile);
+    }, [uploadReferenceImage]);
 
     const addQuestion = () => {
         setQuestions((currentQuestions) => [...currentQuestions, emptyQuestion()]);
@@ -971,6 +1112,12 @@ function AdminTestBuilderForm() {
                                             Q{index + 1}. {question.stem || "(empty question)"}
                                         </p>
                                         <div className="flex shrink-0 items-center gap-1">
+                                            {questionNeedsVisualReference(question) && (
+                                                <span
+                                                    className="h-2.5 w-2.5 rounded-full bg-rose-500"
+                                                    title="Visual reference required"
+                                                />
+                                            )}
                                             {question.saved && <span className="h-2 w-2 rounded-full bg-emerald-500" title="Saved" />}
                                             {questions.length > 1 && (
                                                 <button
@@ -1052,6 +1199,88 @@ function AdminTestBuilderForm() {
                                         />
                                     </div>
                                 ) : null}
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                                            Visual Reference
+                                        </Label>
+                                        {activeQuestionNeedsVisualReference ? (
+                                            <Badge className="border-0 bg-rose-100 text-[10px] font-bold uppercase tracking-wide text-rose-700">
+                                                Needs image
+                                            </Badge>
+                                        ) : activeVisualReference?.assetUrl ? (
+                                            <Badge className="border-0 bg-emerald-100 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                                                Image attached
+                                            </Badge>
+                                        ) : null}
+                                    </div>
+                                    <div
+                                        tabIndex={0}
+                                        onDrop={handleReferenceDrop}
+                                        onDragOver={(event) => {
+                                            event.preventDefault();
+                                            setIsReferenceDropActive(true);
+                                        }}
+                                        onDragLeave={(event) => {
+                                            event.preventDefault();
+                                            setIsReferenceDropActive(false);
+                                        }}
+                                        onPaste={handleReferencePaste}
+                                        className={`rounded-2xl border-2 border-dashed p-4 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                                            activeQuestionNeedsVisualReference
+                                                ? "border-rose-300 bg-rose-50/70"
+                                                : isReferenceDropActive
+                                                    ? "border-indigo-400 bg-indigo-50"
+                                                    : "border-slate-200 bg-slate-50/80"
+                                        } ${isContentLocked || isBusy || isUploadingReferenceImage ? "opacity-60" : ""}`}
+                                    >
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                            <div className="space-y-1">
+                                                <div className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                                                    {activeQuestionNeedsVisualReference ? (
+                                                        <AlertCircle className="h-4 w-4 text-rose-500" />
+                                                    ) : (
+                                                        <Upload className="h-4 w-4 text-indigo-500" />
+                                                    )}
+                                                    {activeVisualReference?.assetUrl ? "Replace diagram / figure" : "Upload, drop, or paste a diagram"}
+                                                </div>
+                                                <p className="text-xs font-medium text-slate-500">
+                                                    Use this when the question depends on a figure, Venn diagram, chart, map, or other visual reference.
+                                                </p>
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                disabled={isContentLocked || isBusy || isUploadingReferenceImage || !activeQuestion.dbId}
+                                                onClick={() => referenceFileInputRef.current?.click()}
+                                                className="rounded-xl border-slate-200 font-bold"
+                                            >
+                                                {isUploadingReferenceImage ? (
+                                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <Upload className="mr-2 h-4 w-4" />
+                                                )}
+                                                {activeVisualReference?.assetUrl ? "Replace image" : "Upload image"}
+                                            </Button>
+                                        </div>
+                                        <input
+                                            ref={referenceFileInputRef}
+                                            type="file"
+                                            accept="image/png,image/jpeg,image/webp"
+                                            className="hidden"
+                                            onChange={handleReferenceFileChange}
+                                        />
+                                        {!activeQuestion.dbId ? (
+                                            <p className="mt-3 text-xs font-medium text-amber-700">
+                                                Save the draft first to attach a per-question visual reference.
+                                            </p>
+                                        ) : (
+                                            <p className="mt-3 text-xs font-medium text-slate-500">
+                                                Click this area and paste from clipboard, or drag an image directly into it.
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
 
                             <div className="space-y-4">

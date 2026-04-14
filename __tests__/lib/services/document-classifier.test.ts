@@ -70,6 +70,7 @@ test('classifyDocumentForImport routes weak visual reasoning papers to multimoda
 
     expect(result.documentType).toBe('MCQ_PAPER')
     expect(result.hasVisualReferences).toBe(true)
+    expect(result.hasDiagramReasoning).toBe(true)
     expect(result.preferredStrategy).toBe('MULTIMODAL_EXTRACT')
     expect(result.layoutRisk).toBe('HIGH')
 })
@@ -82,6 +83,7 @@ test('classifyDocumentForImport routes diagram-heavy reasoning papers with stron
 
     expect(result.documentType).toBe('MCQ_PAPER')
     expect(result.hasVisualReferences).toBe(true)
+    expect(result.hasDiagramReasoning).toBe(true)
     expect(result.preferredStrategy).toBe('HYBRID_RECONCILE')
     expect(result.layoutRisk).toBe('HIGH')
 })
@@ -94,6 +96,7 @@ test('classifyDocumentForImport does not treat table-tennis odd-one-out papers a
 
     expect(result.hasTables).toBe(false)
     expect(result.hasVisualReferences).toBe(false)
+    expect(result.hasDiagramReasoning).toBe(false)
     expect(result.preferredStrategy).toBe('TEXT_EXACT')
 })
 

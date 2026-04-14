@@ -15,6 +15,13 @@ type ReferenceSnapshotAsset = {
     bbox: null
 }
 
+const SUPPORTED_REFERENCE_IMAGE_TYPES = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+])
+const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024
+
 const requireCanvasModule = createRequire(import.meta.url)
 const OPTIONAL_CANVAS_MODULE = ['@napi-rs', 'canvas'].join('/')
 const PAGE_IMAGE_SCALE = 1.65
@@ -119,4 +126,44 @@ export async function uploadPdfReferenceSnapshots(input: {
     }
 
     return uploadedByPage
+}
+
+export async function uploadManualReferenceSnapshot(input: {
+    testId: string
+    questionId: string
+    file: File
+}) {
+    if (!isReferenceSnapshotStorageConfigured()) {
+        throw new Error('Reference image uploads are not configured.')
+    }
+
+    if (!SUPPORTED_REFERENCE_IMAGE_TYPES.has(input.file.type)) {
+        throw new Error('Only PNG, JPEG, and WEBP reference images are supported.')
+    }
+
+    if (input.file.size > MAX_REFERENCE_IMAGE_BYTES) {
+        throw new Error('Reference images must be 5MB or smaller.')
+    }
+
+    const extension = input.file.type === 'image/jpeg'
+        ? 'jpg'
+        : input.file.type === 'image/webp'
+            ? 'webp'
+            : 'png'
+
+    const buffer = Buffer.from(await input.file.arrayBuffer())
+    const blob = await put(
+        `question-references/${sanitizeSegment(input.testId)}/manual-${sanitizeSegment(input.questionId)}-${randomUUID()}.${extension}`,
+        buffer,
+        {
+            access: 'public',
+            contentType: input.file.type,
+            token: process.env.BLOB_READ_WRITE_TOKEN,
+        },
+    )
+
+    return {
+        assetUrl: blob.url,
+        bbox: null,
+    } satisfies ReferenceSnapshotAsset
 }

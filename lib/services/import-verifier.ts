@@ -268,7 +268,9 @@ function verifyStructuralIssues(
     }
 
     if (context?.extractionAnalysis) {
-        if (context.extractionAnalysis.missingQuestionNumbers.length > 0) {
+        const shouldTrustExactRecovery = context.extractionAnalysis.exactMatchAchieved
+
+        if (!shouldTrustExactRecovery && context.extractionAnalysis.missingQuestionNumbers.length > 0) {
             issues.push(
                 createIssue(
                     0,
@@ -279,7 +281,7 @@ function verifyStructuralIssues(
                 ),
             )
         }
-        if (context.extractionAnalysis.duplicateQuestionNumbers.length > 0) {
+        if (!shouldTrustExactRecovery && context.extractionAnalysis.duplicateQuestionNumbers.length > 0) {
             issues.push(
                 createIssue(
                     0,
@@ -290,7 +292,7 @@ function verifyStructuralIssues(
                 ),
             )
         }
-        if (context.extractionAnalysis.invalidQuestionNumbers.length > 0) {
+        if (!shouldTrustExactRecovery && context.extractionAnalysis.invalidQuestionNumbers.length > 0) {
             issues.push(
                 createIssue(
                     0,
@@ -580,11 +582,10 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                         questionNumber,
                         `Question reference kind ${referenceKind} is missing any usable visual evidence`,
                         'EVIDENCE',
-                        'ERROR',
+                        'WARNING',
                         'MISSING_VISUAL_REFERENCE',
                     ),
                 )
-                invalidQuestionNumbers.add(questionNumber)
             } else if (referenceMode !== 'SNAPSHOT' && referenceMode !== 'HYBRID') {
                 issues.push(
                     createIssue(

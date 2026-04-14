@@ -229,6 +229,29 @@ test('verifyExtractedQuestionsV2 fails when a text-backed reference has no share
     expect(verification.issues.some((issue) => issue.code === 'MISSING_REFERENCE_ATTACHMENT')).toBe(true)
 })
 
+test('verifyExtractedQuestionsV2 ignores stale numbering diagnostics when exact recovery succeeded', () => {
+    const verification = verifyExtractedQuestionsV2(
+        [createQuestion({ stem: 'Recovered question 1' })],
+        1,
+        normalizeQuestion,
+        {
+            extractionAnalysis: {
+                expectedQuestionCount: 1,
+                exactMatchAchieved: true,
+                missingQuestionNumbers: [1],
+                duplicateQuestionNumbers: [1],
+                invalidQuestionNumbers: [1],
+                questions: [createQuestion({ stem: 'Recovered question 1' })],
+            },
+        },
+    )
+
+    expect(verification.passed).toBe(true)
+    expect(verification.issues.some((issue) => issue.code === 'NUMBERING_DUPLICATE')).toBe(false)
+    expect(verification.issues.some((issue) => issue.code === 'NUMBERING_GAP')).toBe(false)
+    expect(verification.issues.some((issue) => issue.code === 'NUMBERING_INVALID')).toBe(false)
+})
+
 test('verifyExtractedQuestionsV2 warns when visual references are still text-backed only', () => {
     const verification = verifyExtractedQuestionsV2(
         [
@@ -250,7 +273,7 @@ test('verifyExtractedQuestionsV2 warns when visual references are still text-bac
     expect(verification.issues.some((issue) => issue.code === 'SNAPSHOT_REFERENCE_PENDING')).toBe(true)
 })
 
-test('verifyExtractedQuestionsV2 fails when a diagram question has no usable visual evidence', () => {
+test('verifyExtractedQuestionsV2 warns when a diagram question has no usable visual evidence yet', () => {
     const verification = verifyExtractedQuestionsV2(
         [
             createQuestion({
@@ -266,7 +289,8 @@ test('verifyExtractedQuestionsV2 fails when a diagram question has no usable vis
         normalizeQuestion,
     )
 
-    expect(verification.passed).toBe(false)
+    expect(verification.passed).toBe(true)
+    expect(verification.reviewRecommended).toBe(true)
     expect(verification.issues.some((issue) => issue.code === 'MISSING_VISUAL_REFERENCE')).toBe(true)
 })
 

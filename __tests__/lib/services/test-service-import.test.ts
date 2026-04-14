@@ -13,11 +13,18 @@ const prismaMock = {
     },
     test: {
         create: vi.fn(),
+        findUnique: vi.fn(),
+    },
+    question: {
+        findUnique: vi.fn(),
+        update: vi.fn(),
     },
     questionReference: {
         create: vi.fn(),
+        update: vi.fn(),
     },
     questionReferenceLink: {
+        create: vi.fn(),
         createMany: vi.fn(),
     },
     auditLog: {
@@ -35,11 +42,13 @@ const attachSharedContextsFromPdfMock = vi.fn()
 const enrichGeneratedQuestionsMetadataMock = vi.fn()
 const verifyExtractedQuestionsMock = vi.fn()
 const verifyExtractedQuestionsWithAIMock = vi.fn()
+const reconcileGeneratedQuestionsWithTextAnswerHintsMock = vi.fn()
 const classifyDocumentForImportMock = vi.fn()
 const resolveDocumentImportPlanMock = vi.fn()
 const isClassifierRoutingEnabledMock = vi.fn()
 const executeDocumentImportPlanMock = vi.fn()
 const uploadPdfReferenceSnapshotsMock = vi.fn()
+const uploadManualReferenceSnapshotMock = vi.fn()
 
 vi.mock('@/lib/prisma', () => ({
     prisma: prismaMock,
@@ -55,6 +64,7 @@ vi.mock('@/lib/services/ai-service', () => ({
     enrichGeneratedQuestionsMetadata: enrichGeneratedQuestionsMetadataMock,
     verifyExtractedQuestions: verifyExtractedQuestionsMock,
     verifyExtractedQuestionsWithAI: verifyExtractedQuestionsWithAIMock,
+    reconcileGeneratedQuestionsWithTextAnswerHints: reconcileGeneratedQuestionsWithTextAnswerHintsMock,
 }))
 
 vi.mock('@/lib/services/document-classifier', () => ({
@@ -72,6 +82,8 @@ vi.mock('@/lib/services/document-import-executor', () => ({
 
 vi.mock('@/lib/storage/reference-snapshots', () => ({
     uploadPdfReferenceSnapshots: uploadPdfReferenceSnapshotsMock,
+    uploadManualReferenceSnapshot: uploadManualReferenceSnapshotMock,
+    isReferenceSnapshotStorageConfigured: vi.fn(() => true),
 }))
 
 const servicePromise = import('../../../lib/services/test-service')
@@ -108,6 +120,25 @@ function createQuestion(stem: string, overrides: Record<string, unknown> = {}) {
     }
 }
 
+function createReferenceLink(overrides: Record<string, unknown> = {}) {
+    return {
+        order: 1,
+        reference: {
+            id: 'reference-1',
+            kind: 'DIAGRAM',
+            mode: 'SNAPSHOT',
+            title: 'Figure reference',
+            textContent: null,
+            assetUrl: null,
+            sourcePage: 2,
+            bbox: null,
+            confidence: 0.88,
+            evidence: null,
+            ...overrides,
+        },
+    }
+}
+
 function createClassification() {
     return {
         documentType: 'MCQ_PAPER',
@@ -116,6 +147,7 @@ function createClassification() {
         hasPassages: false,
         hasMatchFollowing: false,
         hasAssertionReason: false,
+        hasDiagramReasoning: false,
         isScannedLike: false,
         isMixedLayout: false,
         preferredStrategy: 'TEXT_EXACT',
@@ -149,7 +181,35 @@ beforeEach(() => {
         role: 'ADMIN',
         status: 'ACTIVE',
     })
+    prismaMock.test.findUnique.mockResolvedValue({
+        id: 'test-1',
+        status: 'DRAFT',
+    })
+    prismaMock.question.findUnique.mockResolvedValue({
+        id: 'question-1',
+        testId: 'test-1',
+        order: 1,
+        stem: 'Recovered question stem',
+        sharedContext: '',
+        importEvidence: null,
+        options: [
+            { id: 'A', text: 'Option A', isCorrect: true },
+            { id: 'B', text: 'Option B', isCorrect: false },
+            { id: 'C', text: 'Option C', isCorrect: false },
+            { id: 'D', text: 'Option D', isCorrect: false },
+        ],
+        explanation: 'Explanation',
+        difficulty: 'MEDIUM',
+        topic: 'History',
+        referenceLinks: [],
+    })
+    prismaMock.question.update.mockResolvedValue({
+        id: 'question-1',
+        testId: 'test-1',
+    })
     prismaMock.questionReference.create.mockResolvedValue({ id: 'reference-1' })
+    prismaMock.questionReference.update.mockResolvedValue({ id: 'reference-1' })
+    prismaMock.questionReferenceLink.create.mockResolvedValue({ id: 'reference-link-1' })
     prismaMock.questionReferenceLink.createMany.mockResolvedValue({ count: 1 })
     prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof prismaMock) => Promise<unknown>) => callback(prismaMock))
     prismaMock.test.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -215,6 +275,11 @@ beforeEach(() => {
         overallAssessment: 'No additional AI issues found.',
         confidence: 0.95,
     })
+    reconcileGeneratedQuestionsWithTextAnswerHintsMock.mockImplementation((questions) => ({
+        questions,
+        repairedCount: 0,
+        answerHintsRecovered: 0,
+    }))
     attachSharedContextsFromPdfMock.mockImplementation(async (_buffer, questions) => questions)
     enrichGeneratedQuestionsMetadataMock.mockResolvedValue({
         questions: [createQuestion('Recovered question stem')],
@@ -239,6 +304,10 @@ beforeEach(() => {
         message: undefined,
     })
     uploadPdfReferenceSnapshotsMock.mockResolvedValue(new Map())
+    uploadManualReferenceSnapshotMock.mockResolvedValue({
+        assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+        bbox: null,
+    })
 })
 
 test('generateAdminTestFromDocument persists per-question evidence and durable import diagnostics', async () => {
@@ -464,6 +533,251 @@ test('generateAdminTestFromDocument persists snapshot asset urls for visual refe
             }),
         }),
     )
+})
+
+test('upsertAdminQuestionReferenceImage creates a new visual reference when none exists', async () => {
+    const { upsertAdminQuestionReferenceImage } = await servicePromise
+
+    prismaMock.question.findUnique
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Find the missing figure.',
+            sharedContext: 'Original diagram context',
+            importEvidence: null,
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Reasoning',
+            referenceLinks: [],
+        })
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Find the missing figure.',
+            sharedContext: 'Original diagram context',
+            importEvidence: {
+                sourcePage: 2,
+                sourceSnippet: null,
+                sharedContextEvidence: null,
+                answerSource: null,
+                confidence: null,
+                extractionMode: null,
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'HYBRID',
+                referenceTitle: 'Visual reference',
+                referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+            },
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Reasoning',
+            referenceLinks: [
+                createReferenceLink({
+                    assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+                    mode: 'HYBRID',
+                    textContent: 'Original diagram context',
+                    title: 'Visual reference',
+                }),
+            ],
+        })
+
+    const result = await upsertAdminQuestionReferenceImage(
+        'admin-1',
+        'test-1',
+        'question-1',
+        new File(['png-data'], 'figure.png', { type: 'image/png' }),
+    )
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(uploadManualReferenceSnapshotMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+            testId: 'test-1',
+            questionId: 'question-1',
+        }),
+    )
+    expect(prismaMock.questionReference.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+            data: expect.objectContaining({
+                testId: 'test-1',
+                kind: 'DIAGRAM',
+                mode: 'HYBRID',
+                title: 'Visual reference',
+                textContent: 'Original diagram context',
+                assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+            }),
+        }),
+    )
+    expect(prismaMock.questionReferenceLink.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+            data: expect.objectContaining({
+                questionId: 'question-1',
+                referenceId: 'reference-1',
+                order: 1,
+            }),
+        }),
+    )
+    expect(prismaMock.question.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'question-1' },
+            data: expect.objectContaining({
+                importEvidence: expect.objectContaining({
+                    referenceKind: 'DIAGRAM',
+                    referenceMode: 'HYBRID',
+                    referenceTitle: 'Visual reference',
+                    referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+                }),
+            }),
+        }),
+    )
+    expect(result.question.references).toEqual([
+        expect.objectContaining({
+            id: 'reference-1',
+            kind: 'DIAGRAM',
+            mode: 'HYBRID',
+            assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+        }),
+    ])
+})
+
+test('upsertAdminQuestionReferenceImage updates an existing visual reference in place', async () => {
+    const { upsertAdminQuestionReferenceImage } = await servicePromise
+
+    prismaMock.question.findUnique
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Match the figure.',
+            sharedContext: 'Existing visual explanation',
+            importEvidence: {
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'SNAPSHOT',
+                referenceTitle: 'Existing figure',
+                referenceAssetUrl: null,
+                sourcePage: 3,
+                confidence: 0.92,
+            },
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Reasoning',
+            referenceLinks: [
+                createReferenceLink({
+                    id: 'reference-existing',
+                    assetUrl: null,
+                    title: 'Existing figure',
+                    textContent: 'Existing visual explanation',
+                }),
+            ],
+        })
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Match the figure.',
+            sharedContext: 'Existing visual explanation',
+            importEvidence: {
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'SNAPSHOT',
+                referenceTitle: 'Existing figure',
+                referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+                sourcePage: 3,
+                confidence: 0.92,
+            },
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Reasoning',
+            referenceLinks: [
+                createReferenceLink({
+                    id: 'reference-existing',
+                    assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+                    title: 'Existing figure',
+                    textContent: 'Existing visual explanation',
+                }),
+            ],
+        })
+
+    const result = await upsertAdminQuestionReferenceImage(
+        'admin-1',
+        'test-1',
+        'question-1',
+        new File(['png-data'], 'replacement.png', { type: 'image/png' }),
+    )
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.questionReference.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'reference-existing' },
+            data: expect.objectContaining({
+                kind: 'DIAGRAM',
+                mode: 'SNAPSHOT',
+                title: 'Existing figure',
+                textContent: 'Existing visual explanation',
+                assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+            }),
+        }),
+    )
+    expect(prismaMock.questionReference.create).not.toHaveBeenCalled()
+    expect(prismaMock.questionReferenceLink.create).not.toHaveBeenCalled()
+    expect(result.question.references).toEqual([
+        expect.objectContaining({
+            id: 'reference-existing',
+            assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+        }),
+    ])
+})
+
+test('upsertAdminQuestionReferenceImage rejects updates for published tests', async () => {
+    const { upsertAdminQuestionReferenceImage } = await servicePromise
+
+    prismaMock.test.findUnique.mockResolvedValueOnce({
+        id: 'test-1',
+        status: 'PUBLISHED',
+    })
+
+    const result = await upsertAdminQuestionReferenceImage(
+        'admin-1',
+        'test-1',
+        'question-1',
+        new File(['png-data'], 'figure.png', { type: 'image/png' }),
+    )
+
+    expect(result).toEqual(
+        expect.objectContaining({
+            error: true,
+            code: 'NOT_EDITABLE',
+        }),
+    )
+    expect(prismaMock.question.findUnique).not.toHaveBeenCalled()
+    expect(uploadManualReferenceSnapshotMock).not.toHaveBeenCalled()
 })
 
 test('generateAdminTestFromDocument persists review-required diagnostics to the draft and audit log', async () => {
@@ -719,12 +1033,13 @@ test('generateAdminTestFromDocument defers PDF reference enrichment out of the c
     })
 })
 
-test('generateAdminTestFromDocument prefers chunked multimodal extraction for hybrid visual PDFs in classifier flow', async () => {
+test('generateAdminTestFromDocument creates a draft from exact extraction first for recoverable diagram PDFs', async () => {
     const { generateAdminTestFromDocument } = await servicePromise
 
     classifyDocumentForImportMock.mockReturnValue({
         ...createClassification(),
         hasVisualReferences: true,
+        hasDiagramReasoning: true,
         preferredStrategy: 'HYBRID_RECONCILE',
     })
     resolveDocumentImportPlanMock.mockReturnValue({
@@ -733,40 +1048,45 @@ test('generateAdminTestFromDocument prefers chunked multimodal extraction for hy
         selectedStrategy: 'HYBRID_RECONCILE',
         runMultimodalFirst: false,
         visualReferenceOverlay: false,
+        manualVisualReferenceCapture: true,
         generateFromSource: false,
         reasons: ['visual reasoning pdf'],
     })
-    extractQuestionsFromPdfMultimodalMock.mockResolvedValue({
+    parseDocumentToTextMock.mockResolvedValueOnce('Question 1 text '.repeat(8))
+    extractQuestionsFromDocumentTextPreciselyMock.mockResolvedValueOnce({
+        detectedAsMcqDocument: true,
+        answerHintCount: 1,
+        candidateBlockCount: 1,
+        questions: [createQuestion('Recovered visual question')],
+        expectedQuestionCount: 1,
+        exactMatchAchieved: true,
+        invalidQuestionNumbers: [],
+        missingQuestionNumbers: [],
+        duplicateQuestionNumbers: [],
+        aiRepairUsed: false,
+        cost: undefined,
         error: false,
         message: undefined,
-        questions: [createQuestion('Recovered visual question')],
-        failedCount: 0,
-        cost: undefined,
-        verification: createVerification(),
-        pageCount: 5,
-        chunkCount: 3,
     })
     executeDocumentImportPlanMock.mockImplementationOnce(async (_input, handlers) => {
-        await handlers.extractMultimodal(50)
+        const extracted = await handlers.extractTextExact()
         return {
             useLegacyFlow: false,
-            strategy: 'AI_VISION_FALLBACK',
+            strategy: 'EXTRACTED',
             result: {
                 error: false,
                 message: undefined,
-                questions: [createQuestion('Recovered visual question')],
+                questions: extracted.questions,
                 failedCount: 0,
                 cost: undefined,
                 verification: createVerification(),
-                pageCount: 5,
-                chunkCount: 3,
             },
             parserStatus: 'OK',
             aiFallbackUsed: false,
             reportParserIssue: false,
-            warning: null,
-            needsAdminReview: false,
-            reviewIssueCount: 0,
+            warning: 'Created the draft from text extraction. Questions that depend on figures or diagrams are marked for manual image attachment.',
+            needsAdminReview: true,
+            reviewIssueCount: 1,
         }
     })
 
@@ -779,31 +1099,27 @@ test('generateAdminTestFromDocument prefers chunked multimodal extraction for hy
     expect('error' in result).toBe(false)
     if ('error' in result) return
 
-    expect(extractQuestionsFromPdfMultimodalMock).toHaveBeenCalledWith(
-        expect.any(Buffer),
-        50,
-        'admin-1',
-        'figure-completion.pdf',
-        {
-            preferChunkedVisualExtraction: true,
-            allowOneShotFallbackAfterChunked: false,
-        },
-    )
+    expect(extractQuestionsFromDocumentTextPreciselyMock).toHaveBeenCalled()
+    expect(extractQuestionsFromPdfMultimodalMock).not.toHaveBeenCalled()
+    expect(result.strategy).toBe('EXTRACTED')
+    expect(result.test.reviewStatus).toBe('NEEDS_REVIEW')
 })
 
-test('generateAdminTestFromDocument prefers chunked multimodal extraction for legacy weak visual PDFs', async () => {
+test('generateAdminTestFromDocument prefers chunked multimodal extraction for scanned-like weak diagram PDFs', async () => {
     const { generateAdminTestFromDocument } = await servicePromise
 
     classifyDocumentForImportMock.mockReturnValue({
         ...createClassification(),
         hasVisualReferences: true,
-        preferredStrategy: 'HYBRID_RECONCILE',
+        hasDiagramReasoning: true,
+        isScannedLike: true,
+        preferredStrategy: 'MULTIMODAL_EXTRACT',
     })
     resolveDocumentImportPlanMock.mockReturnValue({
         routingMode: 'CLASSIFIER',
         lane: 'ADVANCED',
-        selectedStrategy: 'HYBRID_RECONCILE',
-        runMultimodalFirst: false,
+        selectedStrategy: 'MULTIMODAL_EXTRACT',
+        runMultimodalFirst: true,
         visualReferenceOverlay: false,
         generateFromSource: false,
         reasons: ['visual reasoning pdf'],

@@ -892,6 +892,44 @@ function splitDocumentSections(text: string) {
     }
 }
 
+function pruneRepeatedQuestionSequence(questionSection: string) {
+    const explicitQuestionStartRegex = /(?:^|\n)(question\s*|ques(?:tion)?\s*|ues\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)/gi
+    const matches: Array<{ index: number; questionNumber: number }> = []
+    let match: RegExpExecArray | null
+
+    while ((match = explicitQuestionStartRegex.exec(questionSection)) !== null) {
+        const fullMatch = match[0] ?? ''
+        const questionNumber = Number.parseInt(match[2] ?? '', 10)
+        if (!Number.isFinite(questionNumber)) continue
+
+        matches.push({
+            index: fullMatch.startsWith('\n') ? match.index + 1 : match.index,
+            questionNumber,
+        })
+    }
+
+    const seenQuestionNumbers = new Set<number>()
+    let maxQuestionNumber = 0
+
+    for (const entry of matches) {
+        const expectedSequence = buildExpectedQuestionSequence([...seenQuestionNumbers])
+        const hasCompletePrefix = expectedSequence
+            && expectedSequence.every(questionNumber => seenQuestionNumbers.has(questionNumber))
+        const restartedFromOne = entry.questionNumber === 1 && maxQuestionNumber >= 5
+        const restartedAtDuplicate = seenQuestionNumbers.has(entry.questionNumber)
+            && maxQuestionNumber >= 5
+
+        if (hasCompletePrefix && (restartedFromOne || restartedAtDuplicate)) {
+            return questionSection.slice(0, entry.index).trim()
+        }
+
+        seenQuestionNumbers.add(entry.questionNumber)
+        maxQuestionNumber = Math.max(maxQuestionNumber, entry.questionNumber)
+    }
+
+    return questionSection
+}
+
 function collectStructuredQuestionBlocks(questionSection: string): StructuredQuestionBlock[] {
     const lines = questionSection
         .split('\n')
@@ -950,6 +988,126 @@ function collectStructuredQuestionBlocks(questionSection: string): StructuredQue
     if (currentBlock) {
         currentBlock.blockText = currentBlock.rawLines.join('\n')
         blocks.push(currentBlock)
+    }
+
+    return blocks
+}
+
+function parseExplicitQuestionLabelWithoutNoise(line: string): QuestionLabel | null {
+    const trimmedLine = line.trim()
+    if (!trimmedLine) return null
+
+    const normalizedLine = trimmedLine.replace(/^#{1,6}\s*/, '')
+
+    const answerOnlyHeaderMatch = normalizedLine.match(/^(\d+)\s+ANSWER\s*\(?([A-Da-d1-4])\)?\s*$/i)
+    if (answerOnlyHeaderMatch) {
+        return {
+            questionNumber: Number.parseInt(answerOnlyHeaderMatch[1], 10),
+            stem: '',
+            explicitPrefix: true,
+            inlineAnswerId: normalizeAnswerIdent(answerOnlyHeaderMatch[2]),
+        }
+    }
+
+    const prefixedQuestionMatch = normalizedLine.match(
+        /^(question\s*|ques(?:tion)?\s*|ues\s*|q\s*)(\d+)\s*(?:[.)\-:]|\b)\s*(.*)$/i
+    )
+    if (!prefixedQuestionMatch) {
+        return null
+    }
+
+    return {
+        questionNumber: Number.parseInt(prefixedQuestionMatch[2], 10),
+        stem: normalizeStem(prefixedQuestionMatch[3] ?? ''),
+        explicitPrefix: true,
+        inlineAnswerId: null,
+    }
+}
+
+function splitEmbeddedExplicitQuestionStarts(blocks: StructuredQuestionBlock[]) {
+    const splitBlocks: StructuredQuestionBlock[] = []
+
+    for (const block of blocks) {
+        if (block.rawLines.length <= 1) {
+            splitBlocks.push(block)
+            continue
+        }
+
+        let activeQuestionNumber = block.questionNumber
+        let activeExplicitPrefix = block.explicitPrefix
+        let segmentStart = 0
+        let didSplit = false
+
+        for (let index = 1; index < block.rawLines.length; index++) {
+            const rawLine = block.rawLines[index]
+            const line = rawLine?.trim()
+            if (!line) continue
+
+            const questionLabel = parseExplicitQuestionLabelWithoutNoise(line)
+            if (!questionLabel) {
+                continue
+            }
+
+            if (questionLabel.questionNumber === activeQuestionNumber) {
+                continue
+            }
+
+            const segmentLines = block.rawLines.slice(segmentStart, index)
+            if (segmentLines.length > 0) {
+                splitBlocks.push({
+                    questionNumber: activeQuestionNumber,
+                    explicitPrefix: activeExplicitPrefix,
+                    rawLines: segmentLines,
+                    blockText: segmentLines.join('\n'),
+                })
+            }
+
+            activeQuestionNumber = questionLabel.questionNumber
+            activeExplicitPrefix = questionLabel.explicitPrefix
+            segmentStart = index
+            didSplit = true
+        }
+
+        if (!didSplit) {
+            splitBlocks.push(block)
+            continue
+        }
+
+        const trailingLines = block.rawLines.slice(segmentStart)
+        if (trailingLines.length > 0) {
+            splitBlocks.push({
+                questionNumber: activeQuestionNumber,
+                explicitPrefix: activeExplicitPrefix,
+                rawLines: trailingLines,
+                blockText: trailingLines.join('\n'),
+            })
+        }
+    }
+
+    return splitBlocks
+}
+
+function isolatePrimaryQuestionSequence(blocks: StructuredQuestionBlock[]) {
+    if (blocks.length < 10) return blocks
+
+    for (let index = 1; index < blocks.length; index++) {
+        const previous = blocks[index - 1]
+        const current = blocks[index]
+        if (!previous || !current) continue
+
+        const restartedFromOne = current.questionNumber === 1 && current.questionNumber <= previous.questionNumber
+        if (!restartedFromOne) continue
+
+        const prefix = blocks.slice(0, index)
+        const prefixNumbers = prefix.map(block => block.questionNumber)
+        const expectedSequence = buildExpectedQuestionSequence(prefixNumbers)
+        if (!expectedSequence || expectedSequence.length < 10) continue
+
+        const uniquePrefixNumbers = new Set(prefixNumbers)
+        const hasCompletePrefix = expectedSequence.every(questionNumber => uniquePrefixNumbers.has(questionNumber))
+        if (!hasCompletePrefix) continue
+
+        return prefix
     }
 
     return blocks
@@ -1150,7 +1308,7 @@ function parseQuestionBlock(
         }
     }
 
-    const firstLine = stripQuestionLabel(rawLines[0])
+    const firstLine = stripQuestionLabel(rawLines[0]) ?? parseExplicitQuestionLabelWithoutNoise(rawLines[0] ?? '')
     if (!firstLine) {
         return {
             questionNumber: block.questionNumber,
@@ -1580,8 +1738,13 @@ function buildExpectedQuestionSequence(questionNumbers: number[]) {
 
 function buildStructuredExtractionContext(text: string): StructuredExtractionContext {
     const normalizedText = normalizeDocumentText(text)
-    const { questionSection, answerSection } = splitDocumentSections(normalizedText)
-    const collectedBlocks = collectStructuredQuestionBlocks(questionSection)
+    const { questionSection: rawQuestionSection, answerSection } = splitDocumentSections(normalizedText)
+    const questionSection = pruneRepeatedQuestionSequence(rawQuestionSection)
+    const collectedBlocks = isolatePrimaryQuestionSequence(
+        splitEmbeddedExplicitQuestionStarts(
+            collectStructuredQuestionBlocks(questionSection),
+        ),
+    )
     const genericStemHint = deriveGenericStemHint(questionSection)
     const answerKey = extractAnswerKey(answerSection)
     const detailedAnswers = extractDetailedAnswerRecords(answerSection)
@@ -1590,7 +1753,7 @@ function buildStructuredExtractionContext(text: string): StructuredExtractionCon
     const duplicateQuestionNumbers = new Set<number>()
     for (const block of collectedBlocks) {
         const existing = questionBlocks.get(block.questionNumber)
-        if (!existing || block.blockText.length > existing.blockText.length) {
+        if (!existing) {
             questionBlocks.set(block.questionNumber, block)
         }
         if (existing) {
@@ -1619,7 +1782,9 @@ function buildStructuredExtractionContext(text: string): StructuredExtractionCon
     const validQuestionsByNumber = new Map<number, GeneratedQuestion>()
     for (const parsedQuestion of parsedQuestions.values()) {
         if (parsedQuestion.valid && parsedQuestion.question) {
-            validQuestionsByNumber.set(parsedQuestion.questionNumber, parsedQuestion.question)
+            if (!validQuestionsByNumber.has(parsedQuestion.questionNumber)) {
+                validQuestionsByNumber.set(parsedQuestion.questionNumber, parsedQuestion.question)
+            }
         }
     }
 
@@ -2083,15 +2248,40 @@ ${chunk}`
     }
 }
 
+type ExactExtractionOptions = {
+    allowAiFallback?: boolean
+    allowAiRepair?: boolean
+}
+
+function normalizeExactAnalysis(
+    analysis: PreciseDocumentQuestionAnalysis,
+): PreciseDocumentQuestionAnalysis {
+    if (!analysis.exactMatchAchieved) {
+        return analysis
+    }
+
+    return {
+        ...analysis,
+        missingQuestionNumbers: [],
+        invalidQuestionNumbers: [],
+        duplicateQuestionNumbers: [],
+        error: false,
+        message: undefined,
+    }
+}
+
 export async function extractQuestionsFromDocumentTextPrecisely(
     text: string,
     auditUserId?: string,
+    options: ExactExtractionOptions = {},
 ): Promise<PreciseDocumentQuestionAnalysis> {
+    const allowAiFallback = options.allowAiFallback !== false
+    const allowAiRepair = options.allowAiRepair !== false
     const context = buildStructuredExtractionContext(text)
     if (!context.analysis.detectedAsMcqDocument || context.analysis.expectedQuestionCount === null) {
         // Regex didn't recognise the document format — try AI-based extraction before
         // giving up and letting the caller fall through to question generation.
-        if (text.length >= 200) {
+        if (allowAiFallback && text.length >= 200) {
             const aiResult = await extractQuestionsFromTextWithAI(text, auditUserId)
             if (aiResult.questions.length > 0) {
                 return {
@@ -2117,16 +2307,25 @@ export async function extractQuestionsFromDocumentTextPrecisely(
                 }
             }
         }
-        return {
+        return normalizeExactAnalysis({
             ...context.analysis,
             aiRepairUsed: false,
-        }
+        })
     }
 
     if (context.analysis.exactMatchAchieved) {
+        return normalizeExactAnalysis({
+            ...context.analysis,
+            aiRepairUsed: false,
+        })
+    }
+
+    if (!allowAiRepair) {
         return {
             ...context.analysis,
             aiRepairUsed: false,
+            error: true,
+            message: 'Exact parser could not recover a complete MCQ set without AI repair.',
         }
     }
 
@@ -2162,7 +2361,7 @@ export async function extractQuestionsFromDocumentTextPrecisely(
             || `Detected ${context.analysis.expectedQuestionCount} numbered MCQs, but only recovered ${questions.length}. Missing question numbers: ${missingQuestionNumbers.join(', ')}.`
         )
 
-    return {
+    return normalizeExactAnalysis({
         ...context.analysis,
         questions,
         exactMatchAchieved,
@@ -2174,7 +2373,7 @@ export async function extractQuestionsFromDocumentTextPrecisely(
         cost: repairResult.cost,
         error: repairResult.error || !exactMatchAchieved,
         message,
-    }
+    })
 }
 
 async function classifyQuestionMetadataBatchWithAI(

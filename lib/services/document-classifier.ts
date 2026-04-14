@@ -13,6 +13,7 @@ export type DocumentClassificationResult = {
     hasTables: boolean
     hasPassages: boolean
     hasVisualReferences: boolean
+    hasDiagramReasoning: boolean
     hasMatchFollowing: boolean
     hasAssertionReason: boolean
     isScannedLike: boolean
@@ -204,7 +205,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     if (hasVisualReferences) reasons.push('Detected visual-reference or diagram-heavy layout')
     if (hasDiagramReasoning) reasons.push(
         hasStrongExtractableMcqText
-            ? 'Detected diagram-heavy reasoning format with strong OCR signals; using hybrid reconcile so exact parsing drives questions and visual extraction augments references.'
+            ? 'Detected diagram-heavy reasoning format with strong OCR signals; using text-first extraction and manual visual-reference capture.'
             : 'Detected diagram-heavy reasoning format that should be extracted visually first',
     )
     if (hasVisualReferences && hasStrongExtractableMcqText) reasons.push('Detected strong OCR/text signals, so visual references can be layered onto exact extraction')
@@ -220,6 +221,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
         hasTables,
         hasPassages,
         hasVisualReferences,
+        hasDiagramReasoning,
         hasMatchFollowing,
         hasAssertionReason,
         isScannedLike,

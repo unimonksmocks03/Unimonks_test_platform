@@ -118,6 +118,125 @@ test('extractQuestionsFromDocumentText uses answer-key sections without overcoun
     expect(analysis.questions[0]?.extractionMode).toBe('TEXT_EXACT')
 })
 
+test('extractQuestionsFromDocumentText splits embedded explicit question starts instead of swallowing them into the previous block', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const embeddedExplicitQuestionText = `
+Q1. Alpha beta gamma?
+(A) One
+(B) Two
+(C) Three
+(D) Four
+ANSWER (A) One
+Q2. Marketable securities are treated as
+(A) Cash equivalents if readily convertible into cash
+(B) Long-term investments only
+(C) Operating assets
+(D) Financing items
+ANSWER (A) Cash equivalents if readily convertible into cash
+
+Q3. Another valid question?
+(A) Alpha
+(B) Beta
+(C) Gamma
+(D) Delta
+ANSWER (B) Beta
+
+Q4. Fourth valid question?
+(A) Red
+(B) Blue
+(C) Green
+(D) Yellow
+ANSWER (C) Green
+
+Q5. Fifth valid question?
+(A) Cat
+(B) Dog
+(C) Bird
+(D) Fish
+ANSWER (D) Fish
+`
+
+    const analysis = extractQuestionsFromDocumentText(embeddedExplicitQuestionText)
+
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.missingQuestionNumbers).toEqual([])
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.questions[1]?.stem).toBe('Marketable securities are treated as')
+    expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('A')
+})
+
+test('extractQuestionsFromDocumentText keeps the first numbered blocks when a later partial paper repeats question numbers', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const partialRepeatedSequenceText = `
+Q1. First section question 1
+(A) One
+(B) Two
+(C) Three
+(D) Four
+ANSWER (A) One
+
+Q2. First section question 2
+(A) One
+(B) Two
+(C) Three
+(D) Four
+ANSWER (B) Two
+
+Q3. First section question 3
+(A) One
+(B) Two
+(C) Three
+(D) Four
+ANSWER (C) Three
+
+Q4. First section question 4
+(A) One
+(B) Two
+(C) Three
+(D) Four
+ANSWER (D) Four
+
+Q5. First section question 5
+(A) One
+(B) Two
+(C) Three
+(D) Four
+ANSWER (A) One
+
+Q4. Second section repeated question 4 with a longer explanation line that should not replace the original.
+(A) Wrong
+(B) Wrong
+(C) Wrong
+(D) Wrong
+ANSWER (B) Wrong
+
+Q5. Second section repeated question 5 with a longer explanation line that should not replace the original.
+(A) Wrong
+(B) Wrong
+(C) Wrong
+(D) Wrong
+ANSWER (C) Wrong
+`
+
+    const analysis = extractQuestionsFromDocumentText(partialRepeatedSequenceText)
+
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.missingQuestionNumbers).toEqual([])
+    expect(analysis.questions[3]?.stem).toContain('First section question 4')
+    expect(analysis.questions[4]?.stem).toContain('First section question 5')
+    expect(analysis.questions[3]?.options.find((option) => option.isCorrect)?.id).toBe('D')
+    expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('A')
+})
+
 test('extractQuestionsFromDocumentText treats statement blocks as stem content when numeric options appear later', async () => {
     const {
         extractQuestionsFromDocumentText,

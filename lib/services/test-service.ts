@@ -11,7 +11,11 @@ import {
 
 import { FREE_BATCH_KIND, STANDARD_BATCH_KIND } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
-import { uploadPdfReferenceSnapshots } from '@/lib/storage/reference-snapshots'
+import {
+    isReferenceSnapshotStorageConfigured,
+    uploadManualReferenceSnapshot,
+    uploadPdfReferenceSnapshots,
+} from '@/lib/storage/reference-snapshots'
 import {
     attachSharedContextsFromPdf,
     enrichGeneratedQuestionsMetadata,
@@ -59,6 +63,7 @@ import type {
 const COMPLETED_SESSION_STATUSES: SessionStatus[] = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED']
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 const MIN_GENERATED_QUESTIONS = 30
+const VISUAL_REFERENCE_KINDS = new Set<QuestionReferenceKind>(['DIAGRAM', 'GRAPH', 'MAP'])
 
 type ServiceErrorCode =
     | 'ACTIVE_SESSIONS'
@@ -213,6 +218,10 @@ function shouldPreferChunkedPdfExtraction(input: PdfMultimodalPreferenceInput) {
         return false
     }
 
+    if (input.classification.hasDiagramReasoning) {
+        return true
+    }
+
     return (
         input.plan.selectedStrategy === 'HYBRID_RECONCILE'
         || input.plan.visualReferenceOverlay
@@ -224,6 +233,10 @@ function shouldPreferChunkedPdfExtraction(input: PdfMultimodalPreferenceInput) {
 function shouldAllowOneShotFallbackAfterChunkedExtraction(input: PdfMultimodalPreferenceInput) {
     if (!input.isPdfUpload) {
         return true
+    }
+
+    if (input.classification.hasDiagramReasoning) {
+        return false
     }
 
     if (!shouldPreferChunkedPdfExtraction(input)) {
@@ -496,6 +509,93 @@ async function persistImportedQuestionReferences(input: {
     await prisma.$transaction(async (tx) => {
         await persistWithClient(tx)
     })
+}
+
+const ADMIN_QUESTION_WITH_REFERENCES_SELECT = Prisma.validator<Prisma.QuestionSelect>()({
+    id: true,
+    testId: true,
+    order: true,
+    stem: true,
+    sharedContext: true,
+    importEvidence: true,
+    options: true,
+    explanation: true,
+    difficulty: true,
+    topic: true,
+    referenceLinks: {
+        orderBy: { order: 'asc' },
+        select: QUESTION_REFERENCE_LINK_SELECT,
+    },
+})
+
+type AdminQuestionWithReferencesRecord = Prisma.QuestionGetPayload<{
+    select: typeof ADMIN_QUESTION_WITH_REFERENCES_SELECT
+}>
+
+function mapAdminQuestionRecord(question: AdminQuestionWithReferencesRecord) {
+    return {
+        id: question.id,
+        order: question.order,
+        stem: question.stem,
+        sharedContext: question.sharedContext,
+        options: question.options,
+        explanation: question.explanation,
+        difficulty: question.difficulty,
+        topic: question.topic,
+        references: mapQuestionReferences(question.referenceLinks),
+    }
+}
+
+function getPreferredVisualReference(
+    references: ReturnType<typeof mapQuestionReferences>,
+    importEvidence: Partial<QuestionImportEvidencePayload>,
+) {
+    const linkedVisualReference = references.find((reference) =>
+        reference.mode !== 'TEXT'
+        || VISUAL_REFERENCE_KINDS.has(reference.kind)
+        || Boolean(reference.assetUrl),
+    )
+
+    if (linkedVisualReference) {
+        return linkedVisualReference
+    }
+
+    if (
+        importEvidence.referenceMode
+        || importEvidence.referenceKind
+        || importEvidence.referenceTitle
+        || importEvidence.referenceAssetUrl
+    ) {
+        return {
+            id: null,
+            order: 0,
+            kind: (importEvidence.referenceKind ?? 'DIAGRAM') as QuestionReferenceKind,
+            mode: (importEvidence.referenceMode ?? 'SNAPSHOT') as QuestionReferenceMode,
+            title: importEvidence.referenceTitle ?? null,
+            textContent: null,
+            assetUrl: importEvidence.referenceAssetUrl ?? null,
+            sourcePage: importEvidence.sourcePage ?? null,
+            bbox: null,
+            confidence: importEvidence.confidence ?? null,
+            evidence: null,
+        }
+    }
+
+    return null
+}
+
+function mergeReferenceEvidence(
+    existing: Prisma.JsonValue | null | undefined,
+    next: Record<string, unknown>,
+) {
+    const base = existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? existing as Record<string, unknown>
+        : {}
+
+    return ({
+        ...base,
+        ...next,
+    }) as Prisma.InputJsonValue
 }
 
 function buildTestImportDiagnosticsPayload(input: TestImportDiagnosticsPayload): Prisma.InputJsonValue {
@@ -1390,27 +1490,11 @@ export async function getAdminQuestions(testId: string) {
     const questions = await prisma.question.findMany({
         where: { testId },
         orderBy: { order: 'asc' },
-        select: {
-            id: true,
-            order: true,
-            stem: true,
-            sharedContext: true,
-            options: true,
-            explanation: true,
-            difficulty: true,
-            topic: true,
-            referenceLinks: {
-                orderBy: { order: 'asc' },
-                select: QUESTION_REFERENCE_LINK_SELECT,
-            },
-        },
+        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
     })
 
     return {
-        questions: questions.map((question) => ({
-            ...question,
-            references: mapQuestionReferences(question.referenceLinks),
-        })),
+        questions: questions.map(mapAdminQuestionRecord),
     }
 }
 
@@ -1451,23 +1535,11 @@ export async function addAdminQuestion(adminId: string, testId: string, data: Cr
             difficulty: (data.difficulty ?? 'MEDIUM') as Difficulty,
             topic: data.topic,
         },
-        select: {
-            id: true,
-            order: true,
-            stem: true,
-            sharedContext: true,
-            options: true,
-            explanation: true,
-            difficulty: true,
-            topic: true,
-        },
+        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
     })
 
     return {
-        question: {
-            ...question,
-            references: [],
-        },
+        question: mapAdminQuestionRecord(question),
     }
 }
 
@@ -1529,23 +1601,162 @@ export async function updateAdminQuestion(
     const question = await prisma.question.update({
         where: { id: questionId },
         data: updateData,
-        select: {
-            id: true,
-            order: true,
-            stem: true,
-            sharedContext: true,
-            options: true,
-            explanation: true,
-            difficulty: true,
-            topic: true,
-        },
+        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
     })
 
     return {
-        question: {
-            ...question,
-            references: [],
-        },
+        question: mapAdminQuestionRecord(question),
+    }
+}
+
+export async function upsertAdminQuestionReferenceImage(
+    adminId: string,
+    testId: string,
+    questionId: string,
+    file: File,
+) {
+    const admin = await ensureActiveAdmin(adminId)
+    if ('error' in admin) {
+        return admin
+    }
+
+    if (!isReferenceSnapshotStorageConfigured()) {
+        return serviceError('BAD_REQUEST', 'Reference image uploads are not configured for this environment.')
+    }
+
+    const test = await prisma.test.findUnique({
+        where: { id: testId },
+        select: { id: true, status: true },
+    })
+
+    if (!test) {
+        return serviceError('NOT_FOUND', 'Test not found')
+    }
+
+    const editableError = ensureDraftEditable(test.status)
+    if (editableError) {
+        return editableError
+    }
+
+    const existingQuestion = await prisma.question.findUnique({
+        where: { id: questionId },
+        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
+    })
+
+    if (!existingQuestion || existingQuestion.testId !== testId) {
+        return serviceError('NOT_FOUND', 'Question not found in this test')
+    }
+
+    let uploadedSnapshot: Awaited<ReturnType<typeof uploadManualReferenceSnapshot>>
+    try {
+        uploadedSnapshot = await uploadManualReferenceSnapshot({
+            testId,
+            questionId,
+            file,
+        })
+    } catch (error) {
+        return serviceError(
+            'BAD_REQUEST',
+            error instanceof Error ? error.message : 'Could not upload the reference image.',
+        )
+    }
+
+    const mappedReferences = mapQuestionReferences(existingQuestion.referenceLinks)
+    const importEvidence = parseQuestionImportEvidence(existingQuestion.importEvidence)
+    const existingVisualReference = getPreferredVisualReference(mappedReferences, importEvidence)
+
+    const nextKind = existingVisualReference?.kind && existingVisualReference.kind !== 'NONE'
+        ? existingVisualReference.kind
+        : (importEvidence.referenceKind && importEvidence.referenceKind !== 'NONE'
+            ? importEvidence.referenceKind as QuestionReferenceKind
+            : 'DIAGRAM')
+
+    const nextMode = (() => {
+        const existingMode = existingVisualReference?.mode ?? (importEvidence.referenceMode as QuestionReferenceMode | null) ?? null
+        if (existingMode === 'HYBRID' || existingMode === 'SNAPSHOT') {
+            return existingMode
+        }
+
+        return existingQuestion.sharedContext?.trim() ? 'HYBRID' : 'SNAPSHOT'
+    })()
+
+    const nextTitle = existingVisualReference?.title
+        ?? importEvidence.referenceTitle
+        ?? (nextMode === 'HYBRID' ? 'Visual reference' : 'Manual visual reference')
+
+    const nextEvidence = buildQuestionImportEvidence({
+        ...importEvidence,
+        referenceKind: nextKind,
+        referenceMode: nextMode,
+        referenceTitle: nextTitle,
+        referenceAssetUrl: uploadedSnapshot.assetUrl,
+    })
+
+    await prisma.$transaction(async (tx) => {
+        if (existingVisualReference?.id) {
+            await tx.questionReference.update({
+                where: { id: existingVisualReference.id },
+                data: {
+                    kind: nextKind,
+                    mode: nextMode,
+                    title: nextTitle,
+                    textContent: existingVisualReference.textContent ?? (existingQuestion.sharedContext?.trim() || null),
+                    assetUrl: uploadedSnapshot.assetUrl,
+                    bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
+                    evidence: mergeReferenceEvidence(existingVisualReference.evidence as Prisma.JsonValue | null, {
+                        source: 'MANUAL_UPLOAD',
+                        uploadedAt: new Date().toISOString(),
+                    }),
+                },
+            })
+        } else {
+            const createdReference = await tx.questionReference.create({
+                data: {
+                    testId,
+                    kind: nextKind,
+                    mode: nextMode,
+                    title: nextTitle,
+                    textContent: existingQuestion.sharedContext?.trim() || null,
+                    assetUrl: uploadedSnapshot.assetUrl,
+                    sourcePage: importEvidence.sourcePage ?? null,
+                    bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
+                    confidence: importEvidence.confidence ?? null,
+                    evidence: {
+                        source: 'MANUAL_UPLOAD',
+                        uploadedAt: new Date().toISOString(),
+                    } satisfies Prisma.InputJsonValue,
+                },
+                select: { id: true },
+            })
+
+            await tx.questionReferenceLink.create({
+                data: {
+                    questionId,
+                    referenceId: createdReference.id,
+                    order: mappedReferences.length + 1,
+                },
+            })
+        }
+
+        await tx.question.update({
+            where: { id: questionId },
+            data: {
+                importEvidence: nextEvidence,
+            },
+        })
+    })
+
+    const refreshedQuestion = await prisma.question.findUnique({
+        where: { id: questionId },
+        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
+    })
+
+    if (!refreshedQuestion) {
+        return serviceError('NOT_FOUND', 'Question not found after updating reference image.')
+    }
+
+    return {
+        question: mapAdminQuestionRecord(refreshedQuestion),
     }
 }
 
@@ -1739,6 +1950,10 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         plan: importPlan,
         classification: importDiagnostics.classification,
     })
+    const shouldKeepExactPassCheap =
+        shouldDeferReferenceEnrichment
+        && importPlan.selectedStrategy === 'HYBRID_RECONCILE'
+        && importDiagnostics.classification.hasDiagramReasoning
     const effectiveGenerationTarget =
         importDiagnostics.classification.documentType === 'MCQ_PAPER'
         && importDiagnostics.classification.detectedQuestionCount
@@ -1784,7 +1999,16 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                     return extracted
                 }
 
-                const exact = await extractQuestionsFromDocumentTextPrecisely(text, admin.id)
+                const exact = await extractQuestionsFromDocumentTextPrecisely(
+                    text,
+                    admin.id,
+                    shouldKeepExactPassCheap
+                        ? {
+                            allowAiFallback: false,
+                            allowAiRepair: false,
+                        }
+                        : undefined,
+                )
                 extracted = exact
                 return exact
             },

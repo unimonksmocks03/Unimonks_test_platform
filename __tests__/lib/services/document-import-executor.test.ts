@@ -416,6 +416,46 @@ test('executeDocumentImportPlan skips visual overlay entirely when reference enr
     expect(extractVisualReferences).not.toHaveBeenCalled()
 })
 
+test('executeDocumentImportPlan returns exact questions immediately for manual visual-reference capture plans', async () => {
+    const extractVisualReferences = vi.fn()
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: false,
+                manualVisualReferenceCapture: true,
+                generateFromSource: false,
+                reasons: ['diagram-heavy pdf with strong OCR'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact: vi.fn().mockResolvedValue(createExactExtraction({
+                questions: [
+                    createQuestion('Q1. Find the missing figure', {
+                        sourceSnippet: 'Find the missing figure',
+                        referenceKind: 'DIAGRAM',
+                        referenceMode: 'SNAPSHOT',
+                    }),
+                ],
+            })),
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('EXTRACTED')
+    expect(outcome.warning).toContain('manual image attachment')
+    expect(extractVisualReferences).not.toHaveBeenCalled()
+})
+
 test('executeDocumentImportPlan returns exact questions even when visual reference extraction times out', async () => {
     vi.useFakeTimers()
 
