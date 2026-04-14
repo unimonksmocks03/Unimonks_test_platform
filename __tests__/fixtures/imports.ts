@@ -3,7 +3,12 @@ export type ImportRegressionFixture = {
     sourceLabel: string
     fileName: string
     expectedQuestionCount: number
-    expectedStrategy: 'TEXT_EXACT' | 'MULTIMODAL_EXTRACT' | 'HYBRID_RECONCILE' | 'GENERATE_FROM_SOURCE'
+    expectedDocumentType: 'MCQ_PAPER' | 'SOURCE_MATERIAL'
+    expectedPreferredStrategy: 'TEXT_EXACT' | 'MULTIMODAL_EXTRACT' | 'HYBRID_RECONCILE' | 'GENERATE_FROM_SOURCE'
+    expectedSelectedStrategy: 'TEXT_EXACT' | 'MULTIMODAL_EXTRACT' | 'HYBRID_RECONCILE' | 'GENERATE_FROM_SOURCE'
+    expectedLane: 'STABLE' | 'ADVANCED'
+    requiresVisualSnapshot: boolean
+    acceptableDecision: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED'
     tags: string[]
     text: string
 }
@@ -264,6 +269,37 @@ Q3. Find the missing figure:
 Answer: (a)
 `
 
+export const figureFormationPdfText = `
+SECTIONAL MOCKTEST
+REASONING
+UNIT : FIGURE FORMATION
+
+Q1. How many triangles are in the following figure?
+/\\ /\\ /\\
+\\//\\//\\/
+(a) 10
+(b) 12
+(c) 14
+(d) 16
+Answer: (d)
+
+Q2. Which option can be formed by joining the pieces shown in the figure?
+[shape omitted]
+(a) Option A
+(b) Option B
+(c) Option C
+(d) Option D
+Answer: (b)
+
+Q3. Which option completes the figure pattern?
+[pattern omitted]
+(a) Option A
+(b) Option B
+(c) Option C
+(d) Option D
+Answer: (a)
+`
+
 export const oddOneOutPdfText = `
 SECTIONAL MOCKTEST
 REASONING
@@ -288,6 +324,30 @@ Q30.
 ANSWER: (d)
 `
 
+export const rankingsPdfText = `
+SECTIONAL MOCKTEST
+REASONING
+UNIT : RANKINGS
+Q1. In a class, A is ranked 5th from the left and 18th from the right. How many students are there?
+(a) 20
+(b) 21
+(c) 22
+(d) 23
+Answer: (c)
+Q2. P is 9 ranks ahead of Q in a class of 40. If Q's rank from the last is 17, what is P's rank from the front?
+(a) 15
+(b) 16
+(c) 17
+(d) 18
+Answer: (a)
+Q3. In a row of girls, Reena is 7th from the left and Kavya is 11th from the right. If they interchange positions, Reena becomes 19th from the left. How many girls are there?
+(a) 28
+(b) 29
+(c) 30
+(d) 31
+Answer: (b)
+`
+
 export const studyMaterialNotesText = `
 Tertiary activities involve the exchange and movement of goods and services.
 Quaternary activities are knowledge-oriented and include education, research, and information services.
@@ -304,13 +364,48 @@ Q1
 (b)
 `
 
+export const historyHorizontalAnswerKeyDocxText = `
+CUET UG HISTORY — CLEAN EXTRACTABLE MOCK TEST
+50 questions | Answer key included at the end
+
+Q1. Arrange the major developments in Harappan archaeology in chronological order.
+(A) Alpha
+(B) Beta
+(C) Gamma
+(D) Delta
+
+Q2. Traces of canals have been found at the Harappan site of:
+(A) Shortughai in Afghanistan
+(B) Banawali in Haryana
+(C) Harappa
+(D) Mohenjodaro
+
+Q3. Which rulers adopted the title devaputra, or 'son of god'?
+(A) Kushanas
+(B) Sakas
+(C) Mauryas
+(D) Satavahanas
+
+ANSWER KEY
+Answer Key Table
+Horizontal Box Table
+Q1B
+Q2A
+Q3A
+`
+
 export const importRegressionFixtures: ImportRegressionFixture[] = [
     {
         id: 'clean-physics-pdf',
         sourceLabel: 'physics-1-mcq.pdf',
         fileName: 'physics-1-mcq.pdf',
         expectedQuestionCount: 5,
-        expectedStrategy: 'TEXT_EXACT',
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'TEXT_EXACT',
+        expectedSelectedStrategy: 'TEXT_EXACT',
+        expectedLane: 'STABLE',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'EXACT_ACCEPTED',
         tags: ['pdf', 'born-digital', 'mcq-paper', 'clean-layout'],
         text: physicsPdfLikeMcqText,
     },
@@ -318,17 +413,41 @@ export const importRegressionFixtures: ImportRegressionFixture[] = [
         id: 'human-geo-docx',
         sourceLabel: 'XII_human_geography_chapter_1.docx',
         fileName: 'XII_human_geography_chapter_1.docx',
-        expectedQuestionCount: 5,
-        expectedStrategy: 'TEXT_EXACT',
+        expectedQuestionCount: 15,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'TEXT_EXACT',
+        expectedSelectedStrategy: 'TEXT_EXACT',
+        expectedLane: 'STABLE',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'EXACT_ACCEPTED',
         tags: ['docx', 'mcq-paper', 'answer-key'],
         text: humanGeoDocxLikeMcqText,
+    },
+    {
+        id: 'history-horizontal-answer-key-docx',
+        sourceLabel: 'CUET_History_Clean_Extractable_50Q_HorizontalAnswerKey.docx',
+        fileName: 'CUET_History_Clean_Extractable_50Q_HorizontalAnswerKey.docx',
+        expectedQuestionCount: 3,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'MULTIMODAL_EXTRACT',
+        expectedSelectedStrategy: 'HYBRID_RECONCILE',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'REVIEW_REQUIRED',
+        tags: ['docx', 'mcq-paper', 'horizontal-answer-key'],
+        text: historyHorizontalAnswerKeyDocxText,
     },
     {
         id: 'psychology-header-answer',
         sourceLabel: 'SECTIONAL MOCKTEST PSYCHOLOGY 1.pdf',
         fileName: 'SECTIONAL MOCKTEST PSYCHOLOGY 1.pdf',
-        expectedQuestionCount: 5,
-        expectedStrategy: 'HYBRID_RECONCILE',
+        expectedQuestionCount: 8,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'MULTIMODAL_EXTRACT',
+        expectedSelectedStrategy: 'MULTIMODAL_EXTRACT',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'REVIEW_REQUIRED',
         tags: ['pdf', 'mcq-paper', 'assertion-reason', 'match-following', 'header-answer'],
         text: answerInHeaderPsychologyMcqText,
     },
@@ -337,25 +456,96 @@ export const importRegressionFixtures: ImportRegressionFixture[] = [
         sourceLabel: 'QUANT MOCKTEST DATA INTERPRETATION.pdf',
         fileName: 'QUANT MOCKTEST DATA INTERPRETATION.pdf',
         expectedQuestionCount: 2,
-        expectedStrategy: 'MULTIMODAL_EXTRACT',
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'MULTIMODAL_EXTRACT',
+        expectedSelectedStrategy: 'MULTIMODAL_EXTRACT',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'REVIEW_REQUIRED',
         tags: ['pdf', 'mcq-paper', 'table-heavy', 'shared-context'],
         text: tableHeavyQuantPdfText,
     },
     {
-        id: 'visual-reasoning-pdf',
+        id: 'venn-diagram-pdf',
         sourceLabel: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         fileName: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         expectedQuestionCount: 2,
-        expectedStrategy: 'MULTIMODAL_EXTRACT',
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'MULTIMODAL_EXTRACT',
+        expectedSelectedStrategy: 'MULTIMODAL_EXTRACT',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: true,
+        acceptableDecision: 'REVIEW_REQUIRED',
         tags: ['pdf', 'mcq-paper', 'visual-reference', 'diagram'],
         text: visualReasoningPdfText,
+    },
+    {
+        id: 'figure-completion-pdf',
+        sourceLabel: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
+        fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
+        expectedQuestionCount: 3,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'HYBRID_RECONCILE',
+        expectedSelectedStrategy: 'HYBRID_RECONCILE',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: true,
+        acceptableDecision: 'REVIEW_REQUIRED',
+        tags: ['pdf', 'mcq-paper', 'figure-completion', 'diagram'],
+        text: extractableFigureReasoningPdfText,
+    },
+    {
+        id: 'figure-formation-pdf',
+        sourceLabel: 'REASONING MOCKTEST FIGURE FORMATION.pdf',
+        fileName: 'REASONING MOCKTEST FIGURE FORMATION.pdf',
+        expectedQuestionCount: 3,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'HYBRID_RECONCILE',
+        expectedSelectedStrategy: 'HYBRID_RECONCILE',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: true,
+        acceptableDecision: 'REVIEW_REQUIRED',
+        tags: ['pdf', 'mcq-paper', 'figure-formation', 'diagram'],
+        text: figureFormationPdfText,
+    },
+    {
+        id: 'odd-one-out-pdf',
+        sourceLabel: 'REASONING MOCKTEST ODD ONE OUT.pdf',
+        fileName: 'REASONING MOCKTEST ODD ONE OUT.pdf',
+        expectedQuestionCount: 3,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'TEXT_EXACT',
+        expectedSelectedStrategy: 'TEXT_EXACT',
+        expectedLane: 'STABLE',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'EXACT_ACCEPTED',
+        tags: ['pdf', 'mcq-paper', 'odd-one-out', 'text-first'],
+        text: oddOneOutPdfText,
+    },
+    {
+        id: 'rankings-pdf',
+        sourceLabel: 'REASONING MOCKTEST RANKINGS.pdf',
+        fileName: 'REASONING MOCKTEST RANKINGS.pdf',
+        expectedQuestionCount: 3,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'TEXT_EXACT',
+        expectedSelectedStrategy: 'TEXT_EXACT',
+        expectedLane: 'STABLE',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'EXACT_ACCEPTED',
+        tags: ['pdf', 'mcq-paper', 'rankings', 'text-first'],
+        text: rankingsPdfText,
     },
     {
         id: 'source-material-notes',
         sourceLabel: 'chapter-6-notes.docx',
         fileName: 'chapter-6-notes.docx',
         expectedQuestionCount: 0,
-        expectedStrategy: 'GENERATE_FROM_SOURCE',
+        expectedDocumentType: 'SOURCE_MATERIAL',
+        expectedPreferredStrategy: 'GENERATE_FROM_SOURCE',
+        expectedSelectedStrategy: 'GENERATE_FROM_SOURCE',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'REVIEW_REQUIRED',
         tags: ['docx', 'source-material', 'notes'],
         text: studyMaterialNotesText,
     },
@@ -364,7 +554,12 @@ export const importRegressionFixtures: ImportRegressionFixture[] = [
         sourceLabel: 'scan-heavy-paper.pdf',
         fileName: 'scan-heavy-paper.pdf',
         expectedQuestionCount: 0,
-        expectedStrategy: 'MULTIMODAL_EXTRACT',
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'MULTIMODAL_EXTRACT',
+        expectedSelectedStrategy: 'MULTIMODAL_EXTRACT',
+        expectedLane: 'ADVANCED',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'REVIEW_REQUIRED',
         tags: ['pdf', 'scan-like', 'low-text'],
         text: lowTextScannedPdfText,
     },

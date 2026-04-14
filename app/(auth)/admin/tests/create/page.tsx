@@ -27,6 +27,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import type { QuestionReferencePayload } from "@/lib/types/question-reference";
 
 type QuestionOption = { id: string; text: string; isCorrect: boolean };
 
@@ -34,6 +35,7 @@ type Question = {
     dbId?: string;
     stem: string;
     sharedContext: string;
+    references?: QuestionReferencePayload[];
     options: QuestionOption[];
     difficulty: "EASY" | "MEDIUM" | "HARD";
     topic: string;
@@ -71,6 +73,7 @@ type QuestionsResponse = {
         id: string;
         stem: string;
         sharedContext: string | null;
+        references?: QuestionReferencePayload[];
         options: QuestionOption[] | Record<string, string>;
         difficulty: "EASY" | "MEDIUM" | "HARD";
         topic: string | null;
@@ -88,6 +91,15 @@ type BatchesResponse = {
 };
 
 type ImportJobStatus = "QUEUED" | "PROCESSING" | "SUCCEEDED" | "FAILED";
+type ImportJobStage =
+    | "QUEUED"
+    | "PROCESSING_CLASSIFICATION"
+    | "PROCESSING_EXACT"
+    | "CREATING_DRAFT"
+    | "ENRICHING_REFERENCES"
+    | "VERIFYING"
+    | "SUCCEEDED"
+    | "FAILED";
 
 type ImportJobResultPayload = {
     test: { id: string; reviewStatus: string | null };
@@ -106,8 +118,19 @@ type ImportJobResultPayload = {
 type ImportJobSummary = {
     id: string;
     status: ImportJobStatus;
+    stage: ImportJobStage;
+    stageStartedAt: string | null;
+    currentStageElapsedMs: number | null;
+    lane: "STABLE" | "ADVANCED" | null;
+    routingMode: "LEGACY" | "CLASSIFIER" | null;
+    selectedStrategy: string | null;
+    resultStrategy: string | null;
+    decision: "EXACT_ACCEPTED" | "REVIEW_REQUIRED" | "FAILED_WITH_REASON" | null;
+    tokenCostUsd: number | null;
+    totalElapsedMs: number | null;
     fileName: string;
     message: string | null;
+    progressMessage: string | null;
     errorCode: string | null;
     errorMessage: string | null;
     testId: string | null;
@@ -134,6 +157,7 @@ type AssignOptions = {
 const emptyQuestion = (): Question => ({
     stem: "",
     sharedContext: "",
+    references: [],
     options: [
         { id: "A", text: "", isCorrect: true },
         { id: "B", text: "", isCorrect: false },
@@ -170,6 +194,44 @@ function audienceLabel(audience: BatchAudience) {
     if (audience === "UNASSIGNED") return "Unassigned";
     if (audience === "HYBRID") return "Free + Paid";
     return audience;
+}
+
+function formatImportStage(stage: ImportJobStage | null | undefined) {
+    switch (stage) {
+        case "PROCESSING_CLASSIFICATION":
+            return "Classifying";
+        case "PROCESSING_EXACT":
+            return "Extracting";
+        case "CREATING_DRAFT":
+            return "Creating Draft";
+        case "ENRICHING_REFERENCES":
+            return "Enriching References";
+        case "VERIFYING":
+            return "Verifying";
+        case "SUCCEEDED":
+            return "Complete";
+        case "FAILED":
+            return "Failed";
+        case "QUEUED":
+        default:
+            return "Queued";
+    }
+}
+
+function formatElapsedMs(elapsedMs: number | null | undefined) {
+    if (!elapsedMs || elapsedMs < 1000) {
+        return null;
+    }
+
+    const totalSeconds = Math.floor(elapsedMs / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+    }
+
+    return `${seconds}s`;
 }
 
 function BuilderSkeleton() {
@@ -271,6 +333,7 @@ function AdminTestBuilderForm() {
                     dbId: question.id,
                     stem: question.stem,
                     sharedContext: question.sharedContext || "",
+                    references: question.references || [],
                     options: normalizeOptions(question.options),
                     difficulty: question.difficulty,
                     topic: question.topic || "",
@@ -791,6 +854,14 @@ function AdminTestBuilderForm() {
         }
     };
 
+    const importStageLabel = formatImportStage(importJob?.stage);
+    const importElapsed = formatElapsedMs(importJob?.currentStageElapsedMs);
+    const importMeta = [
+        importJob?.lane ? `${importJob.lane.toLowerCase()} lane` : null,
+        importJob?.selectedStrategy ? importJob.selectedStrategy.toLowerCase().replaceAll("_", " ") : null,
+        importElapsed ? `${importElapsed} in stage` : null,
+    ].filter(Boolean) as string[];
+
     if (isPageLoading) return <BuilderSkeleton />;
 
     return (
@@ -860,6 +931,15 @@ function AdminTestBuilderForm() {
                     <p className="relative z-10 mt-2 font-medium text-indigo-200">
                         {importJob?.message || "Extracting questions and preparing an admin-owned draft test."}
                     </p>
+                    <p className="relative z-10 mt-2 text-sm font-medium text-indigo-100/90">
+                        {importStageLabel}
+                        {importJob?.progressMessage ? ` · ${importJob.progressMessage}` : ""}
+                    </p>
+                    {importMeta.length > 0 && (
+                        <p className="relative z-10 mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-100/80">
+                            {importMeta.join(" · ")}
+                        </p>
+                    )}
                 </div>
             )}
 
@@ -959,13 +1039,14 @@ function AdminTestBuilderForm() {
                                 <p className="text-xs font-medium text-slate-500">
                                     Use this for data-interpretation tables, passages, or any shared prompt block that students must see before answering.
                                 </p>
-                                {activeQuestion.sharedContext.trim() ? (
+                                {activeQuestion.sharedContext.trim() || activeQuestion.references?.length ? (
                                     <div className="space-y-3">
                                         <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
                                             Structured Preview
                                         </Label>
                                         <SharedContextRenderer
                                             context={activeQuestion.sharedContext}
+                                            references={activeQuestion.references}
                                             title="Preview"
                                             tone="slate"
                                         />

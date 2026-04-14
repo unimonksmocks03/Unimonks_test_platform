@@ -91,4 +91,15 @@ export async function enqueueDocumentImportJob(jobId: string) {
     })
 }
 
+export async function enqueueDocumentImportReferenceEnrichment(jobId: string) {
+    const baseUrl = getBaseUrl()
+    return qstashClient.publishJSON({
+        url: `${baseUrl}/api/webhooks/document-import`,
+        body: { jobId, phase: 'REFERENCE_ENRICHMENT' as const },
+        retries: 3,
+        deduplicationId: toSafeDeduplicationId('document-import-enrichment', jobId),
+        failureCallback: `${baseUrl}/api/webhooks/qstash-dlq`,
+    })
+}
+
 export { qstashClient, toSafeDeduplicationId }

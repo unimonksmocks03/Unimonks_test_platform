@@ -1,0 +1,122 @@
+import { randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
+
+import { put } from '@vercel/blob'
+
+import type { GeneratedQuestion } from '@/lib/services/ai-service.types'
+
+type RenderPageAsImageFn = typeof import('unpdf')['renderPageAsImage']
+type RenderPageAsImageOptions = NonNullable<Parameters<RenderPageAsImageFn>[2]>
+type CanvasImport = NonNullable<RenderPageAsImageOptions['canvasImport']>
+type CanvasModule = Awaited<ReturnType<CanvasImport>>
+
+type ReferenceSnapshotAsset = {
+    assetUrl: string
+    bbox: null
+}
+
+const requireCanvasModule = createRequire(import.meta.url)
+const OPTIONAL_CANVAS_MODULE = ['@napi-rs', 'canvas'].join('/')
+const PAGE_IMAGE_SCALE = 1.65
+
+function sanitizeSegment(value: string) {
+    return value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80) || 'reference'
+}
+
+function dataUrlToBuffer(dataUrl: string) {
+    const match = dataUrl.match(/^data:(.+?);base64,(.+)$/)
+    if (!match) {
+        throw new Error('Invalid page image data URL returned by PDF renderer.')
+    }
+
+    return {
+        mimeType: match[1],
+        buffer: Buffer.from(match[2], 'base64'),
+    }
+}
+
+async function loadCanvasModule(): Promise<CanvasModule | null> {
+    try {
+        return requireCanvasModule(OPTIONAL_CANVAS_MODULE) as CanvasModule
+    } catch (error) {
+        console.warn('[IMPORT][REF] Canvas-backed PDF rendering unavailable for snapshot capture:', error)
+        return null
+    }
+}
+
+function getRelevantSnapshotPages(
+    questions: Array<Pick<GeneratedQuestion, 'sourcePage' | 'referenceMode'>>,
+) {
+    const pages = new Set<number>()
+    for (const question of questions) {
+        if (
+            (question.referenceMode === 'SNAPSHOT' || question.referenceMode === 'HYBRID')
+            && Number.isInteger(question.sourcePage)
+            && Number(question.sourcePage) > 0
+        ) {
+            pages.add(Number(question.sourcePage))
+        }
+    }
+
+    return [...pages].sort((left, right) => left - right)
+}
+
+export function isReferenceSnapshotStorageConfigured() {
+    return Boolean(process.env.BLOB_READ_WRITE_TOKEN)
+}
+
+export async function uploadPdfReferenceSnapshots(input: {
+    buffer: Buffer
+    fileName: string
+    testId: string
+    questions: Array<Pick<GeneratedQuestion, 'sourcePage' | 'referenceMode'>>
+}) {
+    const relevantPages = getRelevantSnapshotPages(input.questions)
+    if (relevantPages.length === 0 || !isReferenceSnapshotStorageConfigured()) {
+        return new Map<number, ReferenceSnapshotAsset>()
+    }
+
+    const canvasModule = await loadCanvasModule()
+    if (!canvasModule) {
+        return new Map<number, ReferenceSnapshotAsset>()
+    }
+
+    const { getDocumentProxy, renderPageAsImage } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(input.buffer))
+    const fileSlug = sanitizeSegment(input.fileName.replace(/\.(pdf)$/i, ''))
+    const uploadedByPage = new Map<number, ReferenceSnapshotAsset>()
+
+    for (const pageNumber of relevantPages) {
+        try {
+            const imageUrl = await renderPageAsImage(pdf, pageNumber, {
+                canvasImport: async () => canvasModule,
+                scale: PAGE_IMAGE_SCALE,
+                toDataURL: true,
+            })
+            const { mimeType, buffer } = dataUrlToBuffer(imageUrl)
+            const extension = mimeType === 'image/jpeg' ? 'jpg' : 'png'
+            const blob = await put(
+                `question-references/${sanitizeSegment(input.testId)}/${fileSlug}-p${pageNumber}-${randomUUID()}.${extension}`,
+                buffer,
+                {
+                    access: 'public',
+                    contentType: mimeType,
+                    token: process.env.BLOB_READ_WRITE_TOKEN,
+                },
+            )
+
+            uploadedByPage.set(pageNumber, {
+                assetUrl: blob.url,
+                bbox: null,
+            })
+        } catch (error) {
+            console.warn(`[IMPORT][REF] Failed to upload snapshot for page ${pageNumber}:`, error)
+        }
+    }
+
+    return uploadedByPage
+}

@@ -16,6 +16,7 @@ import {
     SheetTrigger,
 } from "@/components/ui/sheet";
 import { SharedContextRenderer } from "@/components/test/shared-context-renderer";
+import type { QuestionReferencePayload } from "@/lib/types/question-reference";
 
 // ── Types ──
 interface QuestionOption {
@@ -28,6 +29,7 @@ interface Question {
     order: number;
     stem: string;
     sharedContext?: string | null;
+    references?: QuestionReferencePayload[];
     options: QuestionOption[];
     difficulty?: string;
     topic?: string;
@@ -526,9 +528,13 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
                     {/* Question Content */}
                     <div className="p-10 flex-1 overflow-auto">
-                        {currentQuestion.sharedContext ? (
+                        {currentQuestion.sharedContext || currentQuestion.references?.length ? (
                             <div className="mb-6">
-                                <SharedContextRenderer context={currentQuestion.sharedContext} tone="indigo" />
+                                <SharedContextRenderer
+                                    context={currentQuestion.sharedContext}
+                                    references={currentQuestion.references}
+                                    tone="indigo"
+                                />
                             </div>
                         ) : null}
                         <h3 className="text-2xl font-serif font-bold text-slate-900 mb-10 leading-snug">

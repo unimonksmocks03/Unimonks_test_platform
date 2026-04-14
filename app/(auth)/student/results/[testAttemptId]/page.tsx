@@ -13,6 +13,7 @@ import { useParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 import { PLATFORM_POLICY } from "@/lib/config/platform-policy";
 import { useEvents } from "@/lib/hooks/use-events";
+import type { QuestionReferencePayload } from "@/lib/types/question-reference";
 
 // ── Types ──
 interface AnswerEntry {
@@ -31,6 +32,7 @@ interface Question {
     order: number;
     stem: string;
     sharedContext?: string | null;
+    references?: QuestionReferencePayload[];
     options: QuestionOption[] | Record<string, string>;
     explanation?: string;
     difficulty?: string;
@@ -613,9 +615,13 @@ export default function ResultsPage() {
                                     </div>
                                 </AccordionTrigger>
                                 <AccordionContent className="px-6 pb-6 pt-0 bg-slate-50 border-t border-slate-100">
-                                    {question.sharedContext ? (
+                                    {question.sharedContext || question.references?.length ? (
                                         <div className="mt-6">
-                                            <SharedContextRenderer context={question.sharedContext} tone="indigo" />
+                                            <SharedContextRenderer
+                                                context={question.sharedContext}
+                                                references={question.references}
+                                                tone="indigo"
+                                            />
                                         </div>
                                     ) : null}
                                     <div className="pt-6 flex flex-col lg:flex-row gap-8 lg:gap-12">

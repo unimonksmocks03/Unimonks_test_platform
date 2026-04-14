@@ -2,6 +2,10 @@ import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import { MAX_PAID_TOTAL_ATTEMPTS } from '@/lib/config/platform-policy'
 import { enqueueForceSubmit } from '@/lib/queue/qstash'
+import {
+    mapQuestionReferences,
+    QUESTION_REFERENCE_LINK_SELECT,
+} from '@/lib/utils/question-references'
 import { calculateQuestionAttemptSummary, calculateTotalMarks } from '@/lib/utils/test-settings'
 
 /**
@@ -45,6 +49,10 @@ export async function startTestSession(studentId: string, testId: string) {
                         options: true,
                         difficulty: true,
                         topic: true,
+                        referenceLinks: {
+                            orderBy: { order: 'asc' },
+                            select: QUESTION_REFERENCE_LINK_SELECT,
+                        },
                     },
                 },
                 assignments: {
@@ -471,6 +479,7 @@ function stripCorrectAnswers(questions: Array<any>, settings: unknown) {
             order: q.order,
             stem: q.stem,
             sharedContext: q.sharedContext,
+            references: mapQuestionReferences(q.referenceLinks),
             options: safeOptions,
             difficulty: q.difficulty,
             topic: q.topic,

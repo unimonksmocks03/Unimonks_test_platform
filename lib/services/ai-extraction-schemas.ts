@@ -13,6 +13,23 @@ export const AnswerSourceSchema = z.enum([
     'INFERRED',
 ])
 
+export const QuestionReferenceKindSchema = z.enum([
+    'NONE',
+    'PASSAGE',
+    'TABLE',
+    'LIST_MATCH',
+    'DIAGRAM',
+    'GRAPH',
+    'MAP',
+    'OTHER',
+])
+
+export const QuestionReferenceModeSchema = z.enum([
+    'TEXT',
+    'SNAPSHOT',
+    'HYBRID',
+])
+
 export const VerificationIssueCategorySchema = z.enum([
     'STRUCTURAL',
     'EVIDENCE',
@@ -43,6 +60,9 @@ export const McqQuestionSchema = z.object({
     confidence: z.number().min(0).max(1).optional().nullable(),
     sharedContextEvidence: z.string().trim().min(1).max(12000).optional().nullable(),
     extractionMode: ExtractionModeSchema.optional().nullable(),
+    referenceKind: QuestionReferenceKindSchema.optional().nullable(),
+    referenceMode: QuestionReferenceModeSchema.optional().nullable(),
+    referenceTitle: z.string().trim().min(1).max(120).optional().nullable(),
 })
 
 export const McqExtractionResponseSchema = z.object({
@@ -64,6 +84,9 @@ export const VisualReferenceExtractionSchema = z.object({
     sourceSnippet: z.string().trim().min(1).max(2000).optional().nullable(),
     sharedContextEvidence: z.string().trim().min(1).max(12000).optional().nullable(),
     confidence: z.number().min(0).max(1).optional().nullable(),
+    referenceKind: QuestionReferenceKindSchema.optional().nullable(),
+    referenceMode: QuestionReferenceModeSchema.optional().nullable(),
+    referenceTitle: z.string().trim().min(1).max(120).optional().nullable(),
 })
 
 export const VisualReferenceExtractionResponseSchema = z.object({
@@ -104,6 +127,8 @@ export type VerificationIssue = z.infer<typeof VerificationIssueSchema>
 export type VerificationResult = z.infer<typeof VerificationResultSchema>
 export type ExtractionMode = z.infer<typeof ExtractionModeSchema>
 export type AnswerSource = z.infer<typeof AnswerSourceSchema>
+export type QuestionReferenceKind = z.infer<typeof QuestionReferenceKindSchema>
+export type QuestionReferenceMode = z.infer<typeof QuestionReferenceModeSchema>
 export const AIVerificationResponseSchema = z.object({
     issues: z.array(VerificationIssueSchema),
     overallAssessment: z.string().trim().min(1),

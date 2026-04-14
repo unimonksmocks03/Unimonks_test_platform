@@ -37,15 +37,56 @@ function normalizeStrategyForFileType(
     return preferredStrategy
 }
 
+function promoteStrategyForRiskSignals(
+    selectedStrategy: RecommendedExtractionStrategy,
+    classification: DocumentClassificationResult,
+    isPdfUpload: boolean,
+): {
+    selectedStrategy: RecommendedExtractionStrategy
+    reasons: string[]
+} {
+    if (selectedStrategy !== 'TEXT_EXACT') {
+        return {
+            selectedStrategy,
+            reasons: [],
+        }
+    }
+
+    if (classification.isScannedLike || classification.hasTables || classification.hasPassages || classification.isMixedLayout) {
+        return {
+            selectedStrategy: isPdfUpload ? 'MULTIMODAL_EXTRACT' : 'HYBRID_RECONCILE',
+            reasons: ['Risk override promoted a TEXT_EXACT plan because the classifier still detected scanned, table, passage, or irregular-layout signals.'],
+        }
+    }
+
+    if (classification.hasVisualReferences) {
+        return {
+            selectedStrategy: 'HYBRID_RECONCILE',
+            reasons: ['Risk override promoted a TEXT_EXACT plan because the classifier detected visual-reference signals.'],
+        }
+    }
+
+    return {
+        selectedStrategy,
+        reasons: [],
+    }
+}
+
 export function isClassifierRoutingEnabled() {
     return process.env.DOCUMENT_IMPORT_CLASSIFIER_ROUTING !== 'false'
 }
 
 export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput): DocumentImportPlan {
-    const selectedStrategy = normalizeStrategyForFileType(
+    const normalizedStrategy = normalizeStrategyForFileType(
         input.classification.preferredStrategy,
         input.isPdfUpload,
     )
+    const promoted = promoteStrategyForRiskSignals(
+        normalizedStrategy,
+        input.classification,
+        input.isPdfUpload,
+    )
+    const selectedStrategy = promoted.selectedStrategy
 
     if (!input.classifierRoutingEnabled) {
         return {
@@ -76,9 +117,10 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         reasons: [
             `Classifier selected ${selectedStrategy} for this document.`,
             `Import lane: ${lane}.`,
-            ...(selectedStrategy !== input.classification.preferredStrategy
-                ? [`Normalized ${input.classification.preferredStrategy} to ${selectedStrategy} for this file type.`]
+            ...(normalizedStrategy !== input.classification.preferredStrategy
+                ? [`Normalized ${input.classification.preferredStrategy} to ${normalizedStrategy} for this file type.`]
                 : []),
+            ...promoted.reasons,
         ],
     }
 }

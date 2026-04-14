@@ -34,9 +34,9 @@ export async function POST(req: NextRequest) {
         }
     }
 
-    let parsed: { jobId?: string } = {}
+    let parsed: { jobId?: string; phase?: 'REFERENCE_ENRICHMENT' } = {}
     try {
-        parsed = JSON.parse(body) as { jobId?: string }
+        parsed = JSON.parse(body) as { jobId?: string; phase?: 'REFERENCE_ENRICHMENT' }
     } catch {
         return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 200 })
     }
@@ -46,7 +46,18 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        const outcome = await processDocumentImportJob(parsed.jobId)
+        console.info('[DOCUMENT-IMPORT] webhook-start', JSON.stringify({
+            jobId: parsed.jobId,
+            phase: parsed.phase ?? 'PRIMARY',
+        }))
+        const outcome = await processDocumentImportJob(parsed.jobId, parsed.phase ?? 'PRIMARY')
+        console.info('[DOCUMENT-IMPORT] webhook-complete', JSON.stringify({
+            jobId: outcome.job.id,
+            phase: parsed.phase ?? 'PRIMARY',
+            outcome: outcome.kind,
+            status: outcome.job.status,
+            stage: outcome.job.stage,
+        }))
         return NextResponse.json({
             ok: true,
             outcome: outcome.kind,

@@ -2,6 +2,10 @@ import { SessionStatus } from '@prisma/client'
 
 import { MAX_PAID_TOTAL_ATTEMPTS } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
+import {
+    mapQuestionReferences,
+    QUESTION_REFERENCE_LINK_SELECT,
+} from '@/lib/utils/question-references'
 
 /**
  * Student-scoped service.
@@ -300,6 +304,10 @@ export async function getResult(studentId: string, sessionId: string) {
                             explanation: true,
                             difficulty: true,
                             topic: true,
+                            referenceLinks: {
+                                orderBy: { order: 'asc' },
+                                select: QUESTION_REFERENCE_LINK_SELECT,
+                            },
                         },
                     },
                     sessions: {
@@ -353,7 +361,10 @@ export async function getResult(studentId: string, sessionId: string) {
             id: session.test.id,
             title: session.test.title,
             durationMinutes: session.test.durationMinutes,
-            questions: session.test.questions,
+            questions: session.test.questions.map((question) => ({
+                ...question,
+                references: mapQuestionReferences(question.referenceLinks),
+            })),
         },
         attemptSummary,
         feedback: session.aiFeedback

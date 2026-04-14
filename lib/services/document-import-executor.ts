@@ -11,6 +11,7 @@ import type {
     VisualReferenceExtractionResult,
 } from '@/lib/services/ai-service.types'
 import type { DocumentImportPlan } from '@/lib/services/document-import-strategy'
+import { annotateQuestionsWithReferencePolicy } from '@/lib/services/reference-classifier'
 
 type GeneratedTextQuestionsResult = {
     questions?: GeneratedQuestion[]
@@ -52,6 +53,7 @@ type ExecuteDocumentImportPlanInput = {
     textLength: number
     parseFailed: boolean
     generationTarget: number
+    deferReferenceEnrichment?: boolean
 }
 
 type ExecuteDocumentImportPlanHandlers = {
@@ -113,7 +115,7 @@ function toGeneratedResult(result: GeneratedTextQuestionsResult) {
     return {
         error: result.error,
         message: result.message,
-        questions: result.questions,
+        questions: result.questions ? annotateQuestionsWithReferencePolicy(result.questions) : result.questions,
         failedCount: result.failedCount,
         cost: result.cost,
     }
@@ -123,7 +125,7 @@ function toPdfResult(result: PdfVisionFallbackResult) {
     return {
         error: result.error,
         message: result.message,
-        questions: result.questions,
+        questions: result.questions ? annotateQuestionsWithReferencePolicy(result.questions) : result.questions,
         failedCount: result.failedCount,
         cost: result.cost,
         verification: result.verification,
@@ -148,7 +150,7 @@ function toExtractedResult(extracted: PreciseDocumentQuestionAnalysis) {
     return {
         error: false,
         message: undefined,
-        questions: extracted.questions,
+        questions: annotateQuestionsWithReferencePolicy(extracted.questions),
         failedCount: countExtractedValidationFailures(extracted),
         cost: extracted.cost,
     }
@@ -183,6 +185,30 @@ function looksLikeVisualReferenceBlock(text: string | null | undefined) {
     return glyphCount >= 6 || visualLineCount >= 2
 }
 
+function questionAlreadyCarriesVisualContext(question: GeneratedQuestion) {
+    if (looksLikeVisualReferenceBlock(question.sharedContext)) {
+        return true
+    }
+
+    if (looksLikeVisualReferenceBlock(question.stem) || looksLikeVisualReferenceBlock(question.sourceSnippet)) {
+        return true
+    }
+
+    const visualText = `${question.stem}\n${question.sourceSnippet ?? ''}\n${question.sharedContext ?? ''}`
+    return /\b(?:figure|diagram|venn|triangle|square|circle|pattern|set\s+[ab]|missing figure|paper folding|mirror image|water image)\b/i.test(visualText)
+}
+
+function shouldSkipVisualOverlayForRecoveredExactExtraction(
+    extracted: PreciseDocumentQuestionAnalysis,
+) {
+    if (extracted.questions.length === 0) {
+        return false
+    }
+
+    const visuallyGroundedQuestions = extracted.questions.filter(questionAlreadyCarriesVisualContext).length
+    return visuallyGroundedQuestions >= Math.max(3, Math.ceil(extracted.questions.length * 0.5))
+}
+
 function scoreVisualReferenceCandidate(reference: VisualReferenceExtraction) {
     const sharedContext = reference.sharedContext ?? ''
     const evidence = reference.sharedContextEvidence ?? reference.sourceSnippet ?? ''
@@ -193,7 +219,7 @@ function scoreVisualReferenceCandidate(reference: VisualReferenceExtraction) {
     return visualBonus + evidenceBonus + Math.min(sharedContext.length, 2000) + Math.min(evidence.length, 800) + confidence
 }
 
-function mergeVisualReferencesIntoQuestions(
+export function mergeVisualReferencesIntoQuestions(
     questions: GeneratedQuestion[],
     references: VisualReferenceExtraction[] | undefined,
 ) {
@@ -447,7 +473,33 @@ async function executeDocumentImportPlanCore(
     if (input.plan.selectedStrategy === 'HYBRID_RECONCILE') {
         const extracted = await handlers.extractTextExact()
         if (hasRecoverableExactExtraction(extracted)) {
-            if (input.isPdfUpload && input.plan.visualReferenceOverlay) {
+            const shouldSkipVisualOverlay =
+                input.isPdfUpload
+                && input.plan.visualReferenceOverlay
+                && shouldSkipVisualOverlayForRecoveredExactExtraction(extracted)
+
+            if (shouldSkipVisualOverlay) {
+                return {
+                    useLegacyFlow: false,
+                    strategy: 'EXTRACTED',
+                    result: toExtractedResult(extracted),
+                    extracted,
+                    parserStatus: extracted.aiRepairUsed ? 'REPAIRED' : 'OK',
+                    aiFallbackUsed: extracted.aiRepairUsed,
+                    reportParserIssue: false,
+                    warning: extracted.aiRepairUsed
+                        ? 'Hybrid reconcile used exact recovery for question parsing and skipped additional diagram extraction because strong visual context was already recovered from OCR.'
+                        : 'Hybrid reconcile used exact parsing and skipped additional diagram extraction because strong visual context was already recovered from OCR.',
+                    needsAdminReview: false,
+                    reviewIssueCount: 0,
+                }
+            }
+
+            if (
+                input.isPdfUpload
+                && input.plan.visualReferenceOverlay
+                && !input.deferReferenceEnrichment
+            ) {
                 const visualReferences = await safelyExtractVisualReferences(
                     handlers.extractVisualReferences,
                 )
@@ -656,6 +708,7 @@ export async function executeDocumentImportPlan(
         baseResult.useLegacyFlow
         || baseResult.failure
         || !baseResult.result?.questions?.length
+        || input.deferReferenceEnrichment
         || !input.plan.visualReferenceOverlay
         || baseResult.strategy !== 'EXTRACTED'
     ) {

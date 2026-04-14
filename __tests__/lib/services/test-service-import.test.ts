@@ -14,9 +14,16 @@ const prismaMock = {
     test: {
         create: vi.fn(),
     },
+    questionReference: {
+        create: vi.fn(),
+    },
+    questionReferenceLink: {
+        createMany: vi.fn(),
+    },
     auditLog: {
         create: vi.fn(),
     },
+    $transaction: vi.fn(),
 }
 
 const parseDocumentToTextMock = vi.fn()
@@ -32,6 +39,7 @@ const classifyDocumentForImportMock = vi.fn()
 const resolveDocumentImportPlanMock = vi.fn()
 const isClassifierRoutingEnabledMock = vi.fn()
 const executeDocumentImportPlanMock = vi.fn()
+const uploadPdfReferenceSnapshotsMock = vi.fn()
 
 vi.mock('@/lib/prisma', () => ({
     prisma: prismaMock,
@@ -60,6 +68,10 @@ vi.mock('@/lib/services/document-import-strategy', () => ({
 
 vi.mock('@/lib/services/document-import-executor', () => ({
     executeDocumentImportPlan: executeDocumentImportPlanMock,
+}))
+
+vi.mock('@/lib/storage/reference-snapshots', () => ({
+    uploadPdfReferenceSnapshots: uploadPdfReferenceSnapshotsMock,
 }))
 
 const servicePromise = import('../../../lib/services/test-service')
@@ -137,10 +149,14 @@ beforeEach(() => {
         role: 'ADMIN',
         status: 'ACTIVE',
     })
+    prismaMock.questionReference.create.mockResolvedValue({ id: 'reference-1' })
+    prismaMock.questionReferenceLink.createMany.mockResolvedValue({ count: 1 })
+    prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof prismaMock) => Promise<unknown>) => callback(prismaMock))
     prismaMock.test.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'test-1',
         title: data.title,
         reviewStatus: data.reviewStatus ?? null,
+        questions: [{ id: 'question-1', order: 1 }],
     }))
     prismaMock.auditLog.create.mockResolvedValue({ id: 'audit-1' })
 
@@ -149,8 +165,10 @@ beforeEach(() => {
     isClassifierRoutingEnabledMock.mockReturnValue(true)
     resolveDocumentImportPlanMock.mockReturnValue({
         routingMode: 'CLASSIFIER',
+        lane: 'STABLE',
         selectedStrategy: 'TEXT_EXACT',
         runMultimodalFirst: false,
+        visualReferenceOverlay: false,
         generateFromSource: false,
         reasons: ['clean paper'],
     })
@@ -220,6 +238,7 @@ beforeEach(() => {
         error: false,
         message: undefined,
     })
+    uploadPdfReferenceSnapshotsMock.mockResolvedValue(new Map())
 })
 
 test('generateAdminTestFromDocument persists per-question evidence and durable import diagnostics', async () => {
@@ -245,7 +264,13 @@ test('generateAdminTestFromDocument persists per-question evidence and durable i
         answerSource: 'ANSWER_KEY',
         confidence: 0.94,
         extractionMode: 'TEXT_EXACT',
+        referenceKind: 'NONE',
+        referenceMode: 'TEXT',
+        referenceTitle: null,
+        referenceAssetUrl: null,
     })
+    expect(prismaMock.questionReference.create).not.toHaveBeenCalled()
+    expect(prismaMock.questionReferenceLink.createMany).not.toHaveBeenCalled()
 
     expect(createCall.data.importDiagnostics).toMatchObject({
         fileName: 'history.docx',
@@ -268,6 +293,177 @@ test('generateAdminTestFromDocument persists per-question evidence and durable i
             }),
         }),
     })
+})
+
+test('generateAdminTestFromDocument persists normalized question references when extracted questions include shared context', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+    const referencedQuestion = createQuestion('Read the following data table and answer.', {
+        sharedContext: 'Table 1: History timeline',
+        sharedContextEvidence: 'Page 2 table',
+        referenceKind: 'TABLE',
+        referenceMode: 'TEXT',
+        referenceTitle: 'History timeline',
+    })
+
+    executeDocumentImportPlanMock.mockResolvedValueOnce({
+        useLegacyFlow: false,
+        strategy: 'EXTRACTED',
+        result: {
+            error: false,
+            message: undefined,
+            questions: [referencedQuestion],
+            failedCount: 0,
+            cost: {
+                model: 'gpt-5.4-mini',
+                inputTokens: 100,
+                outputTokens: 20,
+                costUSD: 0.12,
+            },
+        },
+        extracted: {
+            detectedAsMcqDocument: true,
+            answerHintCount: 1,
+            candidateBlockCount: 1,
+            questions: [referencedQuestion],
+            expectedQuestionCount: 1,
+            exactMatchAchieved: true,
+            invalidQuestionNumbers: [],
+            missingQuestionNumbers: [],
+            duplicateQuestionNumbers: [],
+            aiRepairUsed: false,
+            cost: undefined,
+            error: false,
+            message: undefined,
+        },
+        parserStatus: 'OK',
+        aiFallbackUsed: false,
+        reportParserIssue: false,
+        warning: null,
+        needsAdminReview: false,
+        reviewIssueCount: 0,
+    })
+    enrichGeneratedQuestionsMetadataMock.mockResolvedValueOnce({
+        questions: [referencedQuestion],
+        description: 'Recovered description',
+        aiUsed: false,
+        cost: undefined,
+        warning: undefined,
+    })
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('history-table.docx'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.questionReference.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+            data: expect.objectContaining({
+                testId: 'test-1',
+                kind: 'TABLE',
+                mode: 'TEXT',
+                title: 'History timeline',
+                textContent: 'Table 1: History timeline',
+                sourcePage: 2,
+            }),
+        }),
+    )
+    expect(prismaMock.questionReferenceLink.createMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+            data: [
+                expect.objectContaining({
+                    referenceId: 'reference-1',
+                    questionId: 'question-1',
+                    order: 1,
+                }),
+            ],
+        }),
+    )
+})
+
+test('generateAdminTestFromDocument persists snapshot asset urls for visual references when uploads succeed', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+    const referencedQuestion = createQuestion('Find the missing figure.', {
+        sharedContext: 'Original diagram on page 2',
+        sharedContextEvidence: 'Diagram visible on page 2',
+        referenceKind: 'DIAGRAM',
+        referenceMode: 'SNAPSHOT',
+        referenceTitle: 'Figure completion diagram',
+    })
+
+    executeDocumentImportPlanMock.mockResolvedValueOnce({
+        useLegacyFlow: false,
+        strategy: 'EXTRACTED',
+        result: {
+            error: false,
+            message: undefined,
+            questions: [referencedQuestion],
+            failedCount: 0,
+            cost: {
+                model: 'gpt-5.4-mini',
+                inputTokens: 100,
+                outputTokens: 20,
+                costUSD: 0.12,
+            },
+        },
+        extracted: {
+            detectedAsMcqDocument: true,
+            answerHintCount: 1,
+            candidateBlockCount: 1,
+            questions: [referencedQuestion],
+            expectedQuestionCount: 1,
+            exactMatchAchieved: true,
+            invalidQuestionNumbers: [],
+            missingQuestionNumbers: [],
+            duplicateQuestionNumbers: [],
+            aiRepairUsed: false,
+            cost: undefined,
+            error: false,
+            message: undefined,
+        },
+        parserStatus: 'OK',
+        aiFallbackUsed: false,
+        reportParserIssue: false,
+        warning: null,
+        needsAdminReview: false,
+        reviewIssueCount: 0,
+    })
+    enrichGeneratedQuestionsMetadataMock.mockResolvedValueOnce({
+        questions: [referencedQuestion],
+        description: 'Recovered description',
+        aiUsed: false,
+        cost: undefined,
+        warning: undefined,
+    })
+    uploadPdfReferenceSnapshotsMock.mockResolvedValueOnce(
+        new Map([[2, { assetUrl: 'https://blob.vercel-storage.com/reference.png', bbox: null }]]),
+    )
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('figure.pdf', 'application/pdf'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.questionReference.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+            data: expect.objectContaining({
+                testId: 'test-1',
+                kind: 'DIAGRAM',
+                mode: 'SNAPSHOT',
+                title: 'Figure completion diagram',
+                textContent: 'Original diagram on page 2',
+                sourcePage: 2,
+                assetUrl: 'https://blob.vercel-storage.com/reference.png',
+            }),
+        }),
+    )
 })
 
 test('generateAdminTestFromDocument persists review-required diagnostics to the draft and audit log', async () => {
@@ -439,6 +635,87 @@ test('generateAdminTestFromDocument skips inline AI verification and metadata en
         metadataAiUsed: false,
         extractedQuestions: 50,
         questionsGenerated: 50,
+    })
+})
+
+test('generateAdminTestFromDocument defers PDF reference enrichment out of the critical path when requested', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    const pdfQuestions = [
+        createQuestion('Recovered PDF question stem', {
+            referenceKind: 'DIAGRAM',
+            referenceMode: 'SNAPSHOT',
+            referenceTitle: 'Figure 1',
+        }),
+    ]
+
+    executeDocumentImportPlanMock.mockResolvedValueOnce({
+        useLegacyFlow: false,
+        strategy: 'EXTRACTED',
+        result: {
+            error: false,
+            message: undefined,
+            questions: pdfQuestions,
+            failedCount: 0,
+            cost: {
+                model: 'gpt-5.4',
+                inputTokens: 120,
+                outputTokens: 24,
+                costUSD: 0.18,
+            },
+        },
+        extracted: {
+            detectedAsMcqDocument: true,
+            answerHintCount: 1,
+            candidateBlockCount: 1,
+            questions: pdfQuestions,
+            expectedQuestionCount: 1,
+            exactMatchAchieved: true,
+            invalidQuestionNumbers: [],
+            missingQuestionNumbers: [],
+            duplicateQuestionNumbers: [],
+            aiRepairUsed: false,
+            cost: undefined,
+            error: false,
+            message: undefined,
+        },
+        parserStatus: 'OK',
+        aiFallbackUsed: false,
+        reportParserIssue: false,
+        warning: null,
+        needsAdminReview: false,
+        reviewIssueCount: 0,
+    })
+    enrichGeneratedQuestionsMetadataMock.mockResolvedValueOnce({
+        questions: pdfQuestions,
+        description: 'Recovered PDF description',
+        aiUsed: false,
+        cost: undefined,
+        warning: undefined,
+    })
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('visual.pdf', 'application/pdf'),
+        ipAddress: '127.0.0.1',
+        deferReferenceEnrichment: true,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(executeDocumentImportPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+            deferReferenceEnrichment: true,
+            isPdfUpload: true,
+        }),
+        expect.any(Object),
+    )
+    expect(attachSharedContextsFromPdfMock).not.toHaveBeenCalled()
+    expect(result.importDiagnostics.referenceEnrichmentDeferred).toBe(true)
+    const createCall = prismaMock.test.create.mock.calls.at(-1)?.[0]
+    expect(createCall?.data.importDiagnostics).toMatchObject({
+        referenceEnrichmentDeferred: true,
     })
 })
 

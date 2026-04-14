@@ -35,6 +35,8 @@ export type ImportVerificationOutcome = {
 }
 
 const SHARED_CONTEXT_REFERENCE_PATTERN = /\b(?:following|above|below)\s+(?:table|data|chart|graph|passage|information)\b|\b(?:table|data|chart|graph|passage|information)\s+(?:given|shown|below|above)\b|\blist i\b|\blist ii\b/i
+const VISUAL_REFERENCE_PATTERN = /\b(?:figure|diagram|venn|pattern|mirror image|water image|paper folding|embedded figure|missing figure|complete the figure|figure completion|figure formation|graph|chart|map|triangle|square|circle|cube|shaded region)\b/i
+const VISUAL_BLOCK_PATTERN = /[┌┐└┘├┤┬┴│─╭╮╰╯★☆●○■□▲△◆◇◯◎\\/]{2,}/
 const OPTION_ID_SEQUENCE = ['A', 'B', 'C', 'D']
 const LOW_CONFIDENCE_THRESHOLD = 0.55
 const SUSPICIOUS_ANSWER_SKEW_THRESHOLD = 0.78
@@ -43,6 +45,13 @@ const STEM_SIMILARITY_THRESHOLD = 0.82
 const CROSS_VERIFIER_COUNT_DELTA = 2
 const CROSS_VERIFIER_OVERLAP_THRESHOLD = 0.6
 const VISUAL_GENERIC_STEM_PATTERN = /^(?:find the missing figure|which piece completes the pattern|which option completes the figure|which option completes the pattern|select the correct option\.?|select the figure|choose the figure|which figure)/i
+function isVisualReferenceKind(kind: string | null | undefined): kind is 'DIAGRAM' | 'GRAPH' | 'MAP' {
+    return kind === 'DIAGRAM' || kind === 'GRAPH' || kind === 'MAP'
+}
+
+function isTextBackedReferenceKind(kind: string | null | undefined): kind is 'PASSAGE' | 'TABLE' | 'LIST_MATCH' | 'OTHER' {
+    return kind === 'PASSAGE' || kind === 'TABLE' || kind === 'LIST_MATCH' || kind === 'OTHER'
+}
 
 function normalizeWhitespace(value: string | null | undefined) {
     if (typeof value !== 'string') return ''
@@ -59,6 +68,30 @@ function normalizeStemKey(value: string | null | undefined) {
 function normalizeSharedContextText(value: string | null | undefined) {
     const normalized = normalizeWhitespace(value)
     return normalized.length > 0 ? normalized : null
+}
+
+function looksLikeVisualEvidence(value: string | null | undefined) {
+    const normalized = normalizeWhitespace(value)
+    if (!normalized) {
+        return false
+    }
+
+    return VISUAL_REFERENCE_PATTERN.test(normalized) || VISUAL_BLOCK_PATTERN.test(normalized)
+}
+
+function hasUsableVisualEvidencePayload(values: Array<string | null | undefined>) {
+    return values.some((value) => {
+        const normalized = normalizeWhitespace(value)
+        if (!normalized) {
+            return false
+        }
+
+        if (looksLikeVisualEvidence(normalized) && !isVisualGenericStem(normalized)) {
+            return true
+        }
+
+        return VISUAL_BLOCK_PATTERN.test(normalized)
+    })
 }
 
 function isVisualGenericStem(value: string | null | undefined) {
@@ -389,9 +422,21 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
             continue
         }
 
+        const sharedContext = normalizeSharedContextText(question.sharedContext)
+        const sourceSnippet = normalizeWhitespace(question.sourceSnippet)
+        const sharedContextEvidence = normalizeWhitespace(question.sharedContextEvidence)
+        const referenceKind = question.referenceKind ?? 'NONE'
+        const referenceMode = question.referenceMode ?? null
+        const hasSharedContext = Boolean(sharedContext)
+        const hasVisualEvidence = hasUsableVisualEvidencePayload([
+            question.sharedContext,
+            question.sharedContextEvidence,
+            question.sourceSnippet,
+        ])
+
         if (
             SHARED_CONTEXT_REFERENCE_PATTERN.test(question.stem)
-            && !normalizeSharedContextText(question.sharedContext)
+            && !hasSharedContext
         ) {
             issues.push(
                 createIssue(
@@ -405,7 +450,7 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
             invalidQuestionNumbers.add(questionNumber)
         }
 
-        if (question.extractionMode && question.extractionMode !== 'GENERATE_FROM_SOURCE' && !normalizeWhitespace(question.sourceSnippet)) {
+        if (question.extractionMode && question.extractionMode !== 'GENERATE_FROM_SOURCE' && !sourceSnippet) {
             issues.push(
                 createIssue(
                     questionNumber,
@@ -468,6 +513,101 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                 ),
             )
             invalidQuestionNumbers.add(questionNumber)
+        }
+
+        if (referenceKind !== 'NONE' && !referenceMode) {
+            issues.push(
+                createIssue(
+                    questionNumber,
+                    `Question reference kind ${referenceKind} has no representation mode`,
+                    'EVIDENCE',
+                    'ERROR',
+                    'MISSING_REFERENCE_MODE',
+                ),
+            )
+            invalidQuestionNumbers.add(questionNumber)
+        }
+
+        if (referenceKind === 'NONE' && hasSharedContext) {
+            issues.push(
+                createIssue(
+                    questionNumber,
+                    'Question carries shared reference content but is not classified with a reference kind',
+                    'EVIDENCE',
+                    'WARNING',
+                    'UNCLASSIFIED_REFERENCE',
+                ),
+            )
+        }
+
+        if (
+            referenceKind !== 'NONE'
+            && isTextBackedReferenceKind(referenceKind)
+            && !hasSharedContext
+        ) {
+            issues.push(
+                createIssue(
+                    questionNumber,
+                    `Question reference kind ${referenceKind} requires attached shared context`,
+                    'EVIDENCE',
+                    'ERROR',
+                    'MISSING_REFERENCE_ATTACHMENT',
+                ),
+            )
+            invalidQuestionNumbers.add(questionNumber)
+        }
+
+        if (
+            referenceKind !== 'NONE'
+            && referenceMode === 'SNAPSHOT'
+            && isTextBackedReferenceKind(referenceKind)
+        ) {
+            issues.push(
+                createIssue(
+                    questionNumber,
+                    `Question reference kind ${referenceKind} should not rely on snapshot-only mode`,
+                    'EVIDENCE',
+                    'WARNING',
+                    'REFERENCE_MODE_MISMATCH',
+                ),
+            )
+        }
+
+        if (isVisualReferenceKind(referenceKind)) {
+            if (!hasVisualEvidence) {
+                issues.push(
+                    createIssue(
+                        questionNumber,
+                        `Question reference kind ${referenceKind} is missing any usable visual evidence`,
+                        'EVIDENCE',
+                        'ERROR',
+                        'MISSING_VISUAL_REFERENCE',
+                    ),
+                )
+                invalidQuestionNumbers.add(questionNumber)
+            } else if (referenceMode !== 'SNAPSHOT' && referenceMode !== 'HYBRID') {
+                issues.push(
+                    createIssue(
+                        questionNumber,
+                        `Question reference kind ${referenceKind} should use snapshot-capable mode`,
+                        'EVIDENCE',
+                        'WARNING',
+                        'VISUAL_REFERENCE_MODE_MISMATCH',
+                    ),
+                )
+            }
+
+            if (referenceMode === 'SNAPSHOT' && !hasSharedContext) {
+                issues.push(
+                    createIssue(
+                        questionNumber,
+                        'Visual reference is present but not yet attached as dedicated shared context',
+                        'EVIDENCE',
+                        'WARNING',
+                        'SNAPSHOT_REFERENCE_PENDING',
+                    ),
+                )
+            }
         }
     }
 

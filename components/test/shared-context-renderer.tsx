@@ -1,10 +1,12 @@
 "use client";
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { QuestionReferencePayload } from "@/lib/types/question-reference";
 import { parseSharedContext } from "@/lib/utils/shared-context";
 
 type SharedContextRendererProps = {
-    context: string;
+    context?: string | null;
+    references?: QuestionReferencePayload[] | null;
     title?: string;
     tone?: "indigo" | "emerald" | "slate";
 };
@@ -36,15 +38,153 @@ const TONE_STYLES = {
     },
 } as const;
 
+function normalizeComparableText(value: string) {
+    return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function formatReferenceKind(kind: QuestionReferencePayload["kind"]) {
+    if (kind === "LIST_MATCH") return "List Match";
+    if (kind === "NONE") return "Reference";
+    return kind.charAt(0) + kind.slice(1).toLowerCase();
+}
+
+function getReferenceTitle(reference: QuestionReferencePayload, index: number) {
+    return reference.title?.trim() || `${formatReferenceKind(reference.kind)} ${index + 1}`;
+}
+
+function renderParsedBlocks(
+    text: string,
+    styles: (typeof TONE_STYLES)[keyof typeof TONE_STYLES],
+    keyPrefix: string,
+) {
+    const blocks = parseSharedContext(text);
+
+    return blocks.map((block, blockIndex) => {
+        if (block.type === "paragraph") {
+            return (
+                <div
+                    key={`${keyPrefix}-paragraph-${blockIndex}`}
+                    className={`whitespace-pre-line text-sm leading-7 ${styles.text}`}
+                >
+                    {block.text}
+                </div>
+            );
+        }
+
+        if (block.type === "preformatted") {
+            return (
+                <div
+                    key={`${keyPrefix}-preformatted-${blockIndex}`}
+                    className={`overflow-x-auto rounded-[20px] border ${styles.tableWrap}`}
+                >
+                    <pre className="whitespace-pre-wrap px-4 py-4 font-mono text-xs leading-6 text-slate-700">
+                        {block.text}
+                    </pre>
+                </div>
+            );
+        }
+
+        if (block.type === "table") {
+            const rows = block.rows;
+            const header = block.hasHeader ? rows[0] : null;
+            const bodyRows = block.hasHeader ? rows.slice(1) : rows;
+
+            return (
+                <div
+                    key={`${keyPrefix}-table-${blockIndex}`}
+                    className={`overflow-hidden rounded-[20px] border ${styles.tableWrap}`}
+                >
+                    <Table className="text-sm">
+                        {header ? (
+                            <TableHeader>
+                                <TableRow className="hover:bg-transparent">
+                                    {header.map((cell, cellIndex) => (
+                                        <TableHead
+                                            key={`${keyPrefix}-header-${cellIndex}`}
+                                            className="h-auto whitespace-normal px-3 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-600"
+                                        >
+                                            {cell}
+                                        </TableHead>
+                                    ))}
+                                </TableRow>
+                            </TableHeader>
+                        ) : null}
+                        <TableBody>
+                            {bodyRows.map((row, rowIndex) => (
+                                <TableRow key={`${keyPrefix}-row-${rowIndex}`} className="hover:bg-transparent">
+                                    {row.map((cell, cellIndex) => (
+                                        <TableCell
+                                            key={`${keyPrefix}-cell-${rowIndex}-${cellIndex}`}
+                                            className={`whitespace-normal px-3 py-3 text-sm ${
+                                                cellIndex === 0 ? "font-semibold text-slate-800" : "text-slate-700"
+                                            }`}
+                                        >
+                                            {cell}
+                                        </TableCell>
+                                    ))}
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            );
+        }
+
+        return (
+            <div
+                key={`${keyPrefix}-paired-list-${blockIndex}`}
+                className={`grid gap-4 ${
+                    block.sections.length >= 3 ? "lg:grid-cols-3" : "md:grid-cols-2"
+                }`}
+            >
+                {block.sections.map((section) => (
+                    <div
+                        key={`${keyPrefix}-${section.title}`}
+                        className={`rounded-[20px] border p-4 ${styles.section}`}
+                    >
+                        <div className={`mb-3 text-xs font-semibold uppercase tracking-[0.22em] ${styles.sectionTitle}`}>
+                            {section.title}
+                        </div>
+                        <div className="space-y-2">
+                            {section.items.map((item) => (
+                                <div key={`${keyPrefix}-${section.title}-${item.label}`} className="flex gap-3 text-sm leading-6 text-slate-700">
+                                    <div className="min-w-6 font-semibold uppercase text-slate-500">
+                                        {item.label}
+                                    </div>
+                                    <div>{item.text}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    });
+}
+
 export function SharedContextRenderer({
     context,
+    references,
     title = "Shared Reference",
     tone = "indigo",
 }: SharedContextRendererProps) {
-    const blocks = parseSharedContext(context);
     const styles = TONE_STYLES[tone];
+    const normalizedContext = context?.trim() || "";
+    const normalizedReferences = [...(references ?? [])]
+        .filter((reference) => reference.assetUrl || reference.textContent || reference.title)
+        .sort((left, right) => left.order - right.order);
+    const hasRenderableReferences = normalizedReferences.length > 0;
+    const renderedReferenceText = normalizedReferences
+        .map((reference) => reference.textContent?.trim())
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n");
+    const shouldRenderFallbackContext = Boolean(
+        normalizedContext &&
+            (!hasRenderableReferences ||
+                normalizeComparableText(normalizedContext) !== normalizeComparableText(renderedReferenceText)),
+    );
 
-    if (blocks.length === 0) {
+    if (!hasRenderableReferences && !shouldRenderFallbackContext) {
         return null;
     }
 
@@ -55,107 +195,74 @@ export function SharedContextRenderer({
             </div>
 
             <div className="space-y-4">
-                {blocks.map((block, blockIndex) => {
-                    if (block.type === "paragraph") {
-                        return (
-                            <div
-                                key={`paragraph-${blockIndex}`}
-                                className={`whitespace-pre-line text-sm leading-7 ${styles.text}`}
-                            >
-                                {block.text}
-                            </div>
-                        );
-                    }
-
-                    if (block.type === "preformatted") {
-                        return (
-                            <div
-                                key={`preformatted-${blockIndex}`}
-                                className={`overflow-x-auto rounded-[20px] border ${styles.tableWrap}`}
-                            >
-                                <pre className="whitespace-pre-wrap px-4 py-4 font-mono text-xs leading-6 text-slate-700">
-                                    {block.text}
-                                </pre>
-                            </div>
-                        );
-                    }
-
-                    if (block.type === "table") {
-                        const rows = block.rows;
-                        const header = block.hasHeader ? rows[0] : null;
-                        const bodyRows = block.hasHeader ? rows.slice(1) : rows;
-
-                        return (
-                            <div
-                                key={`table-${blockIndex}`}
-                                className={`overflow-hidden rounded-[20px] border ${styles.tableWrap}`}
-                            >
-                                <Table className="text-sm">
-                                    {header ? (
-                                        <TableHeader>
-                                            <TableRow className="hover:bg-transparent">
-                                                {header.map((cell, cellIndex) => (
-                                                    <TableHead
-                                                        key={`header-${cellIndex}`}
-                                                        className="h-auto whitespace-normal px-3 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-600"
-                                                    >
-                                                        {cell}
-                                                    </TableHead>
-                                                ))}
-                                            </TableRow>
-                                        </TableHeader>
-                                    ) : null}
-                                    <TableBody>
-                                        {bodyRows.map((row, rowIndex) => (
-                                            <TableRow key={`row-${rowIndex}`} className="hover:bg-transparent">
-                                                {row.map((cell, cellIndex) => (
-                                                    <TableCell
-                                                        key={`cell-${rowIndex}-${cellIndex}`}
-                                                        className={`whitespace-normal px-3 py-3 text-sm ${
-                                                            cellIndex === 0 ? "font-semibold text-slate-800" : "text-slate-700"
-                                                        }`}
-                                                    >
-                                                        {cell}
-                                                    </TableCell>
-                                                ))}
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
-                        );
-                    }
+                {normalizedReferences.map((reference, referenceIndex) => {
+                    const hasImage = Boolean(reference.assetUrl);
+                    const hasText = Boolean(reference.textContent?.trim());
+                    const shouldShowImage = reference.mode !== "TEXT";
+                    const shouldShowText = reference.mode !== "SNAPSHOT" || !hasImage;
 
                     return (
-                        <div
-                            key={`paired-list-${blockIndex}`}
-                            className={`grid gap-4 ${
-                                block.sections.length >= 3 ? "lg:grid-cols-3" : "md:grid-cols-2"
-                            }`}
-                        >
-                            {block.sections.map((section) => (
-                                <div
-                                    key={section.title}
-                                    className={`rounded-[20px] border p-4 ${styles.section}`}
-                                >
-                                    <div className={`mb-3 text-xs font-semibold uppercase tracking-[0.22em] ${styles.sectionTitle}`}>
-                                        {section.title}
-                                    </div>
-                                    <div className="space-y-2">
-                                        {section.items.map((item) => (
-                                            <div key={`${section.title}-${item.label}`} className="flex gap-3 text-sm leading-6 text-slate-700">
-                                                <div className="min-w-6 font-semibold uppercase text-slate-500">
-                                                    {item.label}
-                                                </div>
-                                                <div>{item.text}</div>
-                                            </div>
-                                        ))}
-                                    </div>
+                        <div key={reference.id} className="space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <div className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${styles.sectionTitle}`}>
+                                    {getReferenceTitle(reference, referenceIndex)}
                                 </div>
-                            ))}
+                                <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
+                                    {reference.mode}
+                                </div>
+                                <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
+                                    {formatReferenceKind(reference.kind)}
+                                </div>
+                                {reference.sourcePage ? (
+                                    <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
+                                        Page {reference.sourcePage}
+                                    </div>
+                                ) : null}
+                                {typeof reference.confidence === "number" ? (
+                                    <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
+                                        {Math.round(reference.confidence * 100)}% confidence
+                                    </div>
+                                ) : null}
+                            </div>
+
+                            {shouldShowImage ? (
+                                hasImage ? (
+                                    <div className={`overflow-hidden rounded-[20px] border ${styles.tableWrap}`}>
+                                        <img
+                                            src={reference.assetUrl as string}
+                                            alt={reference.title || "Question reference snapshot"}
+                                            className="max-h-[420px] w-full object-contain bg-white"
+                                            loading="lazy"
+                                        />
+                                    </div>
+                                ) : (
+                                    <div className={`rounded-[20px] border border-dashed px-4 py-4 text-sm ${styles.text}`}>
+                                        Snapshot reference is expected for this question, but no image asset is available yet.
+                                    </div>
+                                )
+                            ) : null}
+
+                            {hasText && shouldShowText ? (
+                                <div className="space-y-4">
+                                    {renderParsedBlocks(reference.textContent as string, styles, `reference-${reference.id}`)}
+                                </div>
+                            ) : null}
                         </div>
                     );
                 })}
+
+                {shouldRenderFallbackContext ? (
+                    <div className="space-y-3">
+                        {hasRenderableReferences ? (
+                            <div className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${styles.sectionTitle}`}>
+                                Shared Context
+                            </div>
+                        ) : null}
+                        <div className="space-y-4">
+                            {renderParsedBlocks(normalizedContext, styles, "fallback")}
+                        </div>
+                    </div>
+                ) : null}
             </div>
         </div>
     );

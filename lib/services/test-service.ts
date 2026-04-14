@@ -1,7 +1,17 @@
-import { BatchKind, Difficulty, Prisma, Role, SessionStatus, TestStatus } from '@prisma/client'
+import {
+    BatchKind,
+    Difficulty,
+    Prisma,
+    QuestionReferenceKind,
+    QuestionReferenceMode,
+    Role,
+    SessionStatus,
+    TestStatus,
+} from '@prisma/client'
 
 import { FREE_BATCH_KIND, STANDARD_BATCH_KIND } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
+import { uploadPdfReferenceSnapshots } from '@/lib/storage/reference-snapshots'
 import {
     attachSharedContextsFromPdf,
     enrichGeneratedQuestionsMetadata,
@@ -16,15 +26,25 @@ import {
     verifyExtractedQuestionsWithAI,
 } from '@/lib/services/ai-service'
 import type { VerificationResult } from '@/lib/services/ai-extraction-schemas'
+import type { GeneratedQuestion } from '@/lib/services/ai-service.types'
 import { mergeAIVerificationIssues, resolveImportVerificationOutcome } from '@/lib/services/import-verifier'
 import type { DocumentClassificationResult } from '@/lib/services/document-classifier'
 import { classifyDocumentForImport } from '@/lib/services/document-classifier'
-import { executeDocumentImportPlan } from '@/lib/services/document-import-executor'
+import {
+    executeDocumentImportPlan,
+    mergeVisualReferencesIntoQuestions,
+} from '@/lib/services/document-import-executor'
 import {
     isClassifierRoutingEnabled,
+    type DocumentImportLane,
     type DocumentImportRoutingMode,
     resolveDocumentImportPlan,
 } from '@/lib/services/document-import-strategy'
+import { annotateQuestionsWithReferencePolicy } from '@/lib/services/reference-classifier'
+import {
+    mapQuestionReferences,
+    QUESTION_REFERENCE_LINK_SELECT,
+} from '@/lib/utils/question-references'
 import { getTestSearchTokens } from '@/lib/utils/test-search'
 import { resolveTestSettings } from '@/lib/utils/test-settings'
 import type {
@@ -102,6 +122,20 @@ type AdminDocumentGenerationInput = {
     title?: string | null
     requestedCount?: number | null
     ipAddress?: string | null
+    deferReferenceEnrichment?: boolean | null
+    onProgress?: ((update: DocumentImportProgressUpdate) => Promise<void>) | null
+}
+
+type DocumentImportProgressUpdate = {
+    stage: 'PROCESSING_CLASSIFICATION' | 'PROCESSING_EXACT' | 'VERIFYING' | 'CREATING_DRAFT'
+    message: string
+    progressMessage?: string | null
+    lane?: DocumentImportLane
+    routingMode?: DocumentImportRoutingMode
+    selectedStrategy?: DocumentClassificationResult['preferredStrategy']
+    resultStrategy?: 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
+    decision?: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+    tokenCostUsd?: number | null
 }
 
 type DocumentImportDiagnostics = {
@@ -111,12 +145,14 @@ type DocumentImportDiagnostics = {
     warning: string | null
     decision?: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
     failureReason?: string | null
+    lane?: DocumentImportLane
     classification?: DocumentClassificationResult
     routingMode?: DocumentImportRoutingMode
     selectedStrategy?: DocumentClassificationResult['preferredStrategy']
     reviewRequired?: boolean
     reviewIssueCount?: number
     metadataAiUsed?: boolean
+    referenceEnrichmentDeferred?: boolean
 }
 
 type QuestionImportEvidencePayload = {
@@ -126,6 +162,22 @@ type QuestionImportEvidencePayload = {
     answerSource: string | null
     confidence: number | null
     extractionMode: string | null
+    referenceKind: string | null
+    referenceMode: string | null
+    referenceTitle: string | null
+    referenceAssetUrl: string | null
+}
+
+type PersistedQuestionReferencePayload = {
+    kind: QuestionReferenceKind
+    mode: QuestionReferenceMode
+    title: string | null
+    textContent: string | null
+    assetUrl: string | null
+    sourcePage: number | null
+    bbox: Prisma.InputJsonValue | null
+    confidence: number | null
+    evidence: Prisma.InputJsonValue | null
 }
 
 type TestImportDiagnosticsPayload = DocumentImportDiagnostics & {
@@ -242,6 +294,10 @@ function buildQuestionImportEvidence(question: {
     answerSource?: string | null
     confidence?: number | null
     extractionMode?: string | null
+    referenceKind?: string | null
+    referenceMode?: string | null
+    referenceTitle?: string | null
+    referenceAssetUrl?: string | null
 }): Prisma.InputJsonValue {
     const payload: QuestionImportEvidencePayload = {
         sourcePage: question.sourcePage ?? null,
@@ -250,9 +306,196 @@ function buildQuestionImportEvidence(question: {
         answerSource: question.answerSource ?? null,
         confidence: question.confidence ?? null,
         extractionMode: question.extractionMode ?? null,
+        referenceKind: question.referenceKind ?? null,
+        referenceMode: question.referenceMode ?? null,
+        referenceTitle: question.referenceTitle ?? null,
+        referenceAssetUrl: question.referenceAssetUrl ?? null,
     }
 
     return payload as Prisma.InputJsonValue
+}
+
+function parseQuestionImportEvidence(
+    value: Prisma.JsonValue | null | undefined,
+): Partial<QuestionImportEvidencePayload> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {}
+    }
+
+    const record = value as Record<string, unknown>
+    return {
+        sourcePage: typeof record.sourcePage === 'number' ? record.sourcePage : null,
+        sourceSnippet: typeof record.sourceSnippet === 'string' ? record.sourceSnippet : null,
+        sharedContextEvidence: typeof record.sharedContextEvidence === 'string' ? record.sharedContextEvidence : null,
+        answerSource: typeof record.answerSource === 'string' ? record.answerSource : null,
+        confidence: typeof record.confidence === 'number' ? record.confidence : null,
+        extractionMode: typeof record.extractionMode === 'string' ? record.extractionMode : null,
+        referenceKind: typeof record.referenceKind === 'string' ? record.referenceKind : null,
+        referenceMode: typeof record.referenceMode === 'string' ? record.referenceMode : null,
+        referenceTitle: typeof record.referenceTitle === 'string' ? record.referenceTitle : null,
+        referenceAssetUrl: typeof record.referenceAssetUrl === 'string' ? record.referenceAssetUrl : null,
+    }
+}
+
+function buildQuestionReferenceEvidence(question: {
+    sourceSnippet?: string | null
+    sharedContextEvidence?: string | null
+    answerSource?: string | null
+    confidence?: number | null
+    extractionMode?: string | null
+    referenceKind?: string | null
+    referenceMode?: string | null
+    referenceTitle?: string | null
+}): Prisma.InputJsonValue | null {
+    const payload = {
+        sourceSnippet: question.sourceSnippet ?? null,
+        sharedContextEvidence: question.sharedContextEvidence ?? null,
+        answerSource: question.answerSource ?? null,
+        confidence: question.confidence ?? null,
+        extractionMode: question.extractionMode ?? null,
+        referenceKind: question.referenceKind ?? null,
+        referenceMode: question.referenceMode ?? null,
+        referenceTitle: question.referenceTitle ?? null,
+    }
+
+    if (!Object.values(payload).some((value) => value !== null)) {
+        return null
+    }
+
+    return payload as Prisma.InputJsonValue
+}
+
+function buildPersistedQuestionReferencePayload(question: {
+    sharedContext?: string | null
+    sourcePage?: number | null
+    confidence?: number | null
+    referenceKind?: string | null
+    referenceMode?: string | null
+    referenceTitle?: string | null
+    referenceAssetUrl?: string | null
+    referenceBBox?: unknown | null
+    sourceSnippet?: string | null
+    sharedContextEvidence?: string | null
+    answerSource?: string | null
+    extractionMode?: string | null
+}): PersistedQuestionReferencePayload | null {
+    const kind = (question.referenceKind ?? 'NONE') as QuestionReferenceKind
+    const mode = (question.referenceMode ?? 'TEXT') as QuestionReferenceMode
+    const textContent = question.sharedContext?.trim() || null
+    const title = question.referenceTitle?.trim() || null
+    const evidence = buildQuestionReferenceEvidence(question)
+    const hasMeaningfulReference = kind !== 'NONE' || Boolean(textContent) || Boolean(title)
+
+    if (!hasMeaningfulReference) {
+        return null
+    }
+
+    return {
+        kind,
+        mode,
+        title,
+        textContent,
+        assetUrl: question.referenceAssetUrl ?? null,
+        sourcePage: question.sourcePage ?? null,
+        bbox: (question.referenceBBox ?? null) as Prisma.InputJsonValue | null,
+        confidence: question.confidence ?? null,
+        evidence,
+    }
+}
+
+async function persistImportedQuestionReferences(input: {
+    testId: string
+    questions: Array<{
+        order: number
+        sharedContext?: string | null
+        sourcePage?: number | null
+        confidence?: number | null
+        referenceKind?: string | null
+        referenceMode?: string | null
+        referenceTitle?: string | null
+        referenceAssetUrl?: string | null
+        referenceBBox?: unknown | null
+        sourceSnippet?: string | null
+        sharedContextEvidence?: string | null
+        answerSource?: string | null
+        extractionMode?: string | null
+    }>
+    persistedQuestions: Array<{ id: string; order: number }>
+    tx?: Prisma.TransactionClient
+}) {
+    const questionIdByOrder = new Map(input.persistedQuestions.map((question) => [question.order, question.id]))
+    const groupedReferences = new Map<string, PersistedQuestionReferencePayload & { questionIds: string[] }>()
+
+    for (const question of input.questions) {
+        const questionId = questionIdByOrder.get(question.order)
+        if (!questionId) {
+            continue
+        }
+
+        const payload = buildPersistedQuestionReferencePayload(question)
+        if (!payload) {
+            continue
+        }
+
+        const referenceKey = JSON.stringify({
+            kind: payload.kind,
+            mode: payload.mode,
+            title: payload.title,
+            textContent: payload.textContent,
+            sourcePage: payload.sourcePage,
+        })
+        const existing = groupedReferences.get(referenceKey)
+        if (existing) {
+            existing.questionIds.push(questionId)
+            continue
+        }
+
+        groupedReferences.set(referenceKey, {
+            ...payload,
+            questionIds: [questionId],
+        })
+    }
+
+    if (groupedReferences.size === 0) {
+        return
+    }
+
+    const persistWithClient = async (tx: Prisma.TransactionClient) => {
+        for (const reference of groupedReferences.values()) {
+            const createdReference = await tx.questionReference.create({
+                data: {
+                    testId: input.testId,
+                    kind: reference.kind,
+                    mode: reference.mode,
+                    title: reference.title,
+                    textContent: reference.textContent,
+                    assetUrl: reference.assetUrl,
+                    sourcePage: reference.sourcePage,
+                    bbox: reference.bbox ?? Prisma.JsonNull,
+                    confidence: reference.confidence,
+                    evidence: reference.evidence ?? Prisma.JsonNull,
+                },
+                select: { id: true },
+            })
+
+            await tx.questionReferenceLink.createMany({
+                data: reference.questionIds.map((questionId, index) => ({
+                    referenceId: createdReference.id,
+                    questionId,
+                    order: index + 1,
+                })),
+            })
+        }
+    }
+
+    if (input.tx) {
+        await persistWithClient(input.tx)
+        return
+    }
+
+    await prisma.$transaction(async (tx) => {
+        await persistWithClient(tx)
+    })
 }
 
 function buildTestImportDiagnosticsPayload(input: TestImportDiagnosticsPayload): Prisma.InputJsonValue {
@@ -326,6 +569,168 @@ function buildFallbackMetadataEnrichment(
         primaryTopic,
         difficultyDistribution: buildFallbackDifficultyDistribution(questions),
         aiUsed: false,
+    }
+}
+
+export async function enrichImportedTestReferencesAfterDraft(input: {
+    adminId: string
+    testId: string
+    file: File
+    fileName: string
+}) {
+    const admin = await ensureActiveAdmin(input.adminId)
+    if ('error' in admin) {
+        return admin
+    }
+
+    const existingTest = await prisma.test.findUnique({
+        where: { id: input.testId },
+        select: {
+            id: true,
+            createdById: true,
+            questions: {
+                orderBy: { order: 'asc' },
+                select: {
+                    id: true,
+                    order: true,
+                    stem: true,
+                    sharedContext: true,
+                    importEvidence: true,
+                    options: true,
+                    explanation: true,
+                    difficulty: true,
+                    topic: true,
+                },
+            },
+        },
+    })
+
+    if (!existingTest) {
+        return serviceError('NOT_FOUND', 'Generated draft not found for reference enrichment.')
+    }
+
+    if (existingTest.createdById !== admin.id && admin.role !== Role.ADMIN) {
+        return serviceError('FORBIDDEN', 'You can only enrich references for your own generated drafts.')
+    }
+
+    const baseQuestions: GeneratedQuestion[] = existingTest.questions.map((question) => {
+        const evidence = parseQuestionImportEvidence(question.importEvidence)
+        return {
+            stem: question.stem,
+            sharedContext: question.sharedContext ?? null,
+            options: Array.isArray(question.options)
+                ? question.options as GeneratedQuestion['options']
+                : [],
+            explanation: question.explanation ?? '',
+            difficulty: question.difficulty,
+            topic: question.topic ?? '',
+            sourcePage: evidence.sourcePage ?? null,
+            sourceSnippet: evidence.sourceSnippet ?? null,
+            answerSource: (evidence.answerSource ?? null) as GeneratedQuestion['answerSource'],
+            confidence: evidence.confidence ?? null,
+            sharedContextEvidence: evidence.sharedContextEvidence ?? null,
+            extractionMode: (evidence.extractionMode ?? null) as GeneratedQuestion['extractionMode'],
+            referenceKind: (evidence.referenceKind ?? null) as GeneratedQuestion['referenceKind'],
+            referenceMode: (evidence.referenceMode ?? null) as GeneratedQuestion['referenceMode'],
+            referenceTitle: (evidence.referenceTitle ?? null) as GeneratedQuestion['referenceTitle'],
+            referenceAssetUrl: evidence.referenceAssetUrl ?? null,
+        }
+    })
+
+    const buffer = Buffer.from(await input.file.arrayBuffer())
+    let enrichedQuestions = baseQuestions
+
+    try {
+        enrichedQuestions = annotateQuestionsWithReferencePolicy(
+            await attachSharedContextsFromPdf(buffer, enrichedQuestions),
+        )
+    } catch (error) {
+        console.warn('[AI-DOC][ADMIN] Deferred shared-context enrichment failed:', error)
+    }
+
+    try {
+        const visualReferences = await extractVisualReferencesFromPdfImages(
+            buffer,
+            admin.id,
+            input.fileName,
+        )
+        if (!visualReferences.error && visualReferences.references && visualReferences.references.length > 0) {
+            enrichedQuestions = annotateQuestionsWithReferencePolicy(
+                mergeVisualReferencesIntoQuestions(enrichedQuestions, visualReferences.references),
+            )
+        }
+    } catch (error) {
+        console.warn('[AI-DOC][ADMIN] Deferred visual-reference enrichment failed:', error)
+    }
+
+    try {
+        const uploadedSnapshots = await uploadPdfReferenceSnapshots({
+            buffer,
+            fileName: input.fileName,
+            testId: existingTest.id,
+            questions: enrichedQuestions,
+        })
+        if (uploadedSnapshots.size > 0) {
+            enrichedQuestions = enrichedQuestions.map((question) => {
+                const snapshotAsset = Number.isInteger(question.sourcePage)
+                    ? uploadedSnapshots.get(Number(question.sourcePage))
+                    : undefined
+
+                if (!snapshotAsset) {
+                    return question
+                }
+
+                return {
+                    ...question,
+                    referenceAssetUrl: snapshotAsset.assetUrl,
+                    referenceBBox: snapshotAsset.bbox,
+                }
+            })
+        }
+    } catch (error) {
+        console.warn('[AI-DOC][ADMIN] Deferred snapshot upload failed:', error)
+    }
+
+    await prisma.$transaction(async (tx) => {
+        for (const question of existingTest.questions) {
+            const enriched = enrichedQuestions[question.order - 1]
+            if (!enriched) {
+                continue
+            }
+
+            await tx.question.update({
+                where: { id: question.id },
+                data: {
+                    sharedContext: enriched.sharedContext ?? null,
+                    importEvidence: buildQuestionImportEvidence(enriched),
+                },
+            })
+        }
+
+        await tx.questionReference.deleteMany({
+            where: { testId: existingTest.id },
+        })
+
+        await persistImportedQuestionReferences({
+            testId: existingTest.id,
+            questions: enrichedQuestions.map((question, index) => ({
+                ...question,
+                order: index + 1,
+            })),
+            persistedQuestions: existingTest.questions.map((question) => ({
+                id: question.id,
+                order: question.order,
+            })),
+            tx,
+        })
+    })
+
+    return {
+        testId: existingTest.id,
+        updatedQuestionCount: enrichedQuestions.length,
+        enrichedReferenceCount: enrichedQuestions.filter((question) =>
+            Boolean(question.sharedContext || question.referenceKind && question.referenceKind !== 'NONE'),
+        ).length,
     }
 }
 
@@ -994,10 +1399,19 @@ export async function getAdminQuestions(testId: string) {
             explanation: true,
             difficulty: true,
             topic: true,
+            referenceLinks: {
+                orderBy: { order: 'asc' },
+                select: QUESTION_REFERENCE_LINK_SELECT,
+            },
         },
     })
 
-    return { questions }
+    return {
+        questions: questions.map((question) => ({
+            ...question,
+            references: mapQuestionReferences(question.referenceLinks),
+        })),
+    }
 }
 
 export async function addAdminQuestion(adminId: string, testId: string, data: CreateQuestionInput) {
@@ -1049,7 +1463,12 @@ export async function addAdminQuestion(adminId: string, testId: string, data: Cr
         },
     })
 
-    return { question }
+    return {
+        question: {
+            ...question,
+            references: [],
+        },
+    }
 }
 
 export async function updateAdminQuestion(
@@ -1122,7 +1541,12 @@ export async function updateAdminQuestion(
         },
     })
 
-    return { question }
+    return {
+        question: {
+            ...question,
+            references: [],
+        },
+    }
 }
 
 export async function deleteAdminQuestion(adminId: string, testId: string, questionId: string) {
@@ -1255,6 +1679,9 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     }
 
     const buffer = Buffer.from(await input.file.arrayBuffer())
+    const reportProgress = async (update: DocumentImportProgressUpdate) => {
+        await input.onProgress?.(update)
+    }
     let text = ''
     let parseError: unknown = null
     let importDiagnostics: DocumentImportDiagnostics = {
@@ -1295,11 +1722,13 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     }
 
     const isPdfUpload = uploadValidation.sanitizedFileName.toLowerCase().endsWith('.pdf')
+    const shouldDeferReferenceEnrichment = Boolean(input.deferReferenceEnrichment && isPdfUpload)
     const importPlan = resolveDocumentImportPlan({
         classifierRoutingEnabled: isClassifierRoutingEnabled(),
         classification: importDiagnostics.classification,
         isPdfUpload,
     })
+    importDiagnostics.lane = importPlan.lane
     const preferChunkedPdfExtraction = shouldPreferChunkedPdfExtraction({
         isPdfUpload,
         plan: importPlan,
@@ -1318,11 +1747,28 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     importDiagnostics.routingMode = importPlan.routingMode
     importDiagnostics.selectedStrategy = importPlan.selectedStrategy
 
+    await reportProgress({
+        stage: 'PROCESSING_CLASSIFICATION',
+        message: 'Import classified. Choosing the safest extraction lane.',
+        progressMessage: `Lane ${importPlan.lane.toLowerCase()} selected via ${importPlan.routingMode.toLowerCase()} routing.`,
+        lane: importPlan.lane,
+        routingMode: importPlan.routingMode,
+        selectedStrategy: importPlan.selectedStrategy,
+    })
+
     let needsAdminReview = false
     let reviewIssueCount = 0
 
     let strategy: 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
     let result: DocumentGenerationResult
+    await reportProgress({
+        stage: 'PROCESSING_EXACT',
+        message: 'Running document extraction and reconciliation.',
+        progressMessage: `Executing ${importPlan.selectedStrategy.toLowerCase()} in the ${importPlan.lane.toLowerCase()} lane.`,
+        lane: importPlan.lane,
+        routingMode: importPlan.routingMode,
+        selectedStrategy: importPlan.selectedStrategy,
+    })
     const dispatched = await executeDocumentImportPlan(
         {
             plan: importPlan,
@@ -1330,6 +1776,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             textLength: text.length,
             parseFailed: Boolean(parseError),
             generationTarget: effectiveGenerationTarget,
+            deferReferenceEnrichment: shouldDeferReferenceEnrichment,
         },
         {
             extractTextExact: async () => {
@@ -1597,12 +2044,12 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     if (isPdfUpload && text.length >= 50 && strategy !== 'AI_GENERATED') {
         const reconciledAnswers = reconcileGeneratedQuestionsWithTextAnswerHints(result.questions, text)
         if (reconciledAnswers.repairedCount > 0) {
-            result.questions = reconciledAnswers.questions
+            result.questions = annotateQuestionsWithReferencePolicy(reconciledAnswers.questions)
             importDiagnostics.warning = importDiagnostics.warning
                 ? `${importDiagnostics.warning} Reconciled ${reconciledAnswers.repairedCount} question answer(s) from the PDF text layer.`
                 : `Reconciled ${reconciledAnswers.repairedCount} question answer(s) from the PDF text layer.`
         } else {
-            result.questions = reconciledAnswers.questions
+            result.questions = annotateQuestionsWithReferencePolicy(reconciledAnswers.questions)
         }
     }
 
@@ -1681,12 +2128,29 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     }
     importDiagnostics.decision = importDecision.decision
     importDiagnostics.failureReason = importDecision.message
+    importDiagnostics.referenceEnrichmentDeferred = shouldDeferReferenceEnrichment
+
+    await reportProgress({
+        stage: 'VERIFYING',
+        message: 'Verification complete. Preparing the draft result.',
+        progressMessage: importDecision.message
+            ? `${importDecision.message} Finalizing the draft payload.`
+            : 'Verification completed. Finalizing the draft payload.',
+        lane: importPlan.lane,
+        routingMode: importPlan.routingMode,
+        selectedStrategy: importPlan.selectedStrategy,
+        resultStrategy: strategy,
+        decision: importDecision.decision,
+        tokenCostUsd: result.cost?.costUSD ?? null,
+    })
 
     const baseTitle = uploadValidation.sanitizedFileName.replace(/\.(docx|pdf)$/i, '')
     let questionsWithSharedContext = result.questions
-    if (isPdfUpload) {
+    if (isPdfUpload && !shouldDeferReferenceEnrichment) {
         try {
-            questionsWithSharedContext = await attachSharedContextsFromPdf(buffer, result.questions)
+            questionsWithSharedContext = annotateQuestionsWithReferencePolicy(
+                await attachSharedContextsFromPdf(buffer, result.questions),
+            )
         } catch (error) {
             console.warn('[AI-DOC][ADMIN] Could not attach shared PDF context:', error)
         }
@@ -1701,7 +2165,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             questionsWithSharedContext,
             uploadValidation.sanitizedFileName,
         )
-    const finalQuestions = metadataEnrichment.questions
+    const finalQuestions = annotateQuestionsWithReferencePolicy(metadataEnrichment.questions)
     const finalDescription = metadataEnrichment.description
     const testTitle = input.title?.trim()
         || metadataEnrichment.suggestedTitle
@@ -1716,7 +2180,21 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             : metadataEnrichment.warning
     }
 
-    const test = await prisma.test.create({
+    await reportProgress({
+        stage: 'CREATING_DRAFT',
+        message: 'Creating the draft test in the database.',
+        progressMessage: shouldDeferReferenceEnrichment
+            ? 'Draft creation is running now. Reference enrichment will continue in the background.'
+            : 'Draft creation is running now.',
+        lane: importPlan.lane,
+        routingMode: importPlan.routingMode,
+        selectedStrategy: importPlan.selectedStrategy,
+        resultStrategy: strategy,
+        decision: importDecision.decision,
+        tokenCostUsd: (result.cost?.costUSD || 0) + (metadataEnrichment.cost?.costUSD || 0),
+    })
+
+    const createdTest = await prisma.test.create({
         data: {
             createdById: admin.id,
             title: testTitle,
@@ -1765,8 +2243,64 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             id: true,
             title: true,
             reviewStatus: true,
+            questions: {
+                select: {
+                    id: true,
+                    order: true,
+                },
+            },
         },
     })
+
+    let finalQuestionsWithAssets = finalQuestions
+    if (isPdfUpload && !shouldDeferReferenceEnrichment) {
+        try {
+            const uploadedSnapshots = await uploadPdfReferenceSnapshots({
+                buffer,
+                fileName: uploadValidation.sanitizedFileName,
+                testId: createdTest.id,
+                questions: finalQuestions,
+            })
+            if (uploadedSnapshots.size > 0) {
+                finalQuestionsWithAssets = finalQuestions.map((question) => {
+                    const snapshotAsset = Number.isInteger(question.sourcePage)
+                        ? uploadedSnapshots.get(Number(question.sourcePage))
+                        : undefined
+
+                    if (!snapshotAsset) {
+                        return question
+                    }
+
+                    return {
+                        ...question,
+                        referenceAssetUrl: snapshotAsset.assetUrl,
+                        referenceBBox: snapshotAsset.bbox,
+                    }
+                })
+            }
+        } catch (error) {
+            console.warn('[AI-DOC][ADMIN] Failed to upload inline reference snapshots:', error)
+        }
+    }
+
+    try {
+        await persistImportedQuestionReferences({
+            testId: createdTest.id,
+            questions: finalQuestionsWithAssets.map((question, index) => ({
+                ...question,
+                order: index + 1,
+            })),
+            persistedQuestions: createdTest.questions,
+        })
+    } catch (error) {
+        console.warn('[AI-DOC][ADMIN] Failed to persist normalized question references:', error)
+    }
+
+    const test = {
+        id: createdTest.id,
+        title: createdTest.title,
+        reviewStatus: createdTest.reviewStatus,
+    }
 
     await prisma.auditLog.create({
         data: {

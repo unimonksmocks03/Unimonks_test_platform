@@ -30,7 +30,7 @@ function baseVerificationResult(): VerificationResult {
     }
 }
 
-function createQuestion(stem: string): GeneratedQuestion {
+function createQuestion(stem: string, overrides: Partial<GeneratedQuestion> = {}): GeneratedQuestion {
     return {
         stem,
         options: [
@@ -46,6 +46,7 @@ function createQuestion(stem: string): GeneratedQuestion {
         answerSource: 'ANSWER_KEY',
         sourceSnippet: stem,
         confidence: 0.98,
+        ...overrides,
     }
 }
 
@@ -381,6 +382,40 @@ test('executeDocumentImportPlan does not run a second visual overlay after multi
     expect(extractVisualReferences).not.toHaveBeenCalled()
 })
 
+test('executeDocumentImportPlan skips visual overlay entirely when reference enrichment is deferred', async () => {
+    const extractVisualReferences = vi.fn()
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: true,
+                generateFromSource: false,
+                reasons: ['visual pdf with strong text'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+            deferReferenceEnrichment: true,
+        },
+        createHandlers({
+            extractTextExact: vi.fn().mockResolvedValue(createExactExtraction({
+                questions: [createQuestion('Exact visual question')],
+            })),
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('EXTRACTED')
+    expect(outcome.result?.questions).toHaveLength(1)
+    expect(extractVisualReferences).not.toHaveBeenCalled()
+})
+
 test('executeDocumentImportPlan returns exact questions even when visual reference extraction times out', async () => {
     vi.useFakeTimers()
 
@@ -417,6 +452,52 @@ test('executeDocumentImportPlan returns exact questions even when visual referen
     expect(outcome.result?.questions).toHaveLength(1)
     expect(outcome.warning).toContain('visual-reference extraction')
     expect(outcome.needsAdminReview).toBe(true)
+})
+
+test('executeDocumentImportPlan skips visual overlay when recovered exact extraction already carries figure context', async () => {
+    const extractVisualReferences = vi.fn()
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: true,
+                generateFromSource: false,
+                reasons: ['diagram-heavy pdf with strong OCR'],
+            },
+            isPdfUpload: true,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact: vi.fn().mockResolvedValue(createExactExtraction({
+                questions: [
+                    createQuestion('Q1. Find the missing figure: /\\ /\\ -- ? --', {
+                        sourceSnippet: 'Find the missing figure /\\ /\\ -- ? --',
+                    }),
+                    createQuestion('Q2. Study the Venn diagram and answer.', {
+                        sharedContext: 'Set A overlaps Set B with shaded circle markers.',
+                    }),
+                    createQuestion('Q3. Count the triangles in the following figure /\\/\\/', {
+                        sourceSnippet: 'Count the triangles in the following figure /\\/\\/',
+                    }),
+                ],
+                expectedQuestionCount: 3,
+                candidateBlockCount: 3,
+                answerHintCount: 3,
+            })),
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('EXTRACTED')
+    expect(extractVisualReferences).not.toHaveBeenCalled()
+    expect(outcome.warning).toContain('skipped additional diagram extraction')
 })
 
 test('executeDocumentImportPlan falls back to exact extraction after multimodal failure', async () => {

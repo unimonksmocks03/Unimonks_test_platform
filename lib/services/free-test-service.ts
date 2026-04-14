@@ -12,6 +12,11 @@ import {
     getCorrectOptionId,
     resolveTestSettings,
 } from '@/lib/utils/test-settings'
+import {
+    mapQuestionReferences,
+    QUESTION_REFERENCE_LINK_SELECT,
+    type QuestionReferenceView,
+} from '@/lib/utils/question-references'
 
 const COMPLETED_SESSION_STATUSES: SessionStatus[] = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED']
 const SUBMISSION_GRACE_PERIOD_MS = 30 * 1000
@@ -102,6 +107,7 @@ export type PublicFreeSessionPayload = {
         order: number
         stem: string
         sharedContext: string | null
+        references: QuestionReferenceView[]
         options: SafeQuestionOption[]
         difficulty: string
         topic: string | null
@@ -141,6 +147,7 @@ export type PublicFreeResultPayload = {
         order: number
         stem: string
         sharedContext: string | null
+        references: QuestionReferenceView[]
         difficulty: string
         topic: string | null
         explanation: string | null
@@ -276,6 +283,7 @@ function stripCorrectAnswers(
         order: number
         stem: string
         sharedContext: string | null
+        referenceLinks?: Parameters<typeof mapQuestionReferences>[0]
         options: unknown
         difficulty: string
         topic: string | null
@@ -288,6 +296,7 @@ function stripCorrectAnswers(
         order: question.order,
         stem: question.stem,
         sharedContext: question.sharedContext,
+        references: mapQuestionReferences(question.referenceLinks),
         options: toSafeOptions(question.options),
         difficulty: question.difficulty,
         topic: question.topic,
@@ -309,6 +318,7 @@ function orderQuestionReviewForSession(
         order: number
         stem: string
         sharedContext: string | null
+        referenceLinks?: Parameters<typeof mapQuestionReferences>[0]
         options: Prisma.JsonValue
         difficulty: string
         topic: string | null
@@ -467,6 +477,7 @@ function toResultPayload(session: {
             order: question.order,
             stem: question.stem,
             sharedContext: question.sharedContext,
+            references: mapQuestionReferences(question.referenceLinks),
             difficulty: question.difficulty,
             topic: question.topic,
             explanation: question.explanation,
@@ -672,6 +683,10 @@ export async function startPublicFreeTestSession(
                         options: true,
                         difficulty: true,
                         topic: true,
+                        referenceLinks: {
+                            orderBy: { order: 'asc' },
+                            select: QUESTION_REFERENCE_LINK_SELECT,
+                        },
                     },
                 },
             },
@@ -794,6 +809,10 @@ export async function getPublicFreeSession(
                             options: true,
                             difficulty: true,
                             topic: true,
+                            referenceLinks: {
+                                orderBy: { order: 'asc' },
+                                select: QUESTION_REFERENCE_LINK_SELECT,
+                            },
                         },
                     },
                 },
@@ -1029,6 +1048,10 @@ async function submitLeadSessionWithTransaction(
                     difficulty: true,
                     topic: true,
                     explanation: true,
+                    referenceLinks: {
+                        orderBy: { order: 'asc' },
+                        select: QUESTION_REFERENCE_LINK_SELECT,
+                    },
                 },
             },
         },
@@ -1126,6 +1149,10 @@ export async function getPublicFreeResult(
                             difficulty: true,
                             topic: true,
                             explanation: true,
+                            referenceLinks: {
+                                orderBy: { order: 'asc' },
+                                select: QUESTION_REFERENCE_LINK_SELECT,
+                            },
                         },
                     },
                 },
@@ -1189,6 +1216,10 @@ export async function getPublicFreeResult(
                                 difficulty: true,
                                 topic: true,
                                 explanation: true,
+                                referenceLinks: {
+                                    orderBy: { order: 'asc' },
+                                    select: QUESTION_REFERENCE_LINK_SELECT,
+                                },
                             },
                         },
                     },

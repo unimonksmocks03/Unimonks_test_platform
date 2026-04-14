@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SharedContextRenderer } from '@/components/test/shared-context-renderer'
 import { apiClient } from '@/lib/api-client'
+import type { QuestionReferencePayload } from '@/lib/types/question-reference'
 
 type ResultPayload = {
     session: {
@@ -40,6 +41,7 @@ type ResultPayload = {
         order: number
         stem: string
         sharedContext: string | null
+        references?: QuestionReferencePayload[]
         difficulty: string
         topic: string | null
         explanation: string | null
@@ -265,8 +267,12 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                                     </div>
                                 </AccordionTrigger>
                                 <AccordionContent className="space-y-4 pb-5">
-                                    {question.sharedContext ? (
-                                        <SharedContextRenderer context={question.sharedContext} tone="emerald" />
+                                    {question.sharedContext || question.references?.length ? (
+                                        <SharedContextRenderer
+                                            context={question.sharedContext}
+                                            references={question.references}
+                                            tone="emerald"
+                                        />
                                     ) : null}
                                     <div className="space-y-3">
                                         {question.options.map((option) => {

@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import OpenAI from 'openai'
 import { Prisma } from '@prisma/client'
 import { zodTextFormat } from 'openai/helpers/zod'
@@ -136,7 +137,12 @@ type DocumentAnswerHint = {
     evidence: string | null
 }
 
-type CanvasModule = typeof import('@napi-rs/canvas')
+type RenderPageAsImageFn = typeof import('unpdf')['renderPageAsImage']
+type RenderPageAsImageOptions = NonNullable<Parameters<RenderPageAsImageFn>[2]>
+type CanvasImport = NonNullable<RenderPageAsImageOptions['canvasImport']>
+type CanvasModule = Awaited<ReturnType<CanvasImport>>
+const requireCanvasModule = createRequire(import.meta.url)
+const OPTIONAL_CANVAS_MODULE = ['@napi-rs', 'canvas'].join('/')
 
 type StructuredExtractionContext = {
     analysis: ExtractedQuestionAnalysis
@@ -2661,6 +2667,11 @@ function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | nul
             : null,
         sharedContextEvidence: truncateEvidenceText(question.sharedContextEvidence),
         extractionMode: question.extractionMode ?? null,
+        referenceKind: question.referenceKind ?? null,
+        referenceMode: question.referenceMode ?? null,
+        referenceTitle: typeof question.referenceTitle === 'string'
+            ? question.referenceTitle.trim().slice(0, 120)
+            : null,
     }
 
     const parsed = McqQuestionSchema.safeParse(normalizedQuestion)
@@ -3448,8 +3459,25 @@ async function extractQuestionsFromPdfMultimodalChunked(
             }
         }
 
-        const textResult = await extractText(pdf, { mergePages: false }).catch(() => ({ text: [] as string[] }))
-        const pageTexts = Array.isArray(textResult.text) ? textResult.text : [textResult.text]
+        const canvasModule = await loadCanvasModule()
+        if (!canvasModule) {
+            return {
+                error: true,
+                message: 'Canvas-backed PDF page rendering is unavailable in this runtime.',
+                pageCount,
+                chunkCount: 0,
+                mode: 'EXTRACTED',
+            }
+        }
+
+        let textResult: { text: string | string[] }
+        try {
+            textResult = await extractText(pdf, { mergePages: false })
+        } catch {
+            textResult = { text: [] as string[] }
+        }
+        const safeTextResult = textResult ?? { text: [] as string[] }
+        const pageTexts = Array.isArray(safeTextResult.text) ? safeTextResult.text : [safeTextResult.text]
         const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
         const pageChunks = buildOverlappingPageChunks(pageNumbers, 2, 1)
         const extractedQuestions: Array<{ questionNumber: number; question: GeneratedQuestion }> = []
@@ -3503,7 +3531,7 @@ Return strict JSON with a top-level "questions" array only.`,
             for (const pageNumber of pageChunk) {
                 const pageText = normalizeDocumentText(pageTexts[pageNumber - 1] ?? '')
                 const imageUrl = await renderPageAsImage(pdf, pageNumber, {
-                    canvasImport: loadCanvasModuleDynamically,
+                    canvasImport: async () => canvasModule,
                     scale: 1.85,
                     toDataURL: true,
                 })
@@ -3673,9 +3701,13 @@ function normalizeVisualReferences(rawReferences: unknown) {
     return Array.from(referencesByQuestion.values()).sort((left, right) => left.questionNumber - right.questionNumber)
 }
 
-async function loadCanvasModuleDynamically(): Promise<CanvasModule> {
-    const dynamicImport = new Function('modulePath', 'return import(modulePath)') as (modulePath: string) => Promise<CanvasModule>
-    return dynamicImport('@napi-rs/canvas')
+async function loadCanvasModule(): Promise<CanvasModule | null> {
+    try {
+        return requireCanvasModule(OPTIONAL_CANVAS_MODULE) as CanvasModule
+    } catch (error) {
+        console.warn('[AI] Canvas-backed PDF rendering unavailable in this runtime:', error)
+        return null
+    }
 }
 
 export async function extractVisualReferencesFromPdfImages(
@@ -3710,8 +3742,25 @@ export async function extractVisualReferencesFromPdfImages(
             }
         }
 
-        const textResult = await extractText(pdf, { mergePages: false }).catch(() => ({ text: [] as string[] }))
-        const pageTexts = Array.isArray(textResult.text) ? textResult.text : [textResult.text]
+        const canvasModule = await loadCanvasModule()
+        if (!canvasModule) {
+            return {
+                error: true,
+                message: 'Visual-reference extraction is unavailable because PDF page rendering is not available in this runtime.',
+                pageCount,
+                chunkCount: 0,
+                references: [],
+            }
+        }
+
+        let textResult: { text: string | string[] }
+        try {
+            textResult = await extractText(pdf, { mergePages: false })
+        } catch {
+            textResult = { text: [] as string[] }
+        }
+        const safeTextResult = textResult ?? { text: [] as string[] }
+        const pageTexts = Array.isArray(safeTextResult.text) ? safeTextResult.text : [safeTextResult.text]
         const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
         const pageChunks = chunkArray(pageNumbers, 2)
         const extractedReferences: ReturnType<typeof normalizeVisualReferences> = []
@@ -3772,7 +3821,7 @@ Rules:
             for (const pageNumber of pageChunk) {
                 const pageText = normalizeDocumentText(pageTexts[pageNumber - 1] ?? '')
                 const imageUrl = await renderPageAsImage(pdf, pageNumber, {
-                    canvasImport: loadCanvasModuleDynamically,
+                    canvasImport: async () => canvasModule,
                     scale: 1.65,
                     toDataURL: true,
                 })

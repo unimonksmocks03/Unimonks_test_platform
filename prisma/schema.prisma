@@ -63,6 +63,45 @@ enum DocumentImportJobStatus {
   FAILED
 }
 
+enum DocumentImportJobStage {
+  QUEUED
+  PROCESSING_CLASSIFICATION
+  PROCESSING_EXACT
+  CREATING_DRAFT
+  ENRICHING_REFERENCES
+  VERIFYING
+  SUCCEEDED
+  FAILED
+}
+
+enum DocumentImportLane {
+  STABLE
+  ADVANCED
+}
+
+enum DocumentImportDecision {
+  EXACT_ACCEPTED
+  REVIEW_REQUIRED
+  FAILED_WITH_REASON
+}
+
+enum QuestionReferenceKind {
+  NONE
+  PASSAGE
+  TABLE
+  LIST_MATCH
+  DIAGRAM
+  GRAPH
+  MAP
+  OTHER
+}
+
+enum QuestionReferenceMode {
+  TEXT
+  SNAPSHOT
+  HYBRID
+}
+
 model User {
   id              String     @id @default(uuid()) @db.Uuid
   email           String     @unique
@@ -127,6 +166,7 @@ model Test {
 
   createdBy    User              @relation("TestCreatedBy", fields: [createdById], references: [id])
   questions    Question[]
+  questionReferences QuestionReference[]
   assignments  TestAssignment[]
   sessions     TestSession[]
   leadSessions LeadTestSession[]
@@ -148,8 +188,43 @@ model Question {
   topic       String?
 
   test Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+  referenceLinks QuestionReferenceLink[]
 
   @@index([testId, order]) // Ordered question fetches
+}
+
+model QuestionReference {
+  id          String                @id @default(uuid()) @db.Uuid
+  testId      String                @db.Uuid
+  kind        QuestionReferenceKind
+  mode        QuestionReferenceMode
+  title       String?
+  textContent String?               @db.Text
+  assetUrl    String?
+  sourcePage  Int?
+  bbox        Json?
+  confidence  Float?
+  evidence    Json?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  test  Test                    @relation(fields: [testId], references: [id], onDelete: Cascade)
+  links QuestionReferenceLink[]
+
+  @@index([testId, kind])
+  @@index([testId, sourcePage])
+}
+
+model QuestionReferenceLink {
+  referenceId String @db.Uuid
+  questionId  String @db.Uuid
+  order       Int
+
+  reference QuestionReference @relation(fields: [referenceId], references: [id], onDelete: Cascade)
+  question  Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([referenceId, questionId])
+  @@index([questionId, order])
 }
 
 model TestAssignment {
@@ -248,6 +323,15 @@ model DocumentImportJob {
   adminId        String                  @db.Uuid
   testId         String?                 @db.Uuid
   status         DocumentImportJobStatus @default(QUEUED)
+  stage          DocumentImportJobStage  @default(QUEUED)
+  stageStartedAt DateTime?
+  lane           DocumentImportLane?
+  routingMode    String?
+  selectedStrategy String?
+  resultStrategy String?
+  decision       DocumentImportDecision?
+  tokenCostUsd   Float?
+  totalElapsedMs Int?
   fileName       String
   mimeType       String
   fileSize       Int
@@ -255,12 +339,14 @@ model DocumentImportJob {
   requestedTitle String?                 @db.Text
   requestedCount Int?
   message        String?                 @db.Text
+  progressMessage String?                @db.Text
   errorCode      String?
   errorMessage   String?                 @db.Text
   result         Json?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
   startedAt      DateTime?
+  lastHeartbeatAt DateTime?
   completedAt    DateTime?
 
   admin User  @relation(fields: [adminId], references: [id], onDelete: Cascade)

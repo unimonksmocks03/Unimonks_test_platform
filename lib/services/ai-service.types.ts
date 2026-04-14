@@ -1,6 +1,8 @@
 import type {
     AnswerSource,
     ExtractionMode,
+    QuestionReferenceKind,
+    QuestionReferenceMode,
     VerificationIssue,
     VerificationResult,
     VisualReferenceExtraction,
@@ -19,6 +21,11 @@ export interface GeneratedQuestion {
     confidence?: number | null
     sharedContextEvidence?: string | null
     extractionMode?: ExtractionMode | null
+    referenceKind?: QuestionReferenceKind | null
+    referenceMode?: QuestionReferenceMode | null
+    referenceTitle?: string | null
+    referenceAssetUrl?: string | null
+    referenceBBox?: unknown | null
 }
 
 export interface CostInfo {

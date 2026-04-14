@@ -12,12 +12,14 @@ const {
     mockGetDocumentProxy,
     mockRenderPageAsImage,
     mockExtractText,
+    mockCanvasImport,
 } = vi.hoisted(() => ({
     mockResponsesParse: vi.fn(),
     mockChatCreate: vi.fn(),
     mockGetDocumentProxy: vi.fn(),
     mockRenderPageAsImage: vi.fn(),
     mockExtractText: vi.fn(),
+    mockCanvasImport: vi.fn(() => ({ createCanvas: vi.fn() })),
 }))
 
 vi.mock('openai', () => ({
@@ -32,6 +34,8 @@ vi.mock('unpdf', () => ({
     renderPageAsImage: mockRenderPageAsImage,
     extractText: mockExtractText,
 }))
+
+vi.mock('@napi-rs/canvas', () => mockCanvasImport())
 
 const aiServicePromise = import('../../../lib/services/ai-service')
 
@@ -240,6 +244,34 @@ test('extractQuestionsFromPdfMultimodal chunks visual PDFs by page window and me
     expect(result.pageCount).toBe(3)
     expect(result.questions?.[1]?.sharedContext).toBe('Longer context for question two.')
     expect(mockResponsesParse).toHaveBeenCalledTimes(2)
+})
+
+test('extractVisualReferencesFromPdfImages degrades gracefully when visual-reference rendering prerequisites are unavailable', async () => {
+    vi.resetModules()
+    mockRenderPageAsImage.mockReset()
+    mockCanvasImport.mockImplementationOnce(() => {
+        throw new Error('canvas unavailable')
+    })
+
+    const { extractVisualReferencesFromPdfImages } = await import('../../../lib/services/ai-service')
+
+    mockGetDocumentProxy.mockResolvedValueOnce({
+        numPages: 2,
+        cleanup: vi.fn(),
+    })
+
+    const result = await extractVisualReferencesFromPdfImages(
+        Buffer.from('fake-pdf'),
+        undefined,
+        'visual.pdf',
+    )
+
+    expect(result.error).toBe(true)
+    expect(typeof result.message).toBe('string')
+    expect(result.message?.length).toBeGreaterThan(0)
+    expect(result.references).toEqual([])
+
+    mockCanvasImport.mockImplementation(() => ({ createCanvas: vi.fn() }))
 })
 
 test('verifyExtractedQuestionsWithAI preserves global question numbering across batches', async () => {

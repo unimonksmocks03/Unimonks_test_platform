@@ -14,12 +14,14 @@ import { Progress } from '@/components/ui/progress'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { SharedContextRenderer } from '@/components/test/shared-context-renderer'
 import { apiClient } from '@/lib/api-client'
+import type { QuestionReferencePayload } from '@/lib/types/question-reference'
 
 type Question = {
     id: string
     order: number
     stem: string
     sharedContext: string | null
+    references?: QuestionReferencePayload[]
     options: Array<{
         id: string
         text: string
@@ -407,8 +409,12 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                         </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-6 pt-6">
-                        {currentQuestion.sharedContext ? (
-                            <SharedContextRenderer context={currentQuestion.sharedContext} tone="emerald" />
+                        {currentQuestion.sharedContext || currentQuestion.references?.length ? (
+                            <SharedContextRenderer
+                                context={currentQuestion.sharedContext}
+                                references={currentQuestion.references}
+                                tone="emerald"
+                            />
                         ) : null}
                         <RadioGroup
                             value={selectedOption}

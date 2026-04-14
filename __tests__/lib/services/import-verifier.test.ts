@@ -3,7 +3,39 @@ import { expect, test } from 'vitest'
 import {
     mergeAIVerificationIssues,
     resolveImportVerificationOutcome,
+    verifyExtractedQuestionsV2,
 } from '@/lib/services/import-verifier'
+import type { GeneratedQuestion } from '@/lib/services/ai-service.types'
+
+function createQuestion(overrides: Partial<GeneratedQuestion> = {}): GeneratedQuestion {
+    return {
+        stem: 'Question stem',
+        options: [
+            { id: 'A', text: 'Option A', isCorrect: true },
+            { id: 'B', text: 'Option B', isCorrect: false },
+            { id: 'C', text: 'Option C', isCorrect: false },
+            { id: 'D', text: 'Option D', isCorrect: false },
+        ],
+        explanation: 'Explanation',
+        difficulty: 'MEDIUM',
+        topic: 'General',
+        sharedContext: null,
+        sourcePage: 1,
+        sourceSnippet: 'Question stem source',
+        answerSource: 'ANSWER_KEY',
+        confidence: 0.9,
+        sharedContextEvidence: null,
+        extractionMode: 'TEXT_EXACT',
+        referenceKind: 'NONE',
+        referenceMode: 'TEXT',
+        referenceTitle: null,
+        ...overrides,
+    }
+}
+
+function normalizeQuestion(question: Partial<GeneratedQuestion> | null | undefined) {
+    return question as GeneratedQuestion
+}
 
 test('mergeAIVerificationIssues keeps AI issues even when the AI verifier partially failed', () => {
     const codeVerification = {
@@ -176,4 +208,83 @@ test('resolveImportVerificationOutcome returns FAILED_WITH_REASON for error veri
 
     expect(outcome.decision).toBe('FAILED_WITH_REASON')
     expect(outcome.message).toContain('Missing numbered questions')
+})
+
+test('verifyExtractedQuestionsV2 fails when a text-backed reference has no shared context attached', () => {
+    const verification = verifyExtractedQuestionsV2(
+        [
+            createQuestion({
+                stem: 'Based on the following table, what is the correct answer?',
+                referenceKind: 'TABLE',
+                referenceMode: 'TEXT',
+                sharedContext: null,
+                sharedContextEvidence: null,
+            }),
+        ],
+        1,
+        normalizeQuestion,
+    )
+
+    expect(verification.passed).toBe(false)
+    expect(verification.issues.some((issue) => issue.code === 'MISSING_REFERENCE_ATTACHMENT')).toBe(true)
+})
+
+test('verifyExtractedQuestionsV2 warns when visual references are still text-backed only', () => {
+    const verification = verifyExtractedQuestionsV2(
+        [
+            createQuestion({
+                stem: 'Find the missing figure.',
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'SNAPSHOT',
+                sharedContext: null,
+                sharedContextEvidence: 'Figure with alternating triangles and circles.',
+                sourceSnippet: 'Find the missing figure in the pattern.',
+            }),
+        ],
+        1,
+        normalizeQuestion,
+    )
+
+    expect(verification.passed).toBe(true)
+    expect(verification.reviewRecommended).toBe(true)
+    expect(verification.issues.some((issue) => issue.code === 'SNAPSHOT_REFERENCE_PENDING')).toBe(true)
+})
+
+test('verifyExtractedQuestionsV2 fails when a diagram question has no usable visual evidence', () => {
+    const verification = verifyExtractedQuestionsV2(
+        [
+            createQuestion({
+                stem: 'Find the missing figure.',
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'SNAPSHOT',
+                sharedContext: null,
+                sharedContextEvidence: null,
+                sourceSnippet: 'Question stem source',
+            }),
+        ],
+        1,
+        normalizeQuestion,
+    )
+
+    expect(verification.passed).toBe(false)
+    expect(verification.issues.some((issue) => issue.code === 'MISSING_VISUAL_REFERENCE')).toBe(true)
+})
+
+test('verifyExtractedQuestionsV2 warns when shared context exists but reference kind was never classified', () => {
+    const verification = verifyExtractedQuestionsV2(
+        [
+            createQuestion({
+                sharedContext: 'List I: Author. List II: Work.',
+                sharedContextEvidence: 'List I: Author. List II: Work.',
+                referenceKind: 'NONE',
+                referenceMode: 'TEXT',
+            }),
+        ],
+        1,
+        normalizeQuestion,
+    )
+
+    expect(verification.passed).toBe(true)
+    expect(verification.reviewRecommended).toBe(true)
+    expect(verification.issues.some((issue) => issue.code === 'UNCLASSIFIED_REFERENCE')).toBe(true)
 })
