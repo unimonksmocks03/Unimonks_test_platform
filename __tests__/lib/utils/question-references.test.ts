@@ -71,4 +71,48 @@ describe('mapQuestionReferences', () => {
         expect(mapQuestionReferences(undefined)).toEqual([])
         expect(mapQuestionReferences(null)).toEqual([])
     })
+
+    it('drops metadata-only text references while preserving pending visual references', () => {
+        const mapped = mapQuestionReferences([
+            {
+                order: 1,
+                reference: {
+                    id: 'ref-noise',
+                    kind: 'OTHER',
+                    mode: 'TEXT',
+                    title: 'Reference',
+                    textContent: 'PDF\nleac205.pdf\nGENERATE MOCK TEST WITH ACCORDING TO THE FORMAT OF ACCOUNTANCY 8',
+                    assetUrl: null,
+                    sourcePage: 1,
+                    bbox: null,
+                    confidence: 0.95,
+                    evidence: null,
+                },
+            },
+            {
+                order: 2,
+                reference: {
+                    id: 'ref-pending',
+                    kind: 'DIAGRAM',
+                    mode: 'SNAPSHOT',
+                    title: null,
+                    textContent: null,
+                    assetUrl: null,
+                    sourcePage: 2,
+                    bbox: null,
+                    confidence: 0.81,
+                    evidence: null,
+                },
+            },
+        ])
+
+        expect(mapped).toEqual([
+            expect.objectContaining({
+                id: 'ref-pending',
+                kind: 'DIAGRAM',
+                mode: 'SNAPSHOT',
+                assetUrl: null,
+            }),
+        ])
+    })
 })

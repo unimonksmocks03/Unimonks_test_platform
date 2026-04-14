@@ -6,6 +6,7 @@ import {
     mapQuestionReferences,
     QUESTION_REFERENCE_LINK_SELECT,
 } from '@/lib/utils/question-references'
+import { sanitizeReferenceText } from '@/lib/utils/reference-sanitizer'
 import { calculateQuestionAttemptSummary, calculateTotalMarks } from '@/lib/utils/test-settings'
 
 /**
@@ -478,7 +479,7 @@ function stripCorrectAnswers(questions: Array<any>, settings: unknown) {
             id: q.id,
             order: q.order,
             stem: q.stem,
-            sharedContext: q.sharedContext,
+            sharedContext: sanitizeReferenceText(q.sharedContext),
             references: mapQuestionReferences(q.referenceLinks),
             options: safeOptions,
             difficulty: q.difficulty,

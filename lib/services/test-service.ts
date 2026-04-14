@@ -49,6 +49,11 @@ import {
     mapQuestionReferences,
     QUESTION_REFERENCE_LINK_SELECT,
 } from '@/lib/utils/question-references'
+import {
+    sanitizeReferenceText,
+    sanitizeReferenceTitle,
+    shouldRenderReferencePayload,
+} from '@/lib/utils/reference-sanitizer'
 import { getTestSearchTokens } from '@/lib/utils/test-search'
 import { resolveTestSettings } from '@/lib/utils/test-settings'
 import type {
@@ -394,12 +399,16 @@ function buildPersistedQuestionReferencePayload(question: {
 }): PersistedQuestionReferencePayload | null {
     const kind = (question.referenceKind ?? 'NONE') as QuestionReferenceKind
     const mode = (question.referenceMode ?? 'TEXT') as QuestionReferenceMode
-    const textContent = question.sharedContext?.trim() || null
-    const title = question.referenceTitle?.trim() || null
+    const textContent = sanitizeReferenceText(question.sharedContext)
+    const title = sanitizeReferenceTitle(question.referenceTitle)
     const evidence = buildQuestionReferenceEvidence(question)
-    const hasMeaningfulReference = kind !== 'NONE' || Boolean(textContent) || Boolean(title)
 
-    if (!hasMeaningfulReference) {
+    if (!shouldRenderReferencePayload({
+        mode,
+        title,
+        textContent,
+        assetUrl: question.referenceAssetUrl ?? null,
+    })) {
         return null
     }
 
@@ -537,7 +546,7 @@ function mapAdminQuestionRecord(question: AdminQuestionWithReferencesRecord) {
         id: question.id,
         order: question.order,
         stem: question.stem,
-        sharedContext: question.sharedContext,
+        sharedContext: sanitizeReferenceText(question.sharedContext) ?? '',
         options: question.options,
         explanation: question.explanation,
         difficulty: question.difficulty,

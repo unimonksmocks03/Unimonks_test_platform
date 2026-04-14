@@ -28,6 +28,10 @@ import type {
     PreciseDocumentQuestionAnalysis,
     VisualReferenceExtractionResult,
 } from '@/lib/services/ai-service.types'
+import {
+    isPotentialReferenceMetadataNoiseLine,
+    sanitizeReferenceText,
+} from '@/lib/utils/reference-sanitizer'
 
 export type {
     AIVerificationResult,
@@ -399,11 +403,12 @@ function truncateForPrompt(text: string | null | undefined, maxLength = 320) {
 }
 
 function isLikelyPageHeaderNoise(line: string) {
-    return /^(?:sectional mock\s*test|mock\s*test|question\s*paper|general instructions?|duration|time allowed|maximum marks|page\s+\d+|class\s*xii|xii|cuet(?:\s+pattern)?|subject\b)/i.test(line.trim())
+    return isPotentialReferenceMetadataNoiseLine(line)
+        || /^(?:sectional mock\s*test|mock\s*test|question\s*paper|general instructions?|duration|time allowed|maximum marks|page\s+\d+|class\s*xii|xii|cuet(?:\s+pattern)?|subject\b)/i.test(line.trim())
 }
 
 function looksMeaningfulSharedContext(text: string | null | undefined) {
-    const normalized = normalizeSharedContextText(text)
+    const normalized = sanitizeReferenceText(normalizeSharedContextText(text))
     if (!normalized || normalized.length < 40) {
         return false
     }
@@ -576,7 +581,7 @@ function extractPageSharedContext(pageText: string) {
     const candidateLines = lines
         .slice(0, firstQuestionLineIndex)
         .filter(line => !isLikelyPageHeaderNoise(line))
-    const sharedContext = normalizeSharedContextText(candidateLines.join('\n'))
+    const sharedContext = sanitizeReferenceText(normalizeSharedContextText(candidateLines.join('\n')))
 
     return {
         questionNumbers: questionStarts.map(entry => entry.questionNumber),

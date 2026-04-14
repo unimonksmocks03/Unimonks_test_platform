@@ -1,5 +1,11 @@
 import { Prisma, QuestionReferenceKind, QuestionReferenceMode } from '@prisma/client'
 
+import {
+    sanitizeReferenceText,
+    sanitizeReferenceTitle,
+    shouldRenderReferencePayload,
+} from '@/lib/utils/reference-sanitizer'
+
 export const QUESTION_REFERENCE_LINK_SELECT = Prisma.validator<Prisma.QuestionReferenceLinkSelect>()({
     order: true,
     reference: {
@@ -41,17 +47,32 @@ export function mapQuestionReferences(
 ): QuestionReferenceView[] {
     return [...(links ?? [])]
         .sort((left, right) => left.order - right.order)
-        .map((link) => ({
-            id: link.reference.id,
-            order: link.order,
-            kind: link.reference.kind,
-            mode: link.reference.mode,
-            title: link.reference.title,
-            textContent: link.reference.textContent,
-            assetUrl: link.reference.assetUrl,
-            sourcePage: link.reference.sourcePage,
-            bbox: link.reference.bbox as Prisma.JsonValue | null,
-            confidence: link.reference.confidence,
-            evidence: link.reference.evidence as Prisma.JsonValue | null,
-        }))
+        .map((link) => {
+            const title = sanitizeReferenceTitle(link.reference.title)
+            const textContent = sanitizeReferenceText(link.reference.textContent)
+
+            if (!shouldRenderReferencePayload({
+                mode: link.reference.mode,
+                title,
+                textContent,
+                assetUrl: link.reference.assetUrl,
+            })) {
+                return null
+            }
+
+            return {
+                id: link.reference.id,
+                order: link.order,
+                kind: link.reference.kind,
+                mode: link.reference.mode,
+                title,
+                textContent,
+                assetUrl: link.reference.assetUrl,
+                sourcePage: link.reference.sourcePage,
+                bbox: link.reference.bbox as Prisma.JsonValue | null,
+                confidence: link.reference.confidence,
+                evidence: link.reference.evidence as Prisma.JsonValue | null,
+            }
+        })
+        .filter((reference): reference is QuestionReferenceView => reference !== null)
 }

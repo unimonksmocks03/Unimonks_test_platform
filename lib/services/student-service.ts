@@ -6,6 +6,7 @@ import {
     mapQuestionReferences,
     QUESTION_REFERENCE_LINK_SELECT,
 } from '@/lib/utils/question-references'
+import { sanitizeReferenceText } from '@/lib/utils/reference-sanitizer'
 
 /**
  * Student-scoped service.
@@ -363,6 +364,7 @@ export async function getResult(studentId: string, sessionId: string) {
             durationMinutes: session.test.durationMinutes,
             questions: session.test.questions.map((question) => ({
                 ...question,
+                sharedContext: sanitizeReferenceText(question.sharedContext),
                 references: mapQuestionReferences(question.referenceLinks),
             })),
         },

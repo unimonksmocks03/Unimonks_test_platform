@@ -677,3 +677,40 @@ Answer: (C)`,
     expect(enriched[2]?.sharedContext).toContain('2022 125 95 40')
     expect(enriched[3]?.sharedContext).toContain('Year Sedan SUV EV')
 })
+
+test('attachSharedContextsFromPageText drops file metadata and prompt junk from shared context', async () => {
+    const { attachSharedContextsFromPageText } = await aiServicePromise
+
+    const questions = [
+        {
+            stem: 'Cash Flow Statement is primarily prepared to show',
+            options: [
+                { id: 'A', text: 'Only profit or loss', isCorrect: false },
+                { id: 'B', text: 'Inflows and outflows', isCorrect: true },
+                { id: 'C', text: 'Only assets', isCorrect: false },
+                { id: 'D', text: 'Only liabilities', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Accountancy',
+        },
+    ]
+
+    const pages = [
+        `PDF
+leac205.pdf
+GENERATE MOCK TEST WITH ACCORDING TO THE FORMAT OF ACCOUNTANCY 8
+
+Q1. Cash Flow Statement is primarily prepared to show
+(A) Only profit or loss
+(B) Inflows and outflows
+(C) Only assets
+(D) Only liabilities
+Answer: (B)`,
+    ]
+
+    const enriched = attachSharedContextsFromPageText(questions, pages)
+
+    expect(enriched).toHaveLength(1)
+    expect(enriched[0]?.sharedContext ?? null).toBeNull()
+})

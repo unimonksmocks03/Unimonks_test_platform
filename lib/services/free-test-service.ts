@@ -17,6 +17,7 @@ import {
     QUESTION_REFERENCE_LINK_SELECT,
     type QuestionReferenceView,
 } from '@/lib/utils/question-references'
+import { sanitizeReferenceText } from '@/lib/utils/reference-sanitizer'
 
 const COMPLETED_SESSION_STATUSES: SessionStatus[] = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED']
 const SUBMISSION_GRACE_PERIOD_MS = 30 * 1000
@@ -295,7 +296,7 @@ function stripCorrectAnswers(
         id: question.id,
         order: question.order,
         stem: question.stem,
-        sharedContext: question.sharedContext,
+        sharedContext: sanitizeReferenceText(question.sharedContext),
         references: mapQuestionReferences(question.referenceLinks),
         options: toSafeOptions(question.options),
         difficulty: question.difficulty,
@@ -476,7 +477,7 @@ function toResultPayload(session: {
             id: question.id,
             order: question.order,
             stem: question.stem,
-            sharedContext: question.sharedContext,
+            sharedContext: sanitizeReferenceText(question.sharedContext),
             references: mapQuestionReferences(question.referenceLinks),
             difficulty: question.difficulty,
             topic: question.topic,
