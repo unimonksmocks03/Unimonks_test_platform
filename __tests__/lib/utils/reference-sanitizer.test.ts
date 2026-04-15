@@ -23,6 +23,14 @@ describe('reference-sanitizer', () => {
         ).toBe('Cash Flow Data\nOperating 25 30 40')
     })
 
+    it('drops leaked option and answer lines that are really question content, not references', () => {
+        expect(
+            sanitizeReferenceText(
+                '(c) Changes in short-term borrowings\n(d) Only interest paid\nANSWER (a) Expenditures made for resources intended to generate future income and cash flows',
+            ),
+        ).toBeNull()
+    })
+
     it('drops metadata-only titles but preserves useful ones', () => {
         expect(sanitizeReferenceTitle('PDF')).toBeNull()
         expect(sanitizeReferenceTitle('Figure 1')).toBe('Figure 1')

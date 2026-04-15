@@ -108,33 +108,38 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         && !input.classification.isScannedLike
         && selectedStrategy === 'HYBRID_RECONCILE'
 
-    const lane: DocumentImportLane = selectedStrategy === 'TEXT_EXACT'
+    const normalizedSelectedStrategy =
+        manualVisualReferenceCapture && selectedStrategy === 'HYBRID_RECONCILE'
+            ? 'TEXT_EXACT'
+            : selectedStrategy
+
+    const lane: DocumentImportLane = normalizedSelectedStrategy === 'TEXT_EXACT'
         ? 'STABLE'
         : 'ADVANCED'
 
     return {
         routingMode: 'CLASSIFIER',
         lane,
-        selectedStrategy,
+        selectedStrategy: normalizedSelectedStrategy,
         runMultimodalFirst:
             input.isPdfUpload
-            && selectedStrategy === 'MULTIMODAL_EXTRACT'
+            && normalizedSelectedStrategy === 'MULTIMODAL_EXTRACT'
             && !manualVisualReferenceCapture,
         visualReferenceOverlay:
             input.isPdfUpload
             && input.classification.hasVisualReferences
-            && selectedStrategy === 'HYBRID_RECONCILE'
+            && normalizedSelectedStrategy === 'HYBRID_RECONCILE'
             && !manualVisualReferenceCapture,
         manualVisualReferenceCapture,
-        generateFromSource: selectedStrategy === 'GENERATE_FROM_SOURCE',
+        generateFromSource: normalizedSelectedStrategy === 'GENERATE_FROM_SOURCE',
         reasons: [
             `Classifier selected ${selectedStrategy} for this document.`,
             `Import lane: ${lane}.`,
             ...(manualVisualReferenceCapture
                 ? ['Diagram-heavy PDF will create a draft from text extraction first and require manual visual-reference capture.']
                 : []),
-            ...(normalizedStrategy !== input.classification.preferredStrategy
-                ? [`Normalized ${input.classification.preferredStrategy} to ${normalizedStrategy} for this file type.`]
+            ...(normalizedSelectedStrategy !== input.classification.preferredStrategy
+                ? [`Normalized ${input.classification.preferredStrategy} to ${normalizedSelectedStrategy} for this file type.`]
                 : []),
             ...promoted.reasons,
         ],

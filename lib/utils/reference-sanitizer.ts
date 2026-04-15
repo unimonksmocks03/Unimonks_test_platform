@@ -9,6 +9,13 @@ const REFERENCE_METADATA_NOISE_PATTERNS = [
     /^source\s+(?:file|document)$/i,
 ]
 
+const REFERENCE_CONTEXT_HINT_REGEX =
+    /\b(?:table|data|chart|dataset|figure|diagram|graph|map|venn|passage|case study|read the following|list i|list ii|column i|column ii|match the following|match the correct pair)\b/i
+
+const LOWERCASE_OPTION_LINE_REGEX = /^\(?[a-d]\)?[.)]\s+.+$/i
+const ANSWER_OR_EXPLANATION_LINE_REGEX =
+    /^(?:answer|ans(?:wer)?|explanation|reason|difficulty|topic)\b/i
+
 function isMetadataNoiseLine(line: string) {
     const normalized = line.trim()
     if (!normalized) {
@@ -35,6 +42,31 @@ function normalizeMultilineText(value: string | null | undefined) {
     return normalized || null
 }
 
+function looksLikeQuestionContentLeak(value: string) {
+    const lines = value
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+
+    if (lines.length === 0) {
+        return false
+    }
+
+    const hasReferenceHint = REFERENCE_CONTEXT_HINT_REGEX.test(value)
+    const lowercaseOptionLines = lines.filter((line) => LOWERCASE_OPTION_LINE_REGEX.test(line)).length
+    const hasAnswerOrExplanationLine = lines.some((line) => ANSWER_OR_EXPLANATION_LINE_REGEX.test(line))
+
+    if (hasReferenceHint) {
+        return false
+    }
+
+    if (hasAnswerOrExplanationLine) {
+        return true
+    }
+
+    return lowercaseOptionLines >= 2
+}
+
 export function sanitizeReferenceText(value: string | null | undefined) {
     const normalized = normalizeMultilineText(value)
     if (!normalized) {
@@ -50,7 +82,12 @@ export function sanitizeReferenceText(value: string | null | undefined) {
         return null
     }
 
-    return filteredLines.join('\n').trim() || null
+    const joined = filteredLines.join('\n').trim()
+    if (!joined) {
+        return null
+    }
+
+    return looksLikeQuestionContentLeak(joined) ? null : joined
 }
 
 export function sanitizeReferenceTitle(value: string | null | undefined) {

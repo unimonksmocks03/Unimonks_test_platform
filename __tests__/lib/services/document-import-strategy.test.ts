@@ -140,7 +140,7 @@ test('resolveDocumentImportPlan routes weak diagram-heavy PDFs to multimodal ext
     expect(plan.manualVisualReferenceCapture).toBe(false)
 })
 
-test('resolveDocumentImportPlan routes strong-OCR diagram-heavy PDFs to hybrid reconcile with manual visual capture', () => {
+test('resolveDocumentImportPlan routes strong-OCR diagram-heavy PDFs to text-exact with manual visual capture', () => {
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
         text: extractableFigureReasoningPdfText,
@@ -152,7 +152,7 @@ test('resolveDocumentImportPlan routes strong-OCR diagram-heavy PDFs to hybrid r
         isPdfUpload: true,
     })
 
-    expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
+    expect(plan.selectedStrategy).toBe('TEXT_EXACT')
     expect(plan.runMultimodalFirst).toBe(false)
     expect(plan.visualReferenceOverlay).toBe(false)
     expect(plan.manualVisualReferenceCapture).toBe(true)
@@ -190,7 +190,7 @@ test('resolveDocumentImportPlan assigns ADVANCED lane to multimodal-first PDFs',
     expect(plan.selectedStrategy).toBe('MULTIMODAL_EXTRACT')
 })
 
-test('resolveDocumentImportPlan assigns ADVANCED lane to strong-OCR diagram-heavy hybrid papers', () => {
+test('resolveDocumentImportPlan assigns STABLE lane to strong-OCR diagram-heavy manual-capture papers', () => {
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST FIGURE COMPLETION.pdf',
         text: extractableFigureReasoningPdfText,
@@ -202,8 +202,8 @@ test('resolveDocumentImportPlan assigns ADVANCED lane to strong-OCR diagram-heav
         isPdfUpload: true,
     })
 
-    expect(plan.lane).toBe('ADVANCED')
-    expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
+    expect(plan.lane).toBe('STABLE')
+    expect(plan.selectedStrategy).toBe('TEXT_EXACT')
 })
 
 test('resolveDocumentImportPlan assigns STABLE lane when classifier routing is disabled', () => {

@@ -25,6 +25,7 @@ const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024
 const requireCanvasModule = createRequire(import.meta.url)
 const OPTIONAL_CANVAS_MODULE = ['@napi-rs', 'canvas'].join('/')
 const PAGE_IMAGE_SCALE = 1.65
+const INLINE_REFERENCE_DATA_URL_LIMIT_BYTES = 5 * 1024 * 1024
 
 function sanitizeSegment(value: string) {
     return value
@@ -44,6 +45,10 @@ function dataUrlToBuffer(dataUrl: string) {
         mimeType: match[1],
         buffer: Buffer.from(match[2], 'base64'),
     }
+}
+
+function bufferToDataUrl(buffer: Buffer, mimeType: string) {
+    return `data:${mimeType};base64,${buffer.toString('base64')}`
 }
 
 async function loadCanvasModule(): Promise<CanvasModule | null> {
@@ -133,10 +138,6 @@ export async function uploadManualReferenceSnapshot(input: {
     questionId: string
     file: File
 }) {
-    if (!isReferenceSnapshotStorageConfigured()) {
-        throw new Error('Reference image uploads are not configured.')
-    }
-
     if (!SUPPORTED_REFERENCE_IMAGE_TYPES.has(input.file.type)) {
         throw new Error('Only PNG, JPEG, and WEBP reference images are supported.')
     }
@@ -152,6 +153,18 @@ export async function uploadManualReferenceSnapshot(input: {
             : 'png'
 
     const buffer = Buffer.from(await input.file.arrayBuffer())
+
+    if (!isReferenceSnapshotStorageConfigured()) {
+        if (buffer.byteLength > INLINE_REFERENCE_DATA_URL_LIMIT_BYTES) {
+            throw new Error('Reference images must be 5MB or smaller.')
+        }
+
+        return {
+            assetUrl: bufferToDataUrl(buffer, input.file.type),
+            bbox: null,
+        } satisfies ReferenceSnapshotAsset
+    }
+
     const blob = await put(
         `question-references/${sanitizeSegment(input.testId)}/manual-${sanitizeSegment(input.questionId)}-${randomUUID()}.${extension}`,
         buffer,

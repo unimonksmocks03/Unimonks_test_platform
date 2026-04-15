@@ -12,7 +12,6 @@ import {
 import { FREE_BATCH_KIND, STANDARD_BATCH_KIND } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
 import {
-    isReferenceSnapshotStorageConfigured,
     uploadManualReferenceSnapshot,
     uploadPdfReferenceSnapshots,
 } from '@/lib/storage/reference-snapshots'
@@ -1627,10 +1626,6 @@ export async function upsertAdminQuestionReferenceImage(
     const admin = await ensureActiveAdmin(adminId)
     if ('error' in admin) {
         return admin
-    }
-
-    if (!isReferenceSnapshotStorageConfigured()) {
-        return serviceError('BAD_REQUEST', 'Reference image uploads are not configured for this environment.')
     }
 
     const test = await prisma.test.findUnique({
