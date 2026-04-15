@@ -48,6 +48,7 @@ import {
     mapQuestionReferences,
     QUESTION_REFERENCE_LINK_SELECT,
 } from '@/lib/utils/question-references'
+import { getPreferredVisualReference as selectPreferredVisualReference } from '@/lib/utils/question-reference-selection'
 import {
     sanitizeReferenceText,
     sanitizeReferenceTitle,
@@ -67,7 +68,6 @@ import type {
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 const MAX_PDF_PAGE_COUNT = 60
 const MIN_GENERATED_QUESTIONS = 30
-const VISUAL_REFERENCE_KINDS = new Set<QuestionReferenceKind>(['DIAGRAM', 'GRAPH', 'MAP'])
 
 type ServiceErrorCode =
     | 'ACTIVE_SESSIONS'
@@ -562,11 +562,7 @@ function getPreferredVisualReference(
     references: ReturnType<typeof mapQuestionReferences>,
     importEvidence: Partial<QuestionImportEvidencePayload>,
 ) {
-    const linkedVisualReference = references.find((reference) =>
-        reference.mode !== 'TEXT'
-        || VISUAL_REFERENCE_KINDS.has(reference.kind)
-        || Boolean(reference.assetUrl),
-    )
+    const linkedVisualReference = selectPreferredVisualReference(references)
 
     if (linkedVisualReference) {
         return linkedVisualReference

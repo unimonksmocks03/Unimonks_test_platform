@@ -30,6 +30,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import type { QuestionReferencePayload } from "@/lib/types/question-reference";
+import {
+    getPreferredVisualReference,
+    mergeQuestionReferenceState,
+} from "@/lib/utils/question-reference-selection";
 
 type QuestionOption = { id: string; text: string; isCorrect: boolean };
 
@@ -198,41 +202,9 @@ function audienceLabel(audience: BatchAudience) {
     return audience;
 }
 
-function isVisualReference(reference: QuestionReferencePayload) {
-    return reference.mode !== "TEXT" || reference.kind === "DIAGRAM" || reference.kind === "GRAPH" || reference.kind === "MAP";
-}
-
-function getPreferredVisualReference(question: Question) {
-    return question.references?.find((reference) => isVisualReference(reference)) ?? null;
-}
-
 function questionNeedsVisualReference(question: Question) {
-    const visualReference = getPreferredVisualReference(question);
+    const visualReference = getPreferredVisualReference(question.references);
     return Boolean(visualReference && !visualReference.assetUrl);
-}
-
-function mergeQuestionReferences(currentQuestions: Question[], nextQuestion: Question) {
-    const updatedReferences = new Map(
-        (nextQuestion.references ?? [])
-            .filter((reference) => reference.id)
-            .map((reference) => [reference.id, reference] as const),
-    );
-
-    return currentQuestions.map((question) => {
-        const mergedReferences = (question.references ?? []).map((reference) => updatedReferences.get(reference.id) ?? reference);
-        if (question.dbId === nextQuestion.dbId) {
-            return {
-                ...question,
-                ...nextQuestion,
-                references: mergedReferences.length > 0 ? mergedReferences : nextQuestion.references ?? [],
-            };
-        }
-
-        return {
-            ...question,
-            references: mergedReferences,
-        };
-    });
 }
 
 function formatImportStage(stage: ImportJobStage | null | undefined) {
@@ -399,7 +371,7 @@ function AdminTestBuilderForm() {
     }, [editId, loadTest]);
 
     const activeQuestion = questions[activeQIndex] || emptyQuestion();
-    const activeVisualReference = getPreferredVisualReference(activeQuestion);
+    const activeVisualReference = getPreferredVisualReference(activeQuestion.references);
     const activeQuestionNeedsVisualReference = questionNeedsVisualReference(activeQuestion);
     const isBusy = isSavingDraft || isAssigning || isPublishing || isGenerating;
     const isPublishedTest = testStatus === "PUBLISHED";
@@ -483,7 +455,7 @@ function AdminTestBuilderForm() {
                 saved: true,
             };
 
-            setQuestions((currentQuestions) => mergeQuestionReferences(currentQuestions, updatedQuestion));
+            setQuestions((currentQuestions) => mergeQuestionReferenceState(currentQuestions, updatedQuestion));
             toast.success("Visual reference saved", {
                 description: "The uploaded image is now attached to this question.",
             });
@@ -557,7 +529,7 @@ function AdminTestBuilderForm() {
                 saved: true,
             };
 
-            setQuestions((currentQuestions) => mergeQuestionReferences(currentQuestions, updatedQuestion));
+            setQuestions((currentQuestions) => mergeQuestionReferenceState(currentQuestions, updatedQuestion));
             toast.success("Visual reference removed", {
                 description: "The attached image has been removed from this question.",
             });
@@ -1320,6 +1292,17 @@ function AdminTestBuilderForm() {
                                                     <Trash2 className="mr-2 h-4 w-4" />
                                                     Remove image
                                                 </Button>
+                                            </div>
+                                        ) : null}
+                                        {activeVisualReference?.assetUrl ? (
+                                            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                <img
+                                                    src={activeVisualReference.assetUrl}
+                                                    alt={activeVisualReference.title || "Question reference preview"}
+                                                    className="max-h-[280px] w-full object-contain bg-white"
+                                                    loading="lazy"
+                                                />
                                             </div>
                                         ) : null}
                                         <input

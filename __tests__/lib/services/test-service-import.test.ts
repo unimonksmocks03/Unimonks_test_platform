@@ -789,6 +789,159 @@ test('upsertAdminQuestionReferenceImage updates an existing visual reference in 
     ])
 })
 
+test('upsertAdminQuestionReferenceImage prefers the linked visual slot over a shared table placeholder', async () => {
+    const { upsertAdminQuestionReferenceImage } = await servicePromise
+
+    prismaMock.question.findUnique
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Analyse the illustration.',
+            sharedContext: 'Use the shared data table and the figure.',
+            importEvidence: {
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'SNAPSHOT',
+                referenceTitle: 'Question figure',
+                referenceAssetUrl: null,
+                sourcePage: 4,
+                confidence: 0.9,
+            },
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Accountancy',
+            referenceLinks: [
+                {
+                    order: 1,
+                    reference: {
+                        id: 'reference-table',
+                        kind: 'TABLE',
+                        mode: 'HYBRID',
+                        title: 'Data table',
+                        textContent: 'Opening stock | Purchases | Closing stock',
+                        assetUrl: null,
+                        sourcePage: 4,
+                        bbox: null,
+                        confidence: 0.88,
+                        evidence: null,
+                    },
+                },
+                {
+                    order: 2,
+                    reference: {
+                        id: 'reference-diagram',
+                        kind: 'DIAGRAM',
+                        mode: 'SNAPSHOT',
+                        title: 'Question figure',
+                        textContent: null,
+                        assetUrl: null,
+                        sourcePage: 4,
+                        bbox: null,
+                        confidence: 0.9,
+                        evidence: null,
+                    },
+                },
+            ],
+        })
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Analyse the illustration.',
+            sharedContext: 'Use the shared data table and the figure.',
+            importEvidence: {
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'SNAPSHOT',
+                referenceTitle: 'Question figure',
+                referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+                sourcePage: 4,
+                confidence: 0.9,
+            },
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Accountancy',
+            referenceLinks: [
+                {
+                    order: 1,
+                    reference: {
+                        id: 'reference-table',
+                        kind: 'TABLE',
+                        mode: 'HYBRID',
+                        title: 'Data table',
+                        textContent: 'Opening stock | Purchases | Closing stock',
+                        assetUrl: null,
+                        sourcePage: 4,
+                        bbox: null,
+                        confidence: 0.88,
+                        evidence: null,
+                    },
+                },
+                {
+                    order: 2,
+                    reference: {
+                        id: 'reference-diagram',
+                        kind: 'DIAGRAM',
+                        mode: 'SNAPSHOT',
+                        title: 'Question figure',
+                        textContent: null,
+                        assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+                        sourcePage: 4,
+                        bbox: null,
+                        confidence: 0.9,
+                        evidence: null,
+                    },
+                },
+            ],
+        })
+
+    const result = await upsertAdminQuestionReferenceImage(
+        'admin-1',
+        'test-1',
+        'question-1',
+        new File(['png-data'], 'replacement.png', { type: 'image/png' }),
+    )
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.questionReference.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'reference-diagram' },
+            data: expect.objectContaining({
+                kind: 'DIAGRAM',
+                mode: 'SNAPSHOT',
+                title: 'Question figure',
+                assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+            }),
+        }),
+    )
+    expect(prismaMock.questionReference.create).not.toHaveBeenCalled()
+    expect(result.question.references).toEqual([
+        expect.objectContaining({
+            id: 'reference-table',
+            kind: 'TABLE',
+            assetUrl: null,
+        }),
+        expect.objectContaining({
+            id: 'reference-diagram',
+            kind: 'DIAGRAM',
+            assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+        }),
+    ])
+})
+
 test('upsertAdminQuestionReferenceImage rejects updates for published tests', async () => {
     const { upsertAdminQuestionReferenceImage } = await servicePromise
 

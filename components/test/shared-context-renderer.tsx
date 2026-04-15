@@ -2,6 +2,7 @@
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { QuestionReferencePayload } from "@/lib/types/question-reference";
+import { isVisualReference } from "@/lib/utils/question-reference-selection";
 import { parseSharedContext } from "@/lib/utils/shared-context";
 
 type SharedContextRendererProps = {
@@ -179,6 +180,9 @@ export function SharedContextRenderer({
     const normalizedReferences = [...(references ?? [])]
         .filter((reference) => reference.assetUrl || reference.textContent || reference.title)
         .sort((left, right) => left.order - right.order);
+    const hasAnyVisualImage = normalizedReferences.some((reference) =>
+        isVisualReference(reference) && Boolean(reference.assetUrl),
+    );
     const hasRenderableReferences = normalizedReferences.length > 0;
     const renderedReferenceText = normalizedReferences
         .map((reference) => reference.textContent?.trim())
@@ -206,6 +210,7 @@ export function SharedContextRenderer({
                     const hasText = Boolean(reference.textContent?.trim());
                     const shouldShowImage = reference.mode !== "TEXT";
                     const shouldShowText = reference.mode !== "SNAPSHOT" || !hasImage;
+                    const shouldShowMissingImagePlaceholder = shouldShowImage && !hasImage && !hasAnyVisualImage;
                     const referenceTitle = getReferenceTitle(reference);
 
                     return (
@@ -226,11 +231,11 @@ export function SharedContextRenderer({
                                             loading="lazy"
                                         />
                                     </div>
-                                ) : (
+                                ) : shouldShowMissingImagePlaceholder ? (
                                     <div className={`rounded-[20px] border border-dashed px-4 py-4 text-sm ${styles.text}`}>
                                         Snapshot reference is expected for this question, but no image asset is available yet.
                                     </div>
-                                )
+                                ) : null
                             ) : null}
 
                             {hasText && shouldShowText ? (
