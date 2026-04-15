@@ -42,14 +42,20 @@ function normalizeComparableText(value: string) {
     return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function formatReferenceKind(kind: QuestionReferencePayload["kind"]) {
-    if (kind === "LIST_MATCH") return "List Match";
-    if (kind === "NONE") return "Reference";
-    return kind.charAt(0) + kind.slice(1).toLowerCase();
+function isGenericReferenceTitle(title: string | null | undefined) {
+    const normalized = title?.trim().toLowerCase();
+    if (!normalized) return true;
+    return (
+        normalized === "manual visual reference"
+        || normalized === "visual reference"
+        || /^reference(?:\s+\d+)?$/.test(normalized)
+        || /^(diagram|graph|map|table|passage|other)\s+\d+$/.test(normalized)
+    );
 }
 
-function getReferenceTitle(reference: QuestionReferencePayload, index: number) {
-    return reference.title?.trim() || `${formatReferenceKind(reference.kind)} ${index + 1}`;
+function getReferenceTitle(reference: QuestionReferencePayload) {
+    const nextTitle = reference.title?.trim() || null;
+    return isGenericReferenceTitle(nextTitle) ? null : nextTitle;
 }
 
 function renderParsedBlocks(
@@ -195,35 +201,20 @@ export function SharedContextRenderer({
             </div>
 
             <div className="space-y-4">
-                {normalizedReferences.map((reference, referenceIndex) => {
+                {normalizedReferences.map((reference) => {
                     const hasImage = Boolean(reference.assetUrl);
                     const hasText = Boolean(reference.textContent?.trim());
                     const shouldShowImage = reference.mode !== "TEXT";
                     const shouldShowText = reference.mode !== "SNAPSHOT" || !hasImage;
+                    const referenceTitle = getReferenceTitle(reference);
 
                     return (
                         <div key={reference.id} className="space-y-3">
-                            <div className="flex flex-wrap items-center gap-2">
+                            {referenceTitle ? (
                                 <div className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${styles.sectionTitle}`}>
-                                    {getReferenceTitle(reference, referenceIndex)}
+                                    {referenceTitle}
                                 </div>
-                                <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
-                                    {reference.mode}
-                                </div>
-                                <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
-                                    {formatReferenceKind(reference.kind)}
-                                </div>
-                                {reference.sourcePage ? (
-                                    <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
-                                        Page {reference.sourcePage}
-                                    </div>
-                                ) : null}
-                                {typeof reference.confidence === "number" ? (
-                                    <div className="rounded-full bg-white/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-600">
-                                        {Math.round(reference.confidence * 100)}% confidence
-                                    </div>
-                                ) : null}
-                            </div>
+                            ) : null}
 
                             {shouldShowImage ? (
                                 hasImage ? (

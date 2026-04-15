@@ -725,7 +725,7 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
         const evidence = parseQuestionImportEvidence(question.importEvidence)
         return {
             stem: question.stem,
-            sharedContext: question.sharedContext ?? null,
+            sharedContext: sanitizeReferenceText(question.sharedContext) ?? null,
             options: Array.isArray(question.options)
                 ? question.options as GeneratedQuestion['options']
                 : [],
@@ -809,7 +809,7 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
             await tx.question.update({
                 where: { id: question.id },
                 data: {
-                    sharedContext: enriched.sharedContext ?? null,
+                    sharedContext: sanitizeReferenceText(enriched.sharedContext) ?? null,
                     importEvidence: buildQuestionImportEvidence(enriched),
                 },
             })
@@ -1537,7 +1537,7 @@ export async function addAdminQuestion(adminId: string, testId: string, data: Cr
             testId,
             order: (lastQuestion?.order ?? 0) + 1,
             stem: data.stem,
-            sharedContext: data.sharedContext,
+            sharedContext: sanitizeReferenceText(data.sharedContext) ?? null,
             options: data.options as unknown as Prisma.InputJsonValue,
             explanation: data.explanation,
             difficulty: (data.difficulty ?? 'MEDIUM') as Difficulty,
@@ -1591,7 +1591,7 @@ export async function updateAdminQuestion(
         updateData.stem = data.stem
     }
     if (data.sharedContext !== undefined) {
-        updateData.sharedContext = data.sharedContext
+        updateData.sharedContext = sanitizeReferenceText(data.sharedContext) ?? null
     }
     if (data.options !== undefined) {
         updateData.options = data.options as unknown as Prisma.InputJsonValue
@@ -1684,9 +1684,9 @@ export async function upsertAdminQuestionReferenceImage(
         return existingQuestion.sharedContext?.trim() ? 'HYBRID' : 'SNAPSHOT'
     })()
 
-    const nextTitle = existingVisualReference?.title
-        ?? importEvidence.referenceTitle
-        ?? (nextMode === 'HYBRID' ? 'Visual reference' : 'Manual visual reference')
+        const nextTitle = sanitizeReferenceTitle(existingVisualReference?.title)
+        ?? sanitizeReferenceTitle(importEvidence.referenceTitle)
+        ?? null
 
     const nextEvidence = buildQuestionImportEvidence({
         ...importEvidence,
@@ -1704,7 +1704,10 @@ export async function upsertAdminQuestionReferenceImage(
                     kind: nextKind,
                     mode: nextMode,
                     title: nextTitle,
-                    textContent: existingVisualReference.textContent ?? (existingQuestion.sharedContext?.trim() || null),
+                    textContent:
+                        sanitizeReferenceText(existingVisualReference.textContent)
+                        ?? sanitizeReferenceText(existingQuestion.sharedContext)
+                        ?? null,
                     assetUrl: uploadedSnapshot.assetUrl,
                     bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
                     evidence: mergeReferenceEvidence(existingVisualReference.evidence as Prisma.JsonValue | null, {
@@ -1720,7 +1723,7 @@ export async function upsertAdminQuestionReferenceImage(
                     kind: nextKind,
                     mode: nextMode,
                     title: nextTitle,
-                    textContent: existingQuestion.sharedContext?.trim() || null,
+                    textContent: sanitizeReferenceText(existingQuestion.sharedContext) ?? null,
                     assetUrl: uploadedSnapshot.assetUrl,
                     sourcePage: importEvidence.sourcePage ?? null,
                     bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
@@ -1757,6 +1760,108 @@ export async function upsertAdminQuestionReferenceImage(
 
     if (!refreshedQuestion) {
         return serviceError('NOT_FOUND', 'Question not found after updating reference image.')
+    }
+
+    return {
+        question: mapAdminQuestionRecord(refreshedQuestion),
+    }
+}
+
+export async function removeAdminQuestionReferenceImage(
+    adminId: string,
+    testId: string,
+    questionId: string,
+) {
+    const admin = await ensureActiveAdmin(adminId)
+    if ('error' in admin) {
+        return admin
+    }
+
+    const test = await prisma.test.findUnique({
+        where: { id: testId },
+        select: { id: true, status: true },
+    })
+
+    if (!test) {
+        return serviceError('NOT_FOUND', 'Test not found')
+    }
+
+    const editableError = ensureDraftEditable(test.status)
+    if (editableError) {
+        return editableError
+    }
+
+    const existingQuestion = await prisma.question.findUnique({
+        where: { id: questionId },
+        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
+    })
+
+    if (!existingQuestion || existingQuestion.testId !== testId) {
+        return serviceError('NOT_FOUND', 'Question not found in this test')
+    }
+
+    const mappedReferences = mapQuestionReferences(existingQuestion.referenceLinks)
+    const importEvidence = parseQuestionImportEvidence(existingQuestion.importEvidence)
+    const existingVisualReference = getPreferredVisualReference(mappedReferences, importEvidence)
+
+    if (!existingVisualReference?.id) {
+        return {
+            question: mapAdminQuestionRecord(existingQuestion),
+        }
+    }
+
+    const fallbackTextContent =
+        sanitizeReferenceText(existingVisualReference.textContent)
+        ?? sanitizeReferenceText(existingQuestion.sharedContext)
+        ?? null
+
+    const nextMode: QuestionReferenceMode = fallbackTextContent ? 'TEXT' : 'SNAPSHOT'
+
+    const nextEvidence = buildQuestionImportEvidence({
+        ...importEvidence,
+        referenceAssetUrl: null,
+        referenceMode: fallbackTextContent ? nextMode : null,
+        referenceTitle: fallbackTextContent ? sanitizeReferenceTitle(existingVisualReference.title) : null,
+    })
+
+    await prisma.$transaction(async (tx) => {
+        if (fallbackTextContent) {
+            await tx.questionReference.update({
+                where: { id: existingVisualReference.id },
+                data: {
+                    mode: nextMode,
+                    assetUrl: null,
+                    bbox: Prisma.JsonNull,
+                    textContent: fallbackTextContent,
+                },
+            })
+        } else {
+            await tx.questionReferenceLink.deleteMany({
+                where: {
+                    questionId,
+                    referenceId: existingVisualReference.id,
+                },
+            })
+            await tx.questionReference.delete({
+                where: { id: existingVisualReference.id },
+            })
+        }
+
+        await tx.question.update({
+            where: { id: questionId },
+            data: {
+                importEvidence: nextEvidence,
+            },
+        })
+    })
+
+    const refreshedQuestion = await prisma.question.findUnique({
+        where: { id: questionId },
+        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
+    })
+
+    if (!refreshedQuestion) {
+        return serviceError('NOT_FOUND', 'Question not found in this test')
     }
 
     return {
@@ -2462,7 +2567,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                     explanation: question.explanation || null,
                     difficulty: (question.difficulty as Difficulty | undefined) || 'MEDIUM',
                     topic: question.topic || null,
-                    sharedContext: question.sharedContext || null,
+                    sharedContext: sanitizeReferenceText(question.sharedContext) ?? null,
                     importEvidence: buildQuestionImportEvidence(question),
                 })),
             },

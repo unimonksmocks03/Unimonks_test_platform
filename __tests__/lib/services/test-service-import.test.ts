@@ -22,10 +22,13 @@ const prismaMock = {
     questionReference: {
         create: vi.fn(),
         update: vi.fn(),
+        delete: vi.fn(),
+        deleteMany: vi.fn(),
     },
     questionReferenceLink: {
         create: vi.fn(),
         createMany: vi.fn(),
+        deleteMany: vi.fn(),
     },
     auditLog: {
         create: vi.fn(),
@@ -43,6 +46,7 @@ const enrichGeneratedQuestionsMetadataMock = vi.fn()
 const verifyExtractedQuestionsMock = vi.fn()
 const verifyExtractedQuestionsWithAIMock = vi.fn()
 const reconcileGeneratedQuestionsWithTextAnswerHintsMock = vi.fn()
+const extractVisualReferencesFromPdfImagesMock = vi.fn()
 const classifyDocumentForImportMock = vi.fn()
 const resolveDocumentImportPlanMock = vi.fn()
 const isClassifierRoutingEnabledMock = vi.fn()
@@ -65,6 +69,7 @@ vi.mock('@/lib/services/ai-service', () => ({
     verifyExtractedQuestions: verifyExtractedQuestionsMock,
     verifyExtractedQuestionsWithAI: verifyExtractedQuestionsWithAIMock,
     reconcileGeneratedQuestionsWithTextAnswerHints: reconcileGeneratedQuestionsWithTextAnswerHintsMock,
+    extractVisualReferencesFromPdfImages: extractVisualReferencesFromPdfImagesMock,
 }))
 
 vi.mock('@/lib/services/document-classifier', () => ({
@@ -209,8 +214,11 @@ beforeEach(() => {
     })
     prismaMock.questionReference.create.mockResolvedValue({ id: 'reference-1' })
     prismaMock.questionReference.update.mockResolvedValue({ id: 'reference-1' })
+    prismaMock.questionReference.delete.mockResolvedValue({ id: 'reference-1' })
+    prismaMock.questionReference.deleteMany.mockResolvedValue({ count: 0 })
     prismaMock.questionReferenceLink.create.mockResolvedValue({ id: 'reference-link-1' })
     prismaMock.questionReferenceLink.createMany.mockResolvedValue({ count: 1 })
+    prismaMock.questionReferenceLink.deleteMany.mockResolvedValue({ count: 1 })
     prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof prismaMock) => Promise<unknown>) => callback(prismaMock))
     prismaMock.test.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'test-1',
@@ -281,6 +289,10 @@ beforeEach(() => {
         answerHintsRecovered: 0,
     }))
     attachSharedContextsFromPdfMock.mockImplementation(async (_buffer, questions) => questions)
+    extractVisualReferencesFromPdfImagesMock.mockResolvedValue({
+        error: false,
+        references: [],
+    })
     enrichGeneratedQuestionsMetadataMock.mockResolvedValue({
         questions: [createQuestion('Recovered question stem')],
         description: 'Recovered description',
@@ -616,7 +628,7 @@ test('upsertAdminQuestionReferenceImage creates a new visual reference when none
                 testId: 'test-1',
                 kind: 'DIAGRAM',
                 mode: 'HYBRID',
-                title: 'Visual reference',
+                title: null,
                 textContent: 'Original diagram context',
                 assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
             }),
@@ -638,7 +650,7 @@ test('upsertAdminQuestionReferenceImage creates a new visual reference when none
                 importEvidence: expect.objectContaining({
                     referenceKind: 'DIAGRAM',
                     referenceMode: 'HYBRID',
-                    referenceTitle: 'Visual reference',
+                    referenceTitle: null,
                     referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
                 }),
             }),
@@ -778,6 +790,185 @@ test('upsertAdminQuestionReferenceImage rejects updates for published tests', as
     )
     expect(prismaMock.question.findUnique).not.toHaveBeenCalled()
     expect(uploadManualReferenceSnapshotMock).not.toHaveBeenCalled()
+})
+
+test('removeAdminQuestionReferenceImage removes the asset but preserves sanitized text fallback', async () => {
+    const { removeAdminQuestionReferenceImage } = await servicePromise
+
+    prismaMock.question.findUnique
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Find the missing figure.',
+            sharedContext: 'Original diagram context',
+            importEvidence: {
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'HYBRID',
+                referenceTitle: 'Manual visual reference',
+                referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+            },
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Reasoning',
+            referenceLinks: [
+                createReferenceLink({
+                    id: 'reference-existing',
+                    mode: 'HYBRID',
+                    title: 'Manual visual reference',
+                    textContent: 'Original diagram context',
+                    assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+                }),
+            ],
+        })
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Find the missing figure.',
+            sharedContext: 'Original diagram context',
+            importEvidence: {
+                referenceKind: 'DIAGRAM',
+                referenceMode: 'TEXT',
+                referenceTitle: null,
+                referenceAssetUrl: null,
+            },
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Reasoning',
+            referenceLinks: [
+                createReferenceLink({
+                    id: 'reference-existing',
+                    mode: 'TEXT',
+                    title: null,
+                    textContent: 'Original diagram context',
+                    assetUrl: null,
+                }),
+            ],
+        })
+
+    const result = await removeAdminQuestionReferenceImage(
+        'admin-1',
+        'test-1',
+        'question-1',
+    )
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.questionReference.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'reference-existing' },
+            data: expect.objectContaining({
+                mode: 'TEXT',
+                assetUrl: null,
+                textContent: 'Original diagram context',
+            }),
+        }),
+    )
+    expect(prismaMock.questionReferenceLink.deleteMany).not.toHaveBeenCalled()
+    expect(prismaMock.questionReference.delete).not.toHaveBeenCalled()
+    expect(prismaMock.question.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'question-1' },
+            data: expect.objectContaining({
+                importEvidence: expect.objectContaining({
+                    referenceAssetUrl: null,
+                    referenceMode: 'TEXT',
+                }),
+            }),
+        }),
+    )
+    expect(result.question.references).toEqual([
+        expect.objectContaining({
+            id: 'reference-existing',
+            mode: 'TEXT',
+            assetUrl: null,
+            textContent: 'Original diagram context',
+        }),
+    ])
+})
+
+test('enrichImportedTestReferencesAfterDraft sanitizes leaked shared context before persisting references', async () => {
+    const { enrichImportedTestReferencesAfterDraft } = await servicePromise
+
+    prismaMock.test.findUnique.mockResolvedValueOnce({
+        id: 'test-1',
+        createdById: 'admin-1',
+        questions: [
+            {
+                id: 'question-1',
+                order: 1,
+                stem: 'Cash Flow Statement is primarily prepared to show',
+                sharedContext: null,
+                importEvidence: {
+                    sourcePage: 2,
+                    sourceSnippet: 'Cash Flow Statement is primarily prepared to show',
+                    sharedContextEvidence: null,
+                    answerSource: 'ANSWER_KEY',
+                    confidence: 0.95,
+                    extractionMode: 'TEXT_EXACT',
+                    referenceKind: 'NONE',
+                    referenceMode: 'TEXT',
+                    referenceTitle: null,
+                    referenceAssetUrl: null,
+                },
+                options: [
+                    { id: 'A', text: 'Only profit or loss for the period', isCorrect: false },
+                    { id: 'B', text: 'Inflows and outflows of cash', isCorrect: true },
+                    { id: 'C', text: 'Cash balance only', isCorrect: false },
+                    { id: 'D', text: 'Owner equity only', isCorrect: false },
+                ],
+                explanation: 'Explanation',
+                difficulty: 'MEDIUM',
+                topic: 'Accountancy',
+            },
+        ],
+    })
+
+    attachSharedContextsFromPdfMock.mockResolvedValueOnce([
+        createQuestion('Cash Flow Statement is primarily prepared to show', {
+            sharedContext: '(c) Changes in short-term borrowings\n(d) Only interest paid\nANSWER (a) Expenditures made for resources intended to generate future income and cash flows',
+            referenceKind: 'TABLE',
+            referenceMode: 'TEXT',
+            referenceTitle: 'Reference 1',
+            sharedContextEvidence: 'Page 2',
+        }),
+    ])
+    uploadPdfReferenceSnapshotsMock.mockResolvedValueOnce(new Map())
+
+    const result = await enrichImportedTestReferencesAfterDraft({
+        adminId: 'admin-1',
+        testId: 'test-1',
+        file: createFile('accountancy-5.pdf', 'application/pdf'),
+        fileName: 'ACCOUNTANCY 5.pdf',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.question.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+            where: { id: 'question-1' },
+            data: expect.objectContaining({
+                sharedContext: null,
+            }),
+        }),
+    )
+    expect(prismaMock.questionReference.create).not.toHaveBeenCalled()
+    expect(prismaMock.questionReferenceLink.createMany).not.toHaveBeenCalled()
 })
 
 test('generateAdminTestFromDocument persists review-required diagnostics to the draft and audit log', async () => {

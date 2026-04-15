@@ -106,10 +106,9 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
         input.isPdfUpload
         && input.classification.hasDiagramReasoning
         && !input.classification.isScannedLike
-        && selectedStrategy === 'HYBRID_RECONCILE'
 
     const normalizedSelectedStrategy =
-        manualVisualReferenceCapture && selectedStrategy === 'HYBRID_RECONCILE'
+        manualVisualReferenceCapture
             ? 'TEXT_EXACT'
             : selectedStrategy
 

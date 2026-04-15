@@ -122,7 +122,7 @@ test('resolveDocumentImportPlan normalizes non-pdf multimodal preference into hy
     expect(plan.visualReferenceOverlay).toBe(false)
 })
 
-test('resolveDocumentImportPlan routes weak diagram-heavy PDFs to multimodal extraction', () => {
+test('resolveDocumentImportPlan routes weak diagram-heavy PDFs to text-first manual visual capture', () => {
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST VENN DIAGRAM.pdf',
         text: visualReasoningPdfText,
@@ -134,10 +134,10 @@ test('resolveDocumentImportPlan routes weak diagram-heavy PDFs to multimodal ext
         isPdfUpload: true,
     })
 
-    expect(plan.selectedStrategy).toBe('MULTIMODAL_EXTRACT')
-    expect(plan.runMultimodalFirst).toBe(true)
+    expect(plan.selectedStrategy).toBe('TEXT_EXACT')
+    expect(plan.runMultimodalFirst).toBe(false)
     expect(plan.visualReferenceOverlay).toBe(false)
-    expect(plan.manualVisualReferenceCapture).toBe(false)
+    expect(plan.manualVisualReferenceCapture).toBe(true)
 })
 
 test('resolveDocumentImportPlan routes strong-OCR diagram-heavy PDFs to text-exact with manual visual capture', () => {

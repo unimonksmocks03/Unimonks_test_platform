@@ -12,7 +12,8 @@ const REFERENCE_METADATA_NOISE_PATTERNS = [
 const REFERENCE_CONTEXT_HINT_REGEX =
     /\b(?:table|data|chart|dataset|figure|diagram|graph|map|venn|passage|case study|read the following|list i|list ii|column i|column ii|match the following|match the correct pair)\b/i
 
-const LOWERCASE_OPTION_LINE_REGEX = /^\(?[a-d]\)?[.)]\s+.+$/i
+const LOWERCASE_OPTION_LINE_REGEX = /^(?:\([a-d]\)|[a-d][.)])\s+.+$/i
+const UPPERCASE_OPTION_LINE_REGEX = /^(?:\([A-D]\)|[A-D][.)])\s+.+$/
 const ANSWER_OR_EXPLANATION_LINE_REGEX =
     /^(?:answer|ans(?:wer)?|explanation|reason|difficulty|topic)\b/i
 
@@ -54,6 +55,7 @@ function looksLikeQuestionContentLeak(value: string) {
 
     const hasReferenceHint = REFERENCE_CONTEXT_HINT_REGEX.test(value)
     const lowercaseOptionLines = lines.filter((line) => LOWERCASE_OPTION_LINE_REGEX.test(line)).length
+    const uppercaseOptionLines = lines.filter((line) => UPPERCASE_OPTION_LINE_REGEX.test(line)).length
     const hasAnswerOrExplanationLine = lines.some((line) => ANSWER_OR_EXPLANATION_LINE_REGEX.test(line))
 
     if (hasReferenceHint) {
@@ -64,7 +66,20 @@ function looksLikeQuestionContentLeak(value: string) {
         return true
     }
 
-    return lowercaseOptionLines >= 2
+    return lowercaseOptionLines + uppercaseOptionLines >= 2
+}
+
+function isQuestionLeakLine(line: string) {
+    const normalized = line.trim()
+    if (!normalized) {
+        return false
+    }
+
+    return (
+        LOWERCASE_OPTION_LINE_REGEX.test(normalized)
+        || UPPERCASE_OPTION_LINE_REGEX.test(normalized)
+        || ANSWER_OR_EXPLANATION_LINE_REGEX.test(normalized)
+    )
 }
 
 export function sanitizeReferenceText(value: string | null | undefined) {
@@ -73,10 +88,16 @@ export function sanitizeReferenceText(value: string | null | undefined) {
         return null
     }
 
-    const filteredLines = normalized
+    const normalizedLines = normalized
         .split('\n')
         .map((line) => line.trim())
+        .filter(Boolean)
+
+    const hasReferenceHint = normalizedLines.some((line) => REFERENCE_CONTEXT_HINT_REGEX.test(line))
+
+    const filteredLines = normalizedLines
         .filter((line) => !isMetadataNoiseLine(line))
+        .filter((line) => hasReferenceHint || !isQuestionLeakLine(line))
 
     if (filteredLines.length === 0) {
         return null

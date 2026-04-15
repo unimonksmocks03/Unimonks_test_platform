@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { withAuth } from '@/lib/middleware/auth-guard'
-import { upsertAdminQuestionReferenceImage } from '@/lib/services/test-service'
+import {
+    removeAdminQuestionReferenceImage,
+    upsertAdminQuestionReferenceImage,
+} from '@/lib/services/test-service'
 import {
     mapTestServiceError,
     missingRouteParam,
@@ -43,3 +46,23 @@ async function postHandler(
 }
 
 export const POST = withAuth(postHandler, ['ADMIN'])
+
+async function deleteHandler(
+    _req: NextRequest,
+    ctx: { userId: string; role: Role; params?: Record<string, string> },
+) {
+    const testId = ctx.params?.id
+    const questionId = ctx.params?.qId
+    if (!testId || !questionId) {
+        return missingRouteParam('Test ID and question ID are required')
+    }
+
+    const result = await removeAdminQuestionReferenceImage(ctx.userId, testId, questionId)
+    if ('error' in result) {
+        return mapTestServiceError(result)
+    }
+
+    return NextResponse.json(result)
+}
+
+export const DELETE = withAuth(deleteHandler, ['ADMIN'])

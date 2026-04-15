@@ -526,6 +526,51 @@ function AdminTestBuilderForm() {
         void uploadReferenceImage(pastedFile);
     }, [uploadReferenceImage]);
 
+    const removeReferenceImage = useCallback(async () => {
+        if (isContentLocked || isBusy || isUploadingReferenceImage || !testId || !activeQuestion.dbId || !activeVisualReference?.assetUrl) {
+            return;
+        }
+
+        setIsUploadingReferenceImage(true);
+        try {
+            const response = await fetch(`/api/admin/tests/${testId}/questions/${activeQuestion.dbId}/reference-image`, {
+                method: "DELETE",
+            });
+            const data = await response.json().catch(() => null);
+
+            if (!response.ok || !data?.question) {
+                toast.error("Reference removal failed", {
+                    description: data?.message || `The server returned ${response.status}. Please try again.`,
+                });
+                return;
+            }
+
+            const updatedQuestion: Question = {
+                dbId: data.question.id,
+                stem: data.question.stem,
+                sharedContext: data.question.sharedContext || "",
+                references: data.question.references || [],
+                options: normalizeOptions(data.question.options),
+                difficulty: data.question.difficulty,
+                topic: data.question.topic || "",
+                explanation: data.question.explanation || "",
+                saved: true,
+            };
+
+            setQuestions((currentQuestions) => mergeQuestionReferences(currentQuestions, updatedQuestion));
+            toast.success("Visual reference removed", {
+                description: "The attached image has been removed from this question.",
+            });
+        } catch (error) {
+            console.error("[ADMIN][TEST] Reference image removal failed:", error);
+            toast.error("Reference removal failed", {
+                description: "Could not remove the image. Please try again.",
+            });
+        } finally {
+            setIsUploadingReferenceImage(false);
+        }
+    }, [activeQuestion, activeVisualReference?.assetUrl, isBusy, isContentLocked, isUploadingReferenceImage, testId]);
+
     const addQuestion = () => {
         setQuestions((currentQuestions) => [...currentQuestions, emptyQuestion()]);
         setActiveQIndex(questions.length);
@@ -1263,6 +1308,20 @@ function AdminTestBuilderForm() {
                                                 {activeVisualReference?.assetUrl ? "Replace image" : "Upload image"}
                                             </Button>
                                         </div>
+                                        {activeVisualReference?.assetUrl ? (
+                                            <div className="mt-3 flex justify-end">
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    disabled={isContentLocked || isBusy || isUploadingReferenceImage || !activeQuestion.dbId}
+                                                    onClick={() => void removeReferenceImage()}
+                                                    className="rounded-xl px-3 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                                                >
+                                                    <Trash2 className="mr-2 h-4 w-4" />
+                                                    Remove image
+                                                </Button>
+                                            </div>
+                                        ) : null}
                                         <input
                                             ref={referenceFileInputRef}
                                             type="file"
