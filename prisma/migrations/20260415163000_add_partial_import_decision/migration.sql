@@ -1,0 +1,1 @@
+ALTER TYPE "DocumentImportDecision" ADD VALUE IF NOT EXISTS 'PARTIAL';

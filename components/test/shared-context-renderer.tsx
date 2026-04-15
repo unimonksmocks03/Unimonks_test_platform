@@ -1,5 +1,6 @@
 "use client";
 
+import Image from 'next/image'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { QuestionReferencePayload } from "@/lib/types/question-reference";
 import { isVisualReference } from "@/lib/utils/question-reference-selection";
@@ -224,10 +225,14 @@ export function SharedContextRenderer({
                             {shouldShowImage ? (
                                 hasImage ? (
                                     <div className={`overflow-hidden rounded-[20px] border ${styles.tableWrap}`}>
-                                        <img
+                                        <Image
                                             src={reference.assetUrl as string}
                                             alt={reference.title || "Question reference snapshot"}
-                                            className="max-h-[420px] w-full object-contain bg-white"
+                                            width={1200}
+                                            height={900}
+                                            sizes="(max-width: 768px) 100vw, 720px"
+                                            unoptimized
+                                            className="h-auto max-h-[420px] w-full object-contain bg-white"
                                             loading="lazy"
                                         />
                                     </div>

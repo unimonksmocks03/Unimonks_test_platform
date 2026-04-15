@@ -73,15 +73,14 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
     const dirtyRef = useRef(false)
     const answersRef = useRef<AnswerEntry[]>([])
     const syncPromiseRef = useRef<Promise<boolean> | null>(null)
-
-    function storageKey() {
-        return `${STORAGE_PREFIX}${sessionId}`
-    }
+    const syncAnswersRef = useRef<(force?: boolean) => Promise<boolean>>(async () => true)
+    const handleSubmitRef = useRef<(force?: boolean) => Promise<void>>(async () => {})
+    const localStorageKey = `${STORAGE_PREFIX}${sessionId}`
 
     function persistAnswers(nextAnswers: AnswerEntry[]) {
         answersRef.current = nextAnswers
         setAnswers(nextAnswers)
-        window.localStorage.setItem(storageKey(), JSON.stringify(nextAnswers))
+        window.localStorage.setItem(localStorageKey, JSON.stringify(nextAnswers))
         dirtyRef.current = true
     }
 
@@ -171,13 +170,16 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                 return
             }
 
-            window.localStorage.removeItem(storageKey())
+            window.localStorage.removeItem(localStorageKey)
             toast.success(`Submitted: ${response.data.score}/${response.data.totalMarks} (${response.data.percentage}%)`)
             router.replace(`/free-mocks/results/${sessionId}`)
         } finally {
             setIsSubmitting(false)
         }
     }
+
+    syncAnswersRef.current = syncAnswers
+    handleSubmitRef.current = handleSubmit
 
     useEffect(() => {
         let active = true
@@ -204,14 +206,14 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                 return
             }
 
-            const localRaw = window.localStorage.getItem(storageKey())
+            const localRaw = window.localStorage.getItem(localStorageKey)
             let localAnswers: AnswerEntry[] | null = null
 
             if (localRaw) {
                 try {
                     localAnswers = JSON.parse(localRaw) as AnswerEntry[]
                 } catch {
-                    window.localStorage.removeItem(storageKey())
+                    window.localStorage.removeItem(localStorageKey)
                 }
             }
             const serverAnswers = response.data.answers ?? []
@@ -230,7 +232,7 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
             if (localAnswers && localAnswers.length >= serverAnswers.length) {
                 dirtyRef.current = true
             } else if (serverAnswers.length > 0) {
-                window.localStorage.setItem(storageKey(), JSON.stringify(serverAnswers))
+                window.localStorage.setItem(localStorageKey, JSON.stringify(serverAnswers))
             }
 
             if (response.data.resumed) {
@@ -241,7 +243,7 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
         return () => {
             active = false
         }
-    }, [router, sessionId])
+    }, [localStorageKey, router, sessionId])
 
     useEffect(() => {
         if (isLoading) {
@@ -254,12 +256,12 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
 
             if (remaining <= 0) {
                 window.clearInterval(countdown)
-                void handleSubmit(true)
+                void handleSubmitRef.current(true)
             }
         }, 1000)
 
         const batchSync = window.setInterval(() => {
-            void syncAnswers()
+            void syncAnswersRef.current()
         }, 15000)
 
         const statusSync = window.setInterval(async () => {

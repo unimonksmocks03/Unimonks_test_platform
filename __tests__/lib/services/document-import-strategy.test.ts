@@ -122,6 +122,32 @@ test('resolveDocumentImportPlan normalizes non-pdf multimodal preference into hy
     expect(plan.visualReferenceOverlay).toBe(false)
 })
 
+test('resolveDocumentImportPlan enables visual overlay for docx imports with embedded images', () => {
+    const classification = classifyDocumentForImport({
+        fileName: 'accounts-visual.docx',
+        text: `
+            [Image: cash flow diagram]
+            Q1. Cash Flow Statement is primarily prepared to show
+            (A) Only profit or loss
+            (B) Inflows and outflows of cash
+            (C) Only liabilities
+            (D) Only assets
+            Answer: (B)
+        `,
+    })
+
+    const plan = resolveDocumentImportPlan({
+        classifierRoutingEnabled: true,
+        classification,
+        isPdfUpload: false,
+    })
+
+    expect(classification.hasEmbeddedImages).toBe(true)
+    expect(classification.hasVisualReferences).toBe(true)
+    expect(plan.selectedStrategy).toBe('HYBRID_RECONCILE')
+    expect(plan.visualReferenceOverlay).toBe(true)
+})
+
 test('resolveDocumentImportPlan routes weak diagram-heavy PDFs to text-first manual visual capture', () => {
     const classification = classifyDocumentForImport({
         fileName: 'REASONING MOCKTEST VENN DIAGRAM.pdf',

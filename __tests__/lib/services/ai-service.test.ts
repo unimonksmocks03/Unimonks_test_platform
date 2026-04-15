@@ -773,3 +773,62 @@ Answer: (B)`,
     expect(enriched[0]?.sharedContext).toContain('Passage Beta')
     expect(enriched[1]?.sharedContext).toContain('Passage Alpha')
 })
+
+test('attachSharedContextsFromPageText uses source-snippet similarity before question-order propagation', async () => {
+    const { attachSharedContextsFromPageText } = await aiServicePromise
+
+    const questions = [
+        {
+            stem: 'Question about liquidity support',
+            options: [
+                { id: 'A', text: 'A', isCorrect: true },
+                { id: 'B', text: 'B', isCorrect: false },
+                { id: 'C', text: 'C', isCorrect: false },
+                { id: 'D', text: 'D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Accountancy',
+            sharedContext: null,
+            sourceSnippet: 'Cash reserve ratio supports liquidity in the banking system',
+        },
+        {
+            stem: 'Question about working capital',
+            options: [
+                { id: 'A', text: 'A', isCorrect: false },
+                { id: 'B', text: 'B', isCorrect: true },
+                { id: 'C', text: 'C', isCorrect: false },
+                { id: 'D', text: 'D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Accountancy',
+            sharedContext: null,
+            sourceSnippet: 'Working capital equals current assets minus current liabilities',
+        },
+    ]
+
+    const pages = [
+        `Table Alpha
+Working capital equals current assets minus current liabilities.
+Q1. Placeholder question on page one
+(A) A
+(B) B
+(C) C
+(D) D
+Answer: (A)`,
+        `Passage Beta
+Cash reserve ratio supports liquidity in the banking system.
+Q2. Placeholder question on page two
+(A) A
+(B) B
+(C) C
+(D) D
+Answer: (B)`,
+    ]
+
+    const enriched = attachSharedContextsFromPageText(questions, pages)
+
+    expect(enriched[0]?.sharedContext).toContain('Passage Beta')
+    expect(enriched[1]?.sharedContext).toContain('Table Alpha')
+})

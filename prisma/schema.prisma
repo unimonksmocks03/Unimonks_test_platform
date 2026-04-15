@@ -82,6 +82,7 @@ enum DocumentImportLane {
 enum DocumentImportDecision {
   EXACT_ACCEPTED
   REVIEW_REQUIRED
+  PARTIAL
   FAILED_WITH_REASON
 }
 

@@ -125,8 +125,8 @@ export function resolveDocumentImportPlan(input: ResolveDocumentImportPlanInput)
             && normalizedSelectedStrategy === 'MULTIMODAL_EXTRACT'
             && !manualVisualReferenceCapture,
         visualReferenceOverlay:
-            input.isPdfUpload
-            && input.classification.hasVisualReferences
+            input.classification.hasVisualReferences
+            && (input.isPdfUpload || input.classification.hasEmbeddedImages)
             && normalizedSelectedStrategy === 'HYBRID_RECONCILE'
             && !manualVisualReferenceCapture,
         manualVisualReferenceCapture,

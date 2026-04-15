@@ -8,6 +8,7 @@ vi.stubEnv('OPENAI_API_KEY', process.env.OPENAI_API_KEY ?? 'test-openai-key')
 
 const {
     mockResponsesParse,
+    mockResponsesStream,
     mockChatCreate,
     mockGetDocumentProxy,
     mockRenderPageAsImage,
@@ -15,6 +16,7 @@ const {
     mockCanvasImport,
 } = vi.hoisted(() => ({
     mockResponsesParse: vi.fn(),
+    mockResponsesStream: vi.fn(),
     mockChatCreate: vi.fn(),
     mockGetDocumentProxy: vi.fn(),
     mockRenderPageAsImage: vi.fn(),
@@ -24,7 +26,7 @@ const {
 
 vi.mock('openai', () => ({
     default: class {
-        responses = { parse: mockResponsesParse }
+        responses = { parse: mockResponsesParse, stream: mockResponsesStream }
         chat = { completions: { create: mockChatCreate } }
     },
 }))
@@ -38,6 +40,13 @@ vi.mock('unpdf', () => ({
 vi.mock('@napi-rs/canvas', () => mockCanvasImport())
 
 const aiServicePromise = import('../../../lib/services/ai-service')
+
+function createMockResponseStream(finalResponse: unknown) {
+    return {
+        on: vi.fn(),
+        finalResponse: vi.fn().mockResolvedValue(finalResponse),
+    }
+}
 
 function createVerifiedQuestion(stem: string, overrides: Partial<GeneratedQuestion> = {}): GeneratedQuestion {
     return {
@@ -239,6 +248,7 @@ test('extractQuestionsFromPdfMultimodal recovers a stalled chunk with OCR text f
     const { extractQuestionsFromPdfMultimodal } = await aiServicePromise
 
     mockResponsesParse.mockReset()
+    mockResponsesStream.mockReset()
     mockGetDocumentProxy.mockReset()
     mockExtractText.mockReset()
     mockRenderPageAsImage.mockReset()
@@ -265,33 +275,33 @@ test('extractQuestionsFromPdfMultimodal recovers a stalled chunk with OCR text f
                 output_tokens: 120,
             },
         })
-        .mockResolvedValueOnce({
-            output_parsed: {
-                questions: [
-                    {
-                        questionNumber: 1,
-                        stem: 'Assertion (A): Light travels in a straight line. Reason (R): Shadows are formed because light cannot bend around opaque objects.',
-                        options: [
-                            { id: 'A', text: 'Both A and R are true and R is the correct explanation of A', isCorrect: true },
-                            { id: 'B', text: 'Both A and R are true but R is not the correct explanation of A', isCorrect: false },
-                            { id: 'C', text: 'A is true but R is false', isCorrect: false },
-                            { id: 'D', text: 'A is false but R is true', isCorrect: false },
-                        ],
-                        explanation: 'Straight-line propagation of light explains shadow formation.',
-                        difficulty: 'MEDIUM',
-                        topic: 'Light',
-                        sourcePage: 1,
-                        sourceSnippet: 'Q1. Assertion (A): Light travels in a straight line.',
-                        answerSource: 'INLINE_ANSWER',
-                        confidence: 0.93,
-                    },
-                ],
-            },
-            usage: {
-                input_tokens: 260,
-                output_tokens: 140,
-            },
-        })
+    mockResponsesStream.mockReturnValueOnce(createMockResponseStream({
+        output_parsed: {
+            questions: [
+                {
+                    questionNumber: 1,
+                    stem: 'Assertion (A): Light travels in a straight line. Reason (R): Shadows are formed because light cannot bend around opaque objects.',
+                    options: [
+                        { id: 'A', text: 'Both A and R are true and R is the correct explanation of A', isCorrect: true },
+                        { id: 'B', text: 'Both A and R are true but R is not the correct explanation of A', isCorrect: false },
+                        { id: 'C', text: 'A is true but R is false', isCorrect: false },
+                        { id: 'D', text: 'A is false but R is true', isCorrect: false },
+                    ],
+                    explanation: 'Straight-line propagation of light explains shadow formation.',
+                    difficulty: 'MEDIUM',
+                    topic: 'Light',
+                    sourcePage: 1,
+                    sourceSnippet: 'Q1. Assertion (A): Light travels in a straight line.',
+                    answerSource: 'INLINE_ANSWER',
+                    confidence: 0.93,
+                },
+            ],
+        },
+        usage: {
+            input_tokens: 260,
+            output_tokens: 140,
+        },
+    }))
 
     const result = await extractQuestionsFromPdfMultimodal(
         Buffer.from('fake-pdf'),
@@ -308,7 +318,8 @@ test('extractQuestionsFromPdfMultimodal recovers a stalled chunk with OCR text f
     expect(result.questions).toHaveLength(1)
     expect(result.questions?.[0]?.stem).toContain('Assertion (A): Light travels in a straight line')
     expect(result.message).toContain('OCR text fallback')
-    expect(mockResponsesParse).toHaveBeenCalledTimes(2)
+    expect(mockResponsesParse).toHaveBeenCalledOnce()
+    expect(mockResponsesStream).toHaveBeenCalledOnce()
 })
 
 test('extractQuestionsFromPdfMultimodal chunks visual PDFs by page window and merges numbered questions', async () => {
@@ -476,9 +487,9 @@ test('extractVisualReferencesFromPdfImages degrades gracefully when visual-refer
 test('extractQuestionsFromDocumentTextPrecisely retries text-AI extraction with smaller chunks after max_output_tokens truncation', async () => {
     const { extractQuestionsFromDocumentTextPrecisely } = await aiServicePromise
 
-    mockResponsesParse.mockReset()
-    mockResponsesParse
-        .mockResolvedValueOnce({
+    mockResponsesStream.mockReset()
+    mockResponsesStream
+        .mockImplementationOnce(() => createMockResponseStream({
             status: 'incomplete',
             incomplete_details: {
                 reason: 'max_output_tokens',
@@ -488,8 +499,8 @@ test('extractQuestionsFromDocumentTextPrecisely retries text-AI extraction with 
                 input_tokens: 700,
                 output_tokens: 80,
             },
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockImplementationOnce(() => createMockResponseStream({
             output_parsed: {
                 questions: [
                     {
@@ -510,8 +521,8 @@ test('extractQuestionsFromDocumentTextPrecisely retries text-AI extraction with 
                 input_tokens: 320,
                 output_tokens: 120,
             },
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockImplementationOnce(() => createMockResponseStream({
             output_parsed: {
                 questions: [],
             },
@@ -519,7 +530,7 @@ test('extractQuestionsFromDocumentTextPrecisely retries text-AI extraction with 
                 input_tokens: 320,
                 output_tokens: 10,
             },
-        })
+        }))
 
     const result = await extractQuestionsFromDocumentTextPrecisely(
         'Reasoning theory notes. '.repeat(80),
@@ -529,6 +540,50 @@ test('extractQuestionsFromDocumentTextPrecisely retries text-AI extraction with 
     expect(result.aiRepairUsed).toBe(true)
     expect(result.questions).toHaveLength(1)
     expect(result.questions[0]?.stem).toBe('Which number completes the series?')
+})
+
+test('extractQuestionsFromDocumentTextPrecisely downgrades repeated structured-output failures to source generation fallback', async () => {
+    const { extractQuestionsFromDocumentTextPrecisely } = await aiServicePromise
+
+    mockResponsesStream.mockReset()
+    mockChatCreate.mockReset()
+
+    mockResponsesStream.mockImplementation(() => ({
+        on: vi.fn(),
+        finalResponse: vi.fn().mockRejectedValue(new Error('structured extraction failed')),
+    }))
+    mockChatCreate.mockResolvedValueOnce({
+        choices: [{
+            message: {
+                content: JSON.stringify({
+                    questions: [
+                        {
+                            stem: 'Which account appears under current assets?',
+                            options: [
+                                { id: 'A', text: 'Inventory', isCorrect: true },
+                                { id: 'B', text: 'Debenture', isCorrect: false },
+                                { id: 'C', text: 'Share capital', isCorrect: false },
+                                { id: 'D', text: 'Mortgage', isCorrect: false },
+                            ],
+                            explanation: 'Inventory is a current asset.',
+                            difficulty: 'MEDIUM',
+                            topic: 'Accountancy',
+                        },
+                    ],
+                }),
+            },
+        }],
+        usage: { prompt_tokens: 120, completion_tokens: 60 },
+    })
+
+    const result = await extractQuestionsFromDocumentTextPrecisely(
+        'Accountancy chapter notes about current assets, liabilities, and inventory. '.repeat(40),
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.aiRepairUsed).toBe(true)
+    expect(result.questions).toHaveLength(1)
+    expect(result.questions[0]?.extractionMode).toBe('GENERATE_FROM_SOURCE')
 })
 
 test('generateQuestionsFromText does not collapse distinct questions that share a long common prefix', async () => {
@@ -592,6 +647,106 @@ test('generateQuestionsFromText does not collapse distinct questions that share 
     expect(result.error).toBeUndefined()
     expect(result.questions).toHaveLength(2)
     expect(result.questions?.map((question) => question.stem)).toEqual([firstStem, secondStem])
+})
+
+test('generateQuestionsFromText repairs a malformed generated question before dropping it', async () => {
+    const { generateQuestionsFromText } = await aiServicePromise
+
+    mockChatCreate.mockReset()
+    mockResponsesParse.mockReset()
+
+    mockChatCreate.mockResolvedValueOnce({
+        choices: [{
+            message: {
+                content: JSON.stringify({
+                    questions: [
+                        {
+                            stem: 'Cash flow statement shows',
+                            options: [
+                                { id: 'A', text: 'Profit only', isCorrect: false },
+                                { id: 'B', text: 'Cash inflow and outflow', isCorrect: true },
+                                { id: 'C', text: 'Reserves only', isCorrect: false },
+                            ],
+                            explanation: 'Shows movement of cash.',
+                            difficulty: 'MEDIUM',
+                            topic: 'Accountancy',
+                        },
+                    ],
+                }),
+            },
+        }],
+        usage: { prompt_tokens: 90, completion_tokens: 45 },
+    })
+    mockResponsesParse.mockResolvedValueOnce({
+        output_parsed: {
+            repaired: {
+                stem: 'Cash flow statement shows',
+                options: [
+                    { id: 'A', text: 'Profit only', isCorrect: false },
+                    { id: 'B', text: 'Cash inflow and outflow', isCorrect: true },
+                    { id: 'C', text: 'Reserves only', isCorrect: false },
+                    { id: 'D', text: 'Liabilities only', isCorrect: false },
+                ],
+                explanation: 'Shows movement of cash.',
+                difficulty: 'MEDIUM',
+                topic: 'Accountancy',
+            },
+        },
+        usage: { input_tokens: 60, output_tokens: 30 },
+    })
+
+    const result = await generateQuestionsFromText('Cash flow statement notes'.repeat(40), 1)
+
+    expect(result.error).toBeUndefined()
+    expect(result.questions).toHaveLength(1)
+    expect(result.questions?.[0]?.options.filter((option) => option.isCorrect)).toHaveLength(1)
+    expect(mockResponsesParse).toHaveBeenCalledOnce()
+})
+
+test('generateQuestionsFromText keeps modest overflow above the requested count', async () => {
+    const { generateQuestionsFromText } = await aiServicePromise
+
+    mockChatCreate.mockReset()
+    mockChatCreate.mockResolvedValueOnce({
+        choices: [{
+            message: {
+                content: JSON.stringify({
+                    questions: [
+                        {
+                            stem: 'Question 1',
+                            options: [
+                                { id: 'A', text: 'A1', isCorrect: true },
+                                { id: 'B', text: 'B1', isCorrect: false },
+                                { id: 'C', text: 'C1', isCorrect: false },
+                                { id: 'D', text: 'D1', isCorrect: false },
+                            ],
+                            explanation: 'Explanation 1',
+                            difficulty: 'MEDIUM',
+                            topic: 'Topic 1',
+                        },
+                        {
+                            stem: 'Question 2',
+                            options: [
+                                { id: 'A', text: 'A2', isCorrect: false },
+                                { id: 'B', text: 'B2', isCorrect: true },
+                                { id: 'C', text: 'C2', isCorrect: false },
+                                { id: 'D', text: 'D2', isCorrect: false },
+                            ],
+                            explanation: 'Explanation 2',
+                            difficulty: 'MEDIUM',
+                            topic: 'Topic 2',
+                        },
+                    ],
+                }),
+            },
+        }],
+        usage: { prompt_tokens: 100, completion_tokens: 80 },
+    })
+
+    const result = await generateQuestionsFromText('Overflow-friendly source material'.repeat(30), 1)
+
+    expect(result.error).toBeUndefined()
+    expect(result.questions).toHaveLength(2)
 })
 
 test('extractVisualReferencesFromPdfImages drops empty sharedContext rows without failing the whole chunk', async () => {
@@ -945,10 +1100,10 @@ test('verifyExtractedQuestions flags multimodal questions without source pages a
 test('extractVisualReferencesFromPdfImages returns structured visual references from page OCR and images', async () => {
     const { extractVisualReferencesFromPdfImages } = await aiServicePromise
 
-    mockResponsesParse.mockClear()
-    mockGetDocumentProxy.mockClear()
-    mockExtractText.mockClear()
-    mockRenderPageAsImage.mockClear()
+    mockResponsesParse.mockReset()
+    mockGetDocumentProxy.mockReset()
+    mockExtractText.mockReset()
+    mockRenderPageAsImage.mockReset()
 
     mockGetDocumentProxy.mockResolvedValueOnce({
         numPages: 2,

@@ -416,6 +416,52 @@ test('executeDocumentImportPlan skips visual overlay entirely when reference enr
     expect(extractVisualReferences).not.toHaveBeenCalled()
 })
 
+test('executeDocumentImportPlan merges visual overlay for non-pdf hybrid imports with embedded images', async () => {
+    const extractVisualReferences = vi.fn().mockResolvedValue({
+        references: [
+            {
+                questionNumber: 1,
+                sharedContext: 'DOCX diagram showing fund-flow arrows.',
+                sourcePage: 1,
+                sourceSnippet: 'Cash flow diagram',
+                sharedContextEvidence: 'Embedded image near Q1',
+                confidence: 0.92,
+            },
+        ],
+        pageCount: 1,
+        chunkCount: 1,
+    })
+
+    const outcome = await executeDocumentImportPlan(
+        {
+            plan: {
+                routingMode: 'CLASSIFIER',
+                lane: 'ADVANCED',
+                selectedStrategy: 'HYBRID_RECONCILE',
+                runMultimodalFirst: false,
+                visualReferenceOverlay: true,
+                generateFromSource: false,
+                reasons: ['docx with embedded images'],
+            },
+            isPdfUpload: false,
+            textLength: 2400,
+            parseFailed: false,
+            generationTarget: 50,
+        },
+        createHandlers({
+            extractTextExact: vi.fn().mockResolvedValue(createExactExtraction({
+                questions: [createQuestion('Exact docx visual question')],
+            })),
+            extractVisualReferences,
+        }),
+    )
+
+    expect(outcome.useLegacyFlow).toBe(false)
+    expect(outcome.strategy).toBe('EXTRACTED')
+    expect(extractVisualReferences).toHaveBeenCalledOnce()
+    expect(outcome.result?.questions?.[0]?.sharedContext).toContain('DOCX diagram showing fund-flow arrows')
+})
+
 test('executeDocumentImportPlan returns exact questions immediately for manual visual-reference capture plans', async () => {
     const extractVisualReferences = vi.fn()
 

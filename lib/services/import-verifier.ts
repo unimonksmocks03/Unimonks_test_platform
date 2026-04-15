@@ -25,7 +25,7 @@ export type VerificationContext = {
     comparisonQuestions?: GeneratedQuestion[] | null
 }
 
-export type ImportVerificationDecision = 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+export type ImportVerificationDecision = 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'PARTIAL' | 'FAILED_WITH_REASON'
 
 export type ImportVerificationOutcome = {
     decision: ImportVerificationDecision

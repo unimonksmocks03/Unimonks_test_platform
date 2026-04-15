@@ -47,6 +47,7 @@ const enrichGeneratedQuestionsMetadataMock = vi.fn()
 const verifyExtractedQuestionsMock = vi.fn()
 const verifyExtractedQuestionsWithAIMock = vi.fn()
 const reconcileGeneratedQuestionsWithTextAnswerHintsMock = vi.fn()
+const extractVisualReferencesFromDocxImagesMock = vi.fn()
 const extractVisualReferencesFromPdfImagesMock = vi.fn()
 const classifyDocumentForImportMock = vi.fn()
 const resolveDocumentImportPlanMock = vi.fn()
@@ -71,6 +72,7 @@ vi.mock('@/lib/services/ai-service', () => ({
     verifyExtractedQuestions: verifyExtractedQuestionsMock,
     verifyExtractedQuestionsWithAI: verifyExtractedQuestionsWithAIMock,
     reconcileGeneratedQuestionsWithTextAnswerHints: reconcileGeneratedQuestionsWithTextAnswerHintsMock,
+    extractVisualReferencesFromDocxImages: extractVisualReferencesFromDocxImagesMock,
     extractVisualReferencesFromPdfImages: extractVisualReferencesFromPdfImagesMock,
 }))
 
@@ -152,6 +154,8 @@ function createClassification() {
         layoutRisk: 'LOW',
         hasTables: false,
         hasPassages: false,
+        hasVisualReferences: false,
+        hasEmbeddedImages: false,
         hasMatchFollowing: false,
         hasAssertionReason: false,
         hasDiagramReasoning: false,
@@ -1334,7 +1338,7 @@ test('generateAdminTestFromDocument keeps partially recovered imports for review
 
     expect(result.test.reviewStatus).toBe('NEEDS_REVIEW')
     expect(result.importDiagnostics).toMatchObject({
-        decision: 'REVIEW_REQUIRED',
+        decision: 'PARTIAL',
         reviewRequired: true,
         reviewStatus: 'NEEDS_REVIEW',
         extractedQuestions: 18,

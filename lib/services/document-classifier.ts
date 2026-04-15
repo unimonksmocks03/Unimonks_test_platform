@@ -13,6 +13,7 @@ export type DocumentClassificationResult = {
     hasTables: boolean
     hasPassages: boolean
     hasVisualReferences: boolean
+    hasEmbeddedImages: boolean
     hasDiagramReasoning: boolean
     hasMatchFollowing: boolean
     hasAssertionReason: boolean
@@ -113,6 +114,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     const hasTables = /\b(table(?!\s+tennis\b)|data interpretation|chart|graph|dataset|tabulation)\b/i.test(normalizedText)
         || tableLikeRowCount >= 2
     const hasPassages = /(read the passage|following passage|based on the passage|study the following passage|case study based|case-study based|case based)/i.test(normalizedText)
+    const hasEmbeddedImages = /\[image(?:[:\]])/i.test(normalizedText)
     const isOddOneOutOnly = /\bodd\s*[- ]\s*one\s*out\b|\bodd\s+man\s+out\b|\bfind\s+the\s+odd\b/i.test(oddOneOutSignature)
     const hasDiagramReasoning = !isOddOneOutOnly && (
         /\b(venn diagram|figure completion|figure formation|figure series|embedded figure|mirror image|paper folding|paper cutting|water image|cube(?:s)? and dice|counting (?:triangle|square|figure)|how many triangles|how many squares|how many rectangles|how many circles|how many lines)\b/i.test(normalizedText)
@@ -121,6 +123,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     const hasVisualReferences = !isOddOneOutOnly && (
         /\b(venn diagram|diagram-based|figure completion|figure formation|figure series|embedded figure|mirror image|paper folding|paper cutting|water image|cube(?:s)? and dice|analogy figure|choose the figure|select the figure|which figure|counting (?:triangle|square|figure)|how many triangles|how many squares)\b/i.test(normalizedText)
         || /\b(venn|diagram|figure|formation|completion)\b/i.test(lowerFileName)
+        || hasEmbeddedImages
     )
     const hasMatchFollowing = /(match the following|match the correct pair|list i|list ii)/i.test(normalizedText)
     const hasAssertionReason = /\bassertion\b/i.test(normalizedText) && /\breason\b/i.test(normalizedText)
@@ -203,6 +206,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     if (hasTables) reasons.push('Detected table/data-heavy layout')
     if (hasPassages) reasons.push('Detected passage/case-study layout')
     if (hasVisualReferences) reasons.push('Detected visual-reference or diagram-heavy layout')
+    if (hasEmbeddedImages) reasons.push('Detected embedded document images that may need multimodal visual-reference recovery')
     if (hasDiagramReasoning) reasons.push(
         hasStrongExtractableMcqText
             ? 'Detected diagram-heavy reasoning format with strong OCR signals; using text-first extraction and manual visual-reference capture.'
@@ -221,6 +225,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
         hasTables,
         hasPassages,
         hasVisualReferences,
+        hasEmbeddedImages,
         hasDiagramReasoning,
         hasMatchFollowing,
         hasAssertionReason,

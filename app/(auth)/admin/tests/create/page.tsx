@@ -131,7 +131,7 @@ type ImportJobSummary = {
     routingMode: "LEGACY" | "CLASSIFIER" | null;
     selectedStrategy: string | null;
     resultStrategy: string | null;
-    decision: "EXACT_ACCEPTED" | "REVIEW_REQUIRED" | "FAILED_WITH_REASON" | null;
+    decision: "EXACT_ACCEPTED" | "REVIEW_REQUIRED" | "PARTIAL" | "FAILED_WITH_REASON" | null;
     tokenCostUsd: number | null;
     totalElapsedMs: number | null;
     fileName: string;
@@ -1561,7 +1561,7 @@ function AdminTestBuilderForm() {
                         <div className="relative cursor-pointer rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/50 p-8 text-center transition-colors hover:border-indigo-400 hover:bg-indigo-50">
                             <UploadCloud className="mx-auto mb-3 h-10 w-10 text-indigo-400" />
                             <p className="text-sm font-bold text-slate-700">Click to upload or drag and drop</p>
-                            <p className="mt-1 text-xs font-medium text-slate-500">.docx or .pdf (Max 5MB)</p>
+                            <p className="mt-1 text-xs font-medium text-slate-500">.docx or .pdf (Max 25MB, PDFs up to 60 pages)</p>
                             <input type="file" className="hidden" id="admin-file-upload" accept=".docx,.pdf" onChange={handleFileChange} />
                             <label htmlFor="admin-file-upload" className="absolute inset-0 cursor-pointer"></label>
                         </div>

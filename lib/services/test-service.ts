@@ -17,6 +17,7 @@ import {
 import {
     attachSharedContextsFromPdf,
     enrichGeneratedQuestionsMetadata,
+    extractVisualReferencesFromDocxImages,
     extractVisualReferencesFromPdfImages,
     extractQuestionsFromPdfMultimodal,
     extractQuestionsFromDocumentTextPrecisely,
@@ -143,7 +144,7 @@ type DocumentImportProgressUpdate = {
     routingMode?: DocumentImportRoutingMode
     selectedStrategy?: DocumentClassificationResult['preferredStrategy']
     resultStrategy?: 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
-    decision?: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+    decision?: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'PARTIAL' | 'FAILED_WITH_REASON'
     tokenCostUsd?: number | null
 }
 
@@ -152,7 +153,7 @@ type DocumentImportDiagnostics = {
     aiFallbackUsed: boolean
     reportParserIssue: boolean
     warning: string | null
-    decision?: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+    decision?: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'PARTIAL' | 'FAILED_WITH_REASON'
     failureReason?: string | null
     lane?: DocumentImportLane
     classification?: DocumentClassificationResult
@@ -209,7 +210,7 @@ type TestImportDiagnosticsPayload = DocumentImportDiagnostics & {
     metadataWarning: string | null
     primaryTopic: string | null
     difficultyDistribution: { easy: number; medium: number; hard: number } | null
-    decision: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'FAILED_WITH_REASON'
+    decision: 'EXACT_ACCEPTED' | 'REVIEW_REQUIRED' | 'PARTIAL' | 'FAILED_WITH_REASON'
     failureReason: string | null
     reviewStatus: string | null
     verification: VerificationResult | null
@@ -2183,10 +2184,18 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                     allowOneShotFallbackAfterChunked,
                 },
             ),
-            extractVisualReferences: () => extractVisualReferencesFromPdfImages(
-                buffer,
-                admin.id,
-                uploadValidation.sanitizedFileName,
+            extractVisualReferences: () => (
+                isPdfUpload
+                    ? extractVisualReferencesFromPdfImages(
+                        buffer,
+                        admin.id,
+                        uploadValidation.sanitizedFileName,
+                    )
+                    : extractVisualReferencesFromDocxImages(
+                        buffer,
+                        admin.id,
+                        uploadValidation.sanitizedFileName,
+                    )
             ),
             generateFromText: (target) => generateQuestionsFromText(text, target, admin.id),
             generateFromPdfVision: (target) => generateQuestionsFromPdfVisionFallback(
@@ -2501,7 +2510,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     ) {
         const validQuestions = verification?.validQuestions ?? result.questions.length
         importDecision = {
-            decision: 'REVIEW_REQUIRED',
+            decision: 'PARTIAL',
             message: `Recovered ${validQuestions} usable question(s) from an expected ${partialRecoveryExpectedCount}. The draft has been kept for admin review instead of failing the entire import.`,
             errorCount: countStructuralVerificationErrors(verification),
             warningCount: verification?.issueSummary?.warnings ?? 0,
@@ -2525,7 +2534,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         )
     }
 
-    if (importDecision.decision === 'REVIEW_REQUIRED') {
+    if (importDecision.decision === 'REVIEW_REQUIRED' || importDecision.decision === 'PARTIAL') {
         needsAdminReview = true
         reviewIssueCount = verification?.issues.length ?? Math.max(reviewIssueCount, 1)
         importDiagnostics.reviewRequired = true

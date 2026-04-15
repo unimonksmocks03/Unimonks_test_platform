@@ -2,12 +2,14 @@ import { createRequire } from 'node:module'
 import OpenAI from 'openai'
 import { Prisma } from '@prisma/client'
 import { zodTextFormat } from 'openai/helpers/zod'
+import { z } from 'zod'
 
 import {
     AIVerificationResponseSchema,
     McqExtractionResponseSchema,
     McqQuestionSchema,
     NumberedMcqExtractionResponseSchema,
+    NumberedMcqQuestionSchema,
     type NumberedMcqQuestion,
     type VerificationResult,
     VisualReferenceExtractionSchema,
@@ -59,6 +61,14 @@ const openai = process.env.OPENAI_API_KEY
     ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
     : null
 
+const SingleMcqRepairResponseSchema = z.object({
+    repaired: McqQuestionSchema.nullable().default(null),
+})
+
+const SingleNumberedMcqRepairResponseSchema = z.object({
+    repaired: NumberedMcqQuestionSchema.nullable().default(null),
+})
+
 // ── Cost Constants (USD per 1K tokens, as of 2025) ──
 const MODEL_COSTS: Record<string, { input: number; output: number }> = {
     'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
@@ -105,6 +115,30 @@ type AIChunkFailure = {
     code?: string
     message: string
     retryable: boolean
+}
+
+type StructuredResponseWithParsed<TParsed> = {
+    status?: string | null
+    incomplete_details?: { reason?: string | null } | null
+    output_parsed: TParsed | null
+    usage?: {
+        prompt_tokens?: number
+        completion_tokens?: number
+        input_tokens?: number
+        output_tokens?: number
+    }
+}
+
+type CoercedGeneratedQuestionsResult = {
+    questions: GeneratedQuestion[]
+    failedCount: number
+    cost?: CostInfo
+}
+
+type CoercedNumberedGeneratedQuestionsResult = {
+    questions: Array<{ questionNumber: number; question: GeneratedQuestion }>
+    failedCount: number
+    cost?: CostInfo
 }
 
 type StructuredAnswerDetail = {
@@ -589,6 +623,67 @@ function extractPageSharedContext(pageText: string) {
     }
 }
 
+function normalizeSimilarityText(value: string | null | undefined) {
+    return (value ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+function tokenizeSimilarityText(value: string | null | undefined) {
+    return normalizeSimilarityText(value)
+        .split(' ')
+        .filter((token) => token.length >= 3)
+}
+
+function scoreSharedContextPageMatch(
+    question: GeneratedQuestion,
+    page: {
+        pageNumber: number
+        questionNumbers: number[]
+        sharedContext: string | null
+        normalizedPageText: string
+        tokenSet: Set<string>
+    },
+    questionNumber: number,
+) {
+    if (!page.sharedContext) {
+        return 0
+    }
+
+    const exactQueries = [
+        normalizeSimilarityText(question.sourceSnippet),
+        normalizeSimilarityText(question.stem),
+    ].filter(Boolean)
+
+    const tokenQueries = tokenizeSimilarityText(question.sourceSnippet ?? question.stem)
+    const matchingTokenCount = tokenQueries.filter((token) => page.tokenSet.has(token)).length
+    const overlapRatio = tokenQueries.length > 0 ? matchingTokenCount / tokenQueries.length : 0
+
+    let score = 0
+    for (const query of exactQueries) {
+        if (query.length >= 16 && page.normalizedPageText.includes(query)) {
+            score += 180
+        }
+    }
+
+    score += matchingTokenCount * 18
+    score += Math.round(overlapRatio * 100)
+
+    if (page.questionNumbers.includes(questionNumber)) {
+        score += 35
+    }
+
+    if (Number.isInteger(question.sourcePage) && Number(question.sourcePage) === page.pageNumber) {
+        score += 120
+    }
+
+    return score
+}
+
 export function attachSharedContextsFromPageText(
     questions: GeneratedQuestion[],
     pageTexts: string[],
@@ -606,6 +701,8 @@ export function attachSharedContextsFromPageText(
     const pages = pageTexts.map((pageText, index) => ({
         pageNumber: index + 1,
         ...extractPageSharedContext(pageText),
+        normalizedPageText: normalizeSimilarityText(pageText),
+        tokenSet: new Set(tokenizeSimilarityText(pageText)),
     }))
     const pageSharedContexts = new Map(
         pages
@@ -623,6 +720,33 @@ export function attachSharedContextsFromPageText(
             if (sourcePageContext) {
                 question.sharedContext = sourcePageContext
             }
+        }
+    }
+
+    for (const [index, question] of hydratedQuestions.entries()) {
+        if (normalizeSharedContextText(question.sharedContext)) {
+            continue
+        }
+
+        const questionNumber = index + 1
+        let bestMatch: { sharedContext: string; score: number } | null = null
+
+        for (const page of pages) {
+            const score = scoreSharedContextPageMatch(question, page, questionNumber)
+            if (score < 70) {
+                continue
+            }
+
+            if (!bestMatch || score > bestMatch.score) {
+                bestMatch = {
+                    sharedContext: page.sharedContext as string,
+                    score,
+                }
+            }
+        }
+
+        if (bestMatch) {
+            question.sharedContext = bestMatch.sharedContext
         }
     }
 
@@ -2239,9 +2363,11 @@ Text:
 ${chunk}`
 
     try {
-        const response = await withOpenAIRetries(
+        const response = await parseStructuredResponseWithStream<{
+            questions: unknown[]
+        }>(
             chunkLabel,
-            () => openai!.responses.parse({
+            () => openai!.responses.stream({
                 model,
                 temperature: 0,
                 max_output_tokens: 8000,
@@ -2273,12 +2399,31 @@ ${chunk}`
             const retryChunks = splitTextChunkForRetry(chunk)
 
             if (depth >= 2 || retryChunks.length < 2) {
+                const generatedFallback = await generateFromSourceFallbackForTextChunk(
+                    chunk,
+                    chunkLabel,
+                )
+                if (generatedFallback.questions.length > 0) {
+                    return {
+                        questions: generatedFallback.questions,
+                        failedCount: generatedFallback.failedCount,
+                        cost: mergeCosts(cost, generatedFallback.cost),
+                        warnings: [
+                            truncationWarning,
+                            `${chunkLabel} degraded to source-generation fallback after repeated structured-output truncation.`,
+                        ],
+                    }
+                }
+
                 return {
                     questions: [],
                     failedCount: 0,
-                    cost,
-                    failure: buildMaxOutputTokenFailure(chunkLabel),
-                    warnings: [truncationWarning],
+                    cost: mergeCosts(cost, generatedFallback.cost),
+                    failure: generatedFallback.failure ?? buildMaxOutputTokenFailure(chunkLabel),
+                    warnings: [
+                        truncationWarning,
+                        `${chunkLabel} exhausted structured-output retries and source-generation fallback also failed.`,
+                    ],
                 }
             }
 
@@ -2309,19 +2454,40 @@ ${chunk}`
             }
         }
 
-        const { questions, failedCount } = coerceGeneratedQuestions(response.output_parsed?.questions ?? [])
+        const coerced = await coerceGeneratedQuestionsWithRepair(
+            response.output_parsed?.questions ?? [],
+            chunkLabel,
+        )
         return {
-            questions,
-            failedCount,
-            cost,
+            questions: coerced.questions,
+            failedCount: coerced.failedCount,
+            cost: mergeCosts(cost, coerced.cost),
             warnings: [],
         }
     } catch (error) {
+        const failure = toAIChunkFailure(error)
+        const generatedFallback = await generateFromSourceFallbackForTextChunk(
+            chunk,
+            chunkLabel,
+        )
+        if (generatedFallback.questions.length > 0) {
+            return {
+                questions: generatedFallback.questions,
+                failedCount: generatedFallback.failedCount,
+                cost: generatedFallback.cost,
+                warnings: [
+                    `${chunkLabel} downgraded to source-generation fallback after repeated structured-output failures.`,
+                ],
+            }
+        }
+
         return {
             questions: [],
             failedCount: 0,
-            failure: toAIChunkFailure(error),
-            warnings: [],
+            failure: generatedFallback.failure ?? failure,
+            warnings: [
+                `${chunkLabel} exhausted structured-output retries and source-generation fallback also failed.`,
+            ],
         }
     }
 }
@@ -2449,9 +2615,11 @@ OCR text:
 ${chunk}`
 
     try {
-        const response = await withOpenAIRetries(
+        const response = await parseStructuredResponseWithStream<{
+            questions: unknown[]
+        }>(
             chunkLabel,
-            () => openai!.responses.parse({
+            () => openai!.responses.stream({
                 model,
                 temperature: 0,
                 max_output_tokens: 8000,
@@ -2530,11 +2698,14 @@ ${chunk}`
             }
         }
 
-        const normalized = coerceNumberedGeneratedQuestions(response.output_parsed?.questions ?? [])
+        const normalized = await coerceNumberedGeneratedQuestionsWithRepair(
+            response.output_parsed?.questions ?? [],
+            chunkLabel,
+        )
         return {
             questions: normalized.questions,
             failedCount: normalized.failedCount,
-            cost,
+            cost: mergeCosts(cost, normalized.cost),
             warnings: [],
         }
     } catch (error) {
@@ -3255,37 +3426,6 @@ function toValidatedGeneratedQuestion(question: Partial<GeneratedQuestion> | nul
     return validateGeneratedQuestionCandidate(question).question
 }
 
-function coerceGeneratedQuestions(rawQuestions: unknown): { questions: GeneratedQuestion[]; failedCount: number } {
-    if (!Array.isArray(rawQuestions)) {
-        return { questions: [], failedCount: 0 }
-    }
-
-    const questions: GeneratedQuestion[] = []
-    let failedCount = 0
-    for (let index = 0; index < rawQuestions.length; index += 1) {
-        const rawQuestion = rawQuestions[index]
-        const validation = validateGeneratedQuestionCandidate(rawQuestion as Partial<GeneratedQuestion>)
-        const validatedQuestion = validation.question
-        if (validatedQuestion) {
-            questions.push(validatedQuestion)
-        } else {
-            const stemPreview = rawQuestion
-                && typeof rawQuestion === 'object'
-                && 'stem' in rawQuestion
-                && typeof rawQuestion.stem === 'string'
-                ? rawQuestion.stem.slice(0, 120)
-                : 'unknown stem'
-            const issueSummary = validation.issuePaths.length > 0
-                ? ` (${validation.issuePaths.join(', ')})`
-                : ''
-            console.warn(`[AI] Dropped invalid generated question at index ${index + 1}${issueSummary}: ${stemPreview}`)
-            failedCount += 1
-        }
-    }
-
-    return { questions, failedCount }
-}
-
 // ── Zod-style Validation for Generated Questions ──
 function validateQuestion(q: GeneratedQuestion): boolean {
     return toValidatedGeneratedQuestion(q) !== null
@@ -3377,44 +3517,6 @@ function scoreNumberedQuestionCandidate(question: GeneratedQuestion) {
     )
 }
 
-function coerceNumberedGeneratedQuestions(
-    rawQuestions: unknown,
-): { questions: Array<{ questionNumber: number; question: GeneratedQuestion }>; failedCount: number } {
-    if (!Array.isArray(rawQuestions)) {
-        return { questions: [], failedCount: 0 }
-    }
-
-    const questions: Array<{ questionNumber: number; question: GeneratedQuestion }> = []
-    let failedCount = 0
-
-    for (let index = 0; index < rawQuestions.length; index += 1) {
-        const rawQuestion = rawQuestions[index]
-        const parsed = NumberedMcqExtractionResponseSchema.shape.questions.element.safeParse(rawQuestion)
-        if (!parsed.success) {
-            console.warn(`[AI] Dropped invalid numbered question at index ${index + 1}.`, parsed.error.issues.map((issue) => issue.path.join('.')).join(', '))
-            failedCount += 1
-            continue
-        }
-
-        const numberedQuestion = parsed.data as NumberedMcqQuestion
-        const validation = validateGeneratedQuestionCandidate(numberedQuestion)
-        const validatedQuestion = validation.question
-        if (!validatedQuestion) {
-            if (validation.issuePaths.length > 0) {
-                console.warn(`[AI] Dropped invalid numbered question at index ${index + 1}.`, validation.issuePaths.join(', '))
-            }
-            failedCount += 1
-            continue
-        }
-
-        questions.push({
-            questionNumber: numberedQuestion.questionNumber,
-            question: validatedQuestion,
-        })
-    }
-
-    return { questions, failedCount }
-}
 
 function mergeChunkedMultimodalQuestions(
     questionEntries: Array<{ questionNumber: number; question: GeneratedQuestion }>,
@@ -3496,6 +3598,7 @@ const OPENAI_RETRY_DELAYS_MS = process.env.NODE_ENV === 'test'
     ? [0, 0, 0]
     : [2000, 8000, 20000]
 const MAX_OUTPUT_TOKENS_INCOMPLETE_REASON = 'max_output_tokens'
+const QUESTION_GENERATION_OVERFLOW_MULTIPLIER = 1.2
 
 async function sleepForRetry(delayMs: number) {
     if (delayMs <= 0) {
@@ -3567,6 +3670,383 @@ function splitTextChunkForRetry(text: string): string[] {
     }
 
     return [left, right]
+}
+
+async function parseStructuredResponseWithStream<TParsed>(
+    label: string,
+    streamFactory: () => {
+        on(event: 'response.incomplete', listener: (event: { response?: { incomplete_details?: { reason?: string | null } | null } | null }) => void): unknown
+        finalResponse(): Promise<StructuredResponseWithParsed<TParsed>>
+    },
+): Promise<StructuredResponseWithParsed<TParsed>> {
+    return withOpenAIRetries(label, async () => {
+        const stream = streamFactory()
+        let streamIncompleteReason: string | null = null
+
+        stream.on('response.incomplete', (event) => {
+            streamIncompleteReason = event.response?.incomplete_details?.reason ?? null
+        })
+
+        const response = await stream.finalResponse()
+        if (!response.incomplete_details?.reason && streamIncompleteReason) {
+            return {
+                ...response,
+                incomplete_details: {
+                    reason: streamIncompleteReason,
+                },
+            }
+        }
+
+        return response
+    })
+}
+
+function estimateGenerationTargetForTextChunk(text: string) {
+    const context = buildStructuredExtractionContext(text)
+    const detectedCount = context.analysis.expectedQuestionCount
+        ?? context.analysis.candidateBlockCount
+        ?? 0
+
+    if (detectedCount > 0) {
+        return Math.max(1, Math.min(12, detectedCount))
+    }
+
+    return Math.max(1, Math.min(8, Math.round(text.length / 2600)))
+}
+
+function markQuestionsAsSourceGenerationFallback(questions: GeneratedQuestion[]): GeneratedQuestion[] {
+    return questions.map((question) => ({
+        ...question,
+        extractionMode: 'GENERATE_FROM_SOURCE',
+        answerSource: question.answerSource ?? 'INFERRED',
+        confidence: question.confidence ?? 0.45,
+    }))
+}
+
+async function generateFromSourceFallbackForTextChunk(
+    chunk: string,
+    chunkLabel: string,
+): Promise<{ questions: GeneratedQuestion[]; failedCount: number; cost?: CostInfo; failure?: AIChunkFailure }> {
+    const target = estimateGenerationTargetForTextChunk(chunk)
+    const primary = await generateFromChunk(chunk, target, 'gpt-4o-mini')
+
+    if (primary.questions.length > 0) {
+        return {
+            ...primary,
+            questions: markQuestionsAsSourceGenerationFallback(primary.questions),
+        }
+    }
+
+    const shouldRetryWithPrimaryModel = primary.questions.length === 0
+        && (primary.failedCount > 0 || Boolean(primary.failure))
+
+    if (!shouldRetryWithPrimaryModel) {
+        return primary
+    }
+
+    console.warn(`[AI] ${chunkLabel} degraded from structured extraction to source generation fallback with gpt-4o.`)
+    const retry = await generateFromChunk(chunk, target, 'gpt-4o')
+    if (retry.questions.length > 0) {
+        return {
+            ...retry,
+            questions: markQuestionsAsSourceGenerationFallback(retry.questions),
+            cost: mergeCosts(primary.cost, retry.cost),
+        }
+    }
+
+    return {
+        questions: [],
+        failedCount: Math.max(primary.failedCount, retry.failedCount),
+        cost: mergeCosts(primary.cost, retry.cost),
+        failure: retry.failure ?? primary.failure,
+    }
+}
+
+function extractInvalidQuestionStemPreview(rawQuestion: unknown) {
+    if (!rawQuestion || typeof rawQuestion !== 'object' || !('stem' in rawQuestion)) {
+        return 'unknown stem'
+    }
+
+    const { stem } = rawQuestion
+    return typeof stem === 'string' ? stem.slice(0, 120) : 'unknown stem'
+}
+
+async function repairMalformedGeneratedQuestion(
+    rawQuestion: unknown,
+    issuePaths: string[],
+    contextLabel: string,
+): Promise<{ question: GeneratedQuestion | null; cost?: CostInfo }> {
+    if (!openai) {
+        return { question: null }
+    }
+
+    const model = 'gpt-4o-mini'
+    const rawJson = JSON.stringify(rawQuestion ?? null, null, 2)?.slice(0, 7000) ?? 'null'
+
+    try {
+        const response = await withOpenAIRetries(
+            `${contextLabel} single-question repair`,
+            () => openai.responses.parse({
+                model,
+                temperature: 0,
+                max_output_tokens: 1600,
+                input: [
+                    {
+                        role: 'system',
+                        content: 'You repair malformed MCQ JSON objects without inventing missing source content. If the object cannot be repaired faithfully, return {"repaired": null}.',
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'input_text',
+                                text: `Repair this single malformed MCQ object for a document-import pipeline.
+
+Validation issues:
+- ${issuePaths.join('\n- ') || 'unknown'}
+
+Rules:
+- Preserve the original meaning and wording as much as possible.
+- Never invent a new stem or option text that is not already implied by the payload.
+- If there is not enough information to produce exactly 4 faithful options with exactly 1 correct answer, return {"repaired": null}.
+- Explanation may be an empty string.
+- Normalize option ids to A-D only when the option text is already present.
+
+Malformed object:
+${rawJson}`,
+                            },
+                        ],
+                    },
+                ],
+                text: {
+                    format: zodTextFormat(
+                        SingleMcqRepairResponseSchema,
+                        'single_mcq_repair_response',
+                    ),
+                },
+            }),
+        )
+
+        const cost = calculateCost(model, response.usage)
+        const repaired = response.output_parsed?.repaired ?? null
+        if (!repaired) {
+            return { question: null, cost }
+        }
+
+        const validation = validateGeneratedQuestionCandidate(repaired)
+        return {
+            question: validation.question,
+            cost,
+        }
+    } catch (error) {
+        console.warn(`[AI] ${contextLabel} single-question repair failed:`, error)
+        return {
+            question: null,
+            cost: undefined,
+        }
+    }
+}
+
+async function repairMalformedNumberedQuestion(
+    rawQuestion: unknown,
+    issuePaths: string[],
+    contextLabel: string,
+): Promise<{ question: { questionNumber: number; question: GeneratedQuestion } | null; cost?: CostInfo }> {
+    if (!openai) {
+        return { question: null }
+    }
+
+    const model = 'gpt-4o-mini'
+    const rawJson = JSON.stringify(rawQuestion ?? null, null, 2)?.slice(0, 7000) ?? 'null'
+
+    try {
+        const response = await withOpenAIRetries(
+            `${contextLabel} single-numbered-question repair`,
+            () => openai.responses.parse({
+                model,
+                temperature: 0,
+                max_output_tokens: 1800,
+                input: [
+                    {
+                        role: 'system',
+                        content: 'You repair malformed numbered MCQ JSON objects without inventing missing source content. If the object cannot be repaired faithfully, return {"repaired": null}.',
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'input_text',
+                                text: `Repair this single malformed numbered MCQ object for a document-import pipeline.
+
+Validation issues:
+- ${issuePaths.join('\n- ') || 'unknown'}
+
+Rules:
+- Preserve the original meaning and wording as much as possible.
+- Keep the original questionNumber.
+- Never invent a new stem or option text that is not already implied by the payload.
+- If there is not enough information to produce exactly 4 faithful options with exactly 1 correct answer, return {"repaired": null}.
+- Explanation may be an empty string.
+
+Malformed object:
+${rawJson}`,
+                            },
+                        ],
+                    },
+                ],
+                text: {
+                    format: zodTextFormat(
+                        SingleNumberedMcqRepairResponseSchema,
+                        'single_numbered_mcq_repair_response',
+                    ),
+                },
+            }),
+        )
+
+        const cost = calculateCost(model, response.usage)
+        const repaired = response.output_parsed?.repaired ?? null
+        if (!repaired) {
+            return { question: null, cost }
+        }
+
+        const validation = validateGeneratedQuestionCandidate(repaired)
+        if (!validation.question) {
+            return { question: null, cost }
+        }
+
+        return {
+            question: {
+                questionNumber: repaired.questionNumber,
+                question: validation.question,
+            },
+            cost,
+        }
+    } catch (error) {
+        console.warn(`[AI] ${contextLabel} single-numbered-question repair failed:`, error)
+        return {
+            question: null,
+            cost: undefined,
+        }
+    }
+}
+
+async function coerceGeneratedQuestionsWithRepair(
+    rawQuestions: unknown,
+    contextLabel: string,
+): Promise<CoercedGeneratedQuestionsResult> {
+    if (!Array.isArray(rawQuestions)) {
+        return { questions: [], failedCount: 0 }
+    }
+
+    const questions: GeneratedQuestion[] = []
+    let failedCount = 0
+    const repairCosts: CostInfo[] = []
+
+    for (let index = 0; index < rawQuestions.length; index += 1) {
+        const rawQuestion = rawQuestions[index]
+        const validation = validateGeneratedQuestionCandidate(rawQuestion as Partial<GeneratedQuestion>)
+        if (validation.question) {
+            questions.push(validation.question)
+            continue
+        }
+
+        const issueSummary = validation.issuePaths.length > 0
+            ? ` (${validation.issuePaths.join(', ')})`
+            : ''
+        console.warn(`[AI] PARTIAL_DROP ${contextLabel} question ${index + 1}${issueSummary}: ${extractInvalidQuestionStemPreview(rawQuestion)}`)
+
+        const repaired = await repairMalformedGeneratedQuestion(
+            rawQuestion,
+            validation.issuePaths,
+            `${contextLabel} question ${index + 1}`,
+        )
+        if (repaired.cost) {
+            repairCosts.push(repaired.cost)
+        }
+
+        if (repaired.question) {
+            questions.push(repaired.question)
+            continue
+        }
+
+        failedCount += 1
+    }
+
+    return {
+        questions,
+        failedCount,
+        cost: mergeCosts(...repairCosts),
+    }
+}
+
+async function coerceNumberedGeneratedQuestionsWithRepair(
+    rawQuestions: unknown,
+    contextLabel: string,
+): Promise<CoercedNumberedGeneratedQuestionsResult> {
+    if (!Array.isArray(rawQuestions)) {
+        return { questions: [], failedCount: 0 }
+    }
+
+    const questions: Array<{ questionNumber: number; question: GeneratedQuestion }> = []
+    let failedCount = 0
+    const repairCosts: CostInfo[] = []
+
+    for (let index = 0; index < rawQuestions.length; index += 1) {
+        const rawQuestion = rawQuestions[index]
+        const parsed = NumberedMcqExtractionResponseSchema.shape.questions.element.safeParse(rawQuestion)
+        if (!parsed.success) {
+            const issuePaths = parsed.error.issues.map((issue) => issue.path.join('.'))
+            console.warn(`[AI] PARTIAL_DROP ${contextLabel} numbered question ${index + 1} (${issuePaths.join(', ')})`)
+
+            const repaired = await repairMalformedNumberedQuestion(
+                rawQuestion,
+                issuePaths,
+                `${contextLabel} numbered question ${index + 1}`,
+            )
+            if (repaired.cost) {
+                repairCosts.push(repaired.cost)
+            }
+            if (repaired.question) {
+                questions.push(repaired.question)
+                continue
+            }
+
+            failedCount += 1
+            continue
+        }
+
+        const numberedQuestion = parsed.data as NumberedMcqQuestion
+        const validation = validateGeneratedQuestionCandidate(numberedQuestion)
+        if (validation.question) {
+            questions.push({
+                questionNumber: numberedQuestion.questionNumber,
+                question: validation.question,
+            })
+            continue
+        }
+
+        console.warn(`[AI] PARTIAL_DROP ${contextLabel} numbered question ${index + 1} (${validation.issuePaths.join(', ')})`)
+        const repaired = await repairMalformedNumberedQuestion(
+            rawQuestion,
+            validation.issuePaths,
+            `${contextLabel} numbered question ${index + 1}`,
+        )
+        if (repaired.cost) {
+            repairCosts.push(repaired.cost)
+        }
+        if (repaired.question) {
+            questions.push(repaired.question)
+            continue
+        }
+
+        failedCount += 1
+    }
+
+    return {
+        questions,
+        failedCount,
+        cost: mergeCosts(...repairCosts),
+    }
 }
 
 function appendAIMessage(currentMessage: string | undefined, nextMessage: string | undefined) {
@@ -3785,10 +4265,10 @@ export async function generateQuestionsFromText(
     // Deduplicate across chunks
     allQuestions = deduplicateQuestions(allQuestions)
 
-    // Trim to requested count
-    if (allQuestions.length > count) {
-        console.info(`[AI] Generated ${allQuestions.length} questions for a requested count of ${count}; trimming overflow.`)
-        allQuestions = allQuestions.slice(0, count)
+    const overflowCap = Math.max(count, Math.ceil(count * QUESTION_GENERATION_OVERFLOW_MULTIPLIER))
+    if (allQuestions.length > overflowCap) {
+        console.info(`[AI] Generated ${allQuestions.length} questions for a requested count of ${count}; keeping ${overflowCap} and trimming the rest.`)
+        allQuestions = allQuestions.slice(0, overflowCap)
     }
 
     if (auditUserId) await logCostToAudit(auditUserId, 'AI_GENERATE', totalCost)
@@ -4106,15 +4586,18 @@ Return strict JSON with a top-level "questions" array only.`,
             }
         }
 
-        const { questions, failedCount } = coerceGeneratedQuestions(response.output_parsed?.questions ?? [])
-        const dedupedQuestions = deduplicateQuestions(questions)
+        const coerced = await coerceGeneratedQuestionsWithRepair(
+            response.output_parsed?.questions ?? [],
+            'Multimodal PDF extraction (one-shot)',
+        )
+        const dedupedQuestions = deduplicateQuestions(coerced.questions)
         const verification = verifyExtractedQuestions(dedupedQuestions, expectedCount)
 
         return {
             mode: 'EXTRACTED',
             questions: dedupedQuestions,
-            failedCount,
-            cost: totalCost,
+            failedCount: coerced.failedCount,
+            cost: mergeCosts(totalCost, coerced.cost),
             pageCount,
             chunkCount: 1,
             verification,
@@ -4380,7 +4863,15 @@ Return strict JSON with a top-level "questions" array only.`,
                     }
                 }
 
-                const normalized = coerceNumberedGeneratedQuestions(response.output_parsed?.questions ?? [])
+                const normalized = await coerceNumberedGeneratedQuestionsWithRepair(
+                    response.output_parsed?.questions ?? [],
+                    `Chunked multimodal PDF extraction (pages ${pageChunk.join(', ')})`,
+                )
+                if (normalized.cost) {
+                    totalCost.inputTokens += normalized.cost.inputTokens
+                    totalCost.outputTokens += normalized.cost.outputTokens
+                    totalCost.costUSD += normalized.cost.costUSD
+                }
                 return {
                     questions: normalized.questions,
                     failedCount: normalized.failedCount,
@@ -4960,40 +5451,101 @@ Respond in JSON format:
 
         const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
         const parsed = JSON.parse(content)
-        const { questions, failedCount } = coerceGeneratedQuestions(parsed.questions)
+        const coerced = await coerceGeneratedQuestionsWithRepair(
+            parsed.questions,
+            `Question generation chunk (${model})`,
+        )
 
-        return { questions, failedCount, cost }
+        return {
+            questions: coerced.questions,
+            failedCount: coerced.failedCount,
+            cost: mergeCosts(cost, coerced.cost),
+        }
     } catch (err) {
         console.error(`[AI] Question generation failed with ${model}:`, err)
         return { questions: [], failedCount: count, failure: toAIChunkFailure(err) }
     }
 }
 
-// ── Parse DOCX to Plain Text ──
-export async function parseDocxToText(buffer: Buffer): Promise<string> {
-    const mammoth = await import('mammoth')
+type DocxImageArtifact = {
+    order: number
+    imageUrl: string
+    altText: string | null
+    nearbyText: string | null
+}
 
-    const normalizeDocxHtml = (html: string) => normalizeDocumentText(
-        html
-            .replace(/<img\b[^>]*alt="([^"]*)"[^>]*>/gi, '\n[Image: $1]\n')
+function decodeDocxHtmlEntities(html: string) {
+    return html
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&#39;/g, '\'')
+        .replace(/&quot;/gi, '"')
+}
+
+function normalizeDocxHtmlToText(html: string) {
+    return normalizeDocumentText(
+        decodeDocxHtmlEntities(html)
+            .replace(/<img\b[^>]*alt=(["'])(.*?)\1[^>]*>/gi, '\n[Image: $2]\n')
             .replace(/<img\b[^>]*>/gi, '\n[Image]\n')
             .replace(/<br\s*\/?>/gi, '\n')
             .replace(/<\/(p|div|section|article|h[1-6]|table|tr|ul|ol)>/gi, '\n')
             .replace(/<(li|td|th)[^>]*>/gi, '\n')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&nbsp;/gi, ' ')
-            .replace(/&amp;/gi, '&')
-            .replace(/&lt;/gi, '<')
-            .replace(/&gt;/gi, '>')
-            .replace(/&#39;/g, '\'')
-            .replace(/&quot;/gi, '"'),
+            .replace(/<[^>]+>/g, ' '),
     )
+}
+
+function extractHtmlAttributeValue(attributes: string, name: string) {
+    const match = attributes.match(new RegExp(`${name}\\s*=\\s*(["'])(.*?)\\1`, 'i'))
+    return match?.[2]?.trim() || null
+}
+
+function extractDocxHtmlArtifacts(html: string): { text: string; images: DocxImageArtifact[] } {
+    const images: DocxImageArtifact[] = []
+    const imageRegex = /<img\b([^>]*?)\/?>/gi
+
+    let match: RegExpExecArray | null
+    while ((match = imageRegex.exec(html)) !== null) {
+        const attributes = match[1] ?? ''
+        const imageUrl = extractHtmlAttributeValue(attributes, 'src')
+        if (!imageUrl?.startsWith('data:image/')) {
+            continue
+        }
+
+        const altText = extractHtmlAttributeValue(attributes, 'alt')
+        const windowStart = Math.max(0, match.index - 2200)
+        const windowEnd = Math.min(html.length, match.index + match[0].length + 1200)
+        const nearbyText = normalizeDocxHtmlToText(html.slice(windowStart, windowEnd))
+
+        images.push({
+            order: images.length + 1,
+            imageUrl,
+            altText: altText ? decodeDocxHtmlEntities(altText) : null,
+            nearbyText: nearbyText || null,
+        })
+    }
+
+    return {
+        text: normalizeDocxHtmlToText(html),
+        images,
+    }
+}
+
+async function readDocxHtmlArtifacts(buffer: Buffer): Promise<{ text: string; images: DocxImageArtifact[] }> {
+    const mammoth = await import('mammoth')
+    const htmlResult = await mammoth.convertToHtml({ buffer })
+    return extractDocxHtmlArtifacts(htmlResult.value)
+}
+
+// ── Parse DOCX to Plain Text ──
+export async function parseDocxToText(buffer: Buffer): Promise<string> {
+    const mammoth = await import('mammoth')
 
     try {
-        const htmlResult = await mammoth.convertToHtml({ buffer })
-        const normalizedHtml = normalizeDocxHtml(htmlResult.value)
-        if (normalizedHtml.length > 0) {
-            return normalizedHtml
+        const docxArtifacts = await readDocxHtmlArtifacts(buffer)
+        if (docxArtifacts.text.length > 0) {
+            return docxArtifacts.text
         }
     } catch (error) {
         console.warn('[AI] DOCX HTML conversion failed, falling back to raw text extraction.', error)
@@ -5001,6 +5553,122 @@ export async function parseDocxToText(buffer: Buffer): Promise<string> {
 
     const rawTextResult = await mammoth.extractRawText({ buffer })
     return normalizeDocumentText(rawTextResult.value)
+}
+
+export async function extractVisualReferencesFromDocxImages(
+    buffer: Buffer,
+    auditUserId?: string,
+    fileName: string = 'uploaded.docx',
+): Promise<VisualReferenceExtractionResult> {
+    if (!openai) {
+        return {
+            error: true,
+            message: 'OpenAI API key not configured. Please set OPENAI_API_KEY.',
+            pageCount: 0,
+            chunkCount: 0,
+            references: [],
+        }
+    }
+
+    const model = 'gpt-4o'
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+
+    try {
+        const docxArtifacts = await readDocxHtmlArtifacts(buffer)
+        if (docxArtifacts.images.length === 0) {
+            return {
+                references: [],
+                pageCount: 1,
+                chunkCount: 0,
+            }
+        }
+
+        const allReferences = []
+        for (const image of docxArtifacts.images) {
+            const response = await withOpenAIRetries(
+                `DOCX visual-reference extraction (${fileName} image ${image.order})`,
+                () => openai.responses.parse({
+                    model,
+                    temperature: 0,
+                    max_output_tokens: 4000,
+                    input: [
+                        {
+                            role: 'system',
+                            content: 'You extract only visual-reference context from DOCX documents with embedded images and return strict structured output.',
+                        },
+                        {
+                            role: 'user',
+                            content: [
+                                {
+                                    type: 'input_text',
+                                    text: `Extract only the visual-reference context tied to the embedded DOCX image below.
+
+Rules:
+- Return only questions that genuinely depend on this image.
+- Map each visual reference to its true questionNumber from the document text when possible.
+- Use the nearby text plus the document excerpt to anchor the match.
+- Do not invent unseen questions or diagram descriptions.
+- If the image is decorative or cannot be tied confidently to a question, return {"references":[]}.
+
+Document excerpt:
+${truncateForPrompt(docxArtifacts.text, 7000) ?? 'No text available.'}
+
+Embedded image ${image.order}${image.altText ? ` alt text: ${image.altText}` : ''}.
+Nearby DOCX excerpt:
+${truncateForPrompt(image.nearbyText, 2200) ?? 'No nearby text available.'}`,
+                                },
+                                {
+                                    type: 'input_image',
+                                    image_url: image.imageUrl,
+                                    detail: 'auto',
+                                },
+                            ],
+                        },
+                    ],
+                    text: {
+                        format: zodTextFormat(
+                            VisualReferenceExtractionResponseSchema,
+                            'docx_visual_reference_extraction_response',
+                        ),
+                    },
+                }),
+            )
+
+            const cost = calculateCost(model, response.usage)
+            totalCost.inputTokens += cost.inputTokens
+            totalCost.outputTokens += cost.outputTokens
+            totalCost.costUSD += cost.costUSD
+
+            if (isMaxOutputTokenTruncationResponse(response)) {
+                console.warn(`[AI] DOCX visual-reference extraction hit max_output_tokens for ${fileName} image ${image.order}.`)
+                continue
+            }
+
+            allReferences.push(...normalizeVisualReferences(response.output_parsed?.references ?? []))
+        }
+
+        if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
+            await logCostToAudit(auditUserId, 'AI_VISUAL_REFERENCES', totalCost)
+        }
+
+        return {
+            references: normalizeVisualReferences(allReferences),
+            cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+            pageCount: 1,
+            chunkCount: docxArtifacts.images.length,
+        }
+    } catch (error) {
+        const failure = toAIChunkFailure(error)
+        console.error('[AI] DOCX visual-reference extraction failed:', error)
+        return {
+            error: true,
+            message: failure.message,
+            pageCount: 1,
+            chunkCount: 0,
+            references: [],
+            cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+        }
+    }
 }
 
 export async function parsePdfToText(buffer: Buffer): Promise<string> {

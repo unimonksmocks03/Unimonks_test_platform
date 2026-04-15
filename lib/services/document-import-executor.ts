@@ -489,8 +489,7 @@ async function executeDocumentImportPlanCore(
             }
 
             const shouldSkipVisualOverlay =
-                input.isPdfUpload
-                && input.plan.visualReferenceOverlay
+                input.plan.visualReferenceOverlay
                 && shouldSkipVisualOverlayForRecoveredExactExtraction(extracted)
 
             if (shouldSkipVisualOverlay) {
@@ -511,8 +510,7 @@ async function executeDocumentImportPlanCore(
             }
 
             if (
-                input.isPdfUpload
-                && input.plan.visualReferenceOverlay
+                input.plan.visualReferenceOverlay
                 && !input.deferReferenceEnrichment
             ) {
                 const visualReferences = await safelyExtractVisualReferences(
