@@ -2112,10 +2112,23 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         plan: importPlan,
         classification: importDiagnostics.classification,
     })
+    // Skip the full AI repair loop when:
+    //   a) We will run reference enrichment as a second phase (HYBRID_RECONCILE
+    //      deferred case) and the document is not diagram-heavy, OR
+    //   b) The plan requires manual visual-reference capture. Diagram PDFs
+    //      (Figure Completion, Venn, etc.) are normalized to TEXT_EXACT +
+    //      STABLE lane so the admin can attach visuals by hand — running
+    //      batch-after-batch repair against those questions burns the entire
+    //      job budget (10+ batches × sequential OpenAI calls) and blows past
+    //      both our 210s import timeout and Vercel's 300s serverless cap,
+    //      leaving the user with a hung "Building your draft…" screen.
     const shouldKeepExactPassCheap =
-        shouldDeferReferenceEnrichment
-        && importPlan.selectedStrategy === 'HYBRID_RECONCILE'
-        && !importDiagnostics.classification.hasDiagramReasoning
+        (
+            shouldDeferReferenceEnrichment
+            && importPlan.selectedStrategy === 'HYBRID_RECONCILE'
+            && !importDiagnostics.classification.hasDiagramReasoning
+        )
+        || importPlan.manualVisualReferenceCapture === true
     const effectiveGenerationTarget =
         importDiagnostics.classification.documentType === 'MCQ_PAPER'
         && importDiagnostics.classification.detectedQuestionCount
@@ -2429,6 +2442,20 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     }
 
     if (result.error || !result.questions || result.questions.length === 0) {
+        // Diagram-heavy PDFs routed through manualVisualReferenceCapture can
+        // legitimately hit this branch when no clean text Qs survive the
+        // parser and the multimodal fallback cannot recover them either.
+        // Surface a targeted, actionable message so the admin knows they
+        // need to either re-upload a cleaner scan or create the test
+        // manually — rather than the generic "Failed to generate questions"
+        // they'd see from a catastrophic failure.
+        if (importPlan.manualVisualReferenceCapture) {
+            return serviceError(
+                'GENERATION_FAILED',
+                result.message
+                    || 'This diagram-heavy PDF did not yield any text-extractable questions. The visuals in this file cannot be parsed automatically — please create the test manually from the uploaded source, or re-upload a version with a cleaner text layer.',
+            )
+        }
         return serviceError(
             'GENERATION_FAILED',
             result.message || 'Failed to generate questions.',

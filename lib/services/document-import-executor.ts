@@ -450,6 +450,30 @@ async function executeDocumentImportPlanCore(
             }
         }
 
+        // Diagram-heavy PDFs (Figure Completion, Venn, etc.) route here via
+        // `manualVisualReferenceCapture` — the admin has opted into filling in
+        // the visual-dependent questions by hand. Accept any non-empty partial
+        // extraction, flag it for review, and let the admin complete the
+        // draft instead of hard-failing. This matches the UX expectation that
+        // "the generator extracts text parts and leaves visuals for manual
+        // attachment" rather than returning nothing.
+        if (input.plan.manualVisualReferenceCapture && extracted.questions.length > 0) {
+            return {
+                useLegacyFlow: false,
+                strategy: 'EXTRACTED',
+                result: toExtractedResult(extracted),
+                extracted,
+                parserStatus: 'WEAK_OUTPUT',
+                aiFallbackUsed: false,
+                reportParserIssue: false,
+                warning: 'Recovered the text-only questions from this diagram-heavy PDF. Diagram/figure-dependent questions were skipped and must be added manually from the uploaded source.',
+                needsAdminReview: true,
+                reviewIssueCount: extracted.expectedQuestionCount
+                    ? Math.max(0, extracted.expectedQuestionCount - extracted.questions.length)
+                    : 0,
+            }
+        }
+
         // STABLE lane: never escalate to multimodal for TEXT_EXACT documents.
         // PDF: fall back to legacy flow — the PDF parser may have structural
         // issues the legacy path can work around differently.

@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module'
 import OpenAI from 'openai'
 import { Prisma } from '@prisma/client'
 import { zodTextFormat } from 'openai/helpers/zod'
@@ -57,8 +56,20 @@ export type {
  * Gracefully falls back if no API key is configured.
  */
 
+// 60s per-request timeout. The SDK default is 600_000ms (10 minutes), which
+// meant a single stuck call could eat the entire import budget. Our retry
+// helper (`withOpenAIRetries`) will still attempt up to three times, so the
+// worst-case wall time is bounded at ~3 × 60s + retry delays instead of
+// open-ended. `maxRetries: 0` disables the SDK's own internal retries so
+// that retry cadence is owned entirely by `withOpenAIRetries` — otherwise
+// transient failures double-retry (SDK × our helper).
+const OPENAI_REQUEST_TIMEOUT_MS = 60_000
 const openai = process.env.OPENAI_API_KEY
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    ? new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        timeout: OPENAI_REQUEST_TIMEOUT_MS,
+        maxRetries: 0,
+    })
     : null
 
 const SingleMcqRepairResponseSchema = z.object({
@@ -179,8 +190,6 @@ type RenderPageAsImageFn = typeof import('unpdf')['renderPageAsImage']
 type RenderPageAsImageOptions = NonNullable<Parameters<RenderPageAsImageFn>[2]>
 type CanvasImport = NonNullable<RenderPageAsImageOptions['canvasImport']>
 type CanvasModule = Awaited<ReturnType<CanvasImport>>
-const requireCanvasModule = createRequire(import.meta.url)
-const OPTIONAL_CANVAS_MODULE = ['@napi-rs', 'canvas'].join('/')
 
 type StructuredExtractionContext = {
     analysis: ExtractedQuestionAnalysis
@@ -2129,6 +2138,7 @@ function buildAnswerContextSnippet(answerSection: string, questionNumber: number
 async function repairStructuredQuestionSetWithAI(
     context: StructuredExtractionContext,
     auditUserId?: string,
+    options: { deadlineAt?: number } = {},
 ): Promise<{ questions: Map<number, GeneratedQuestion>; cost?: CostInfo; error?: boolean; message?: string }> {
     const expectedQuestionCount = context.analysis.expectedQuestionCount
     if (expectedQuestionCount === null) {
@@ -2152,12 +2162,21 @@ async function repairStructuredQuestionSetWithAI(
         }
     }
 
+    const deadlineAt = options.deadlineAt ?? (Date.now() + DEFAULT_AI_REPAIR_BUDGET_MS)
     const model = 'gpt-4o-mini'
     const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
     const repairedQuestions = new Map<number, GeneratedQuestion>()
     const repairBatches = chunkArray(repairQuestionNumbers, 8)
+    let budgetExhausted = false
 
     for (const repairBatch of repairBatches) {
+        if (Date.now() >= deadlineAt) {
+            budgetExhausted = true
+            console.warn(
+                `[AI] Repair budget exhausted before batch (${repairBatch.join(', ')}); returning ${repairedQuestions.size}/${repairQuestionNumbers.length} repaired questions.`,
+            )
+            break
+        }
         const batchContext = repairBatch.map(questionNumber => {
             const questionBlock = context.questionBlocks.get(questionNumber)
             const parsedQuestion = context.parsedQuestions.get(questionNumber)
@@ -2268,6 +2287,12 @@ ${batchContext}`
     return {
         questions: repairedQuestions,
         cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+        ...(budgetExhausted
+            ? {
+                error: true,
+                message: `AI repair budget exhausted; returning ${repairedQuestions.size} of ${repairQuestionNumbers.length} targeted questions so the import can finish within its deadline.`,
+            }
+            : {}),
     }
 }
 
@@ -2721,7 +2746,20 @@ ${chunk}`
 type ExactExtractionOptions = {
     allowAiFallback?: boolean
     allowAiRepair?: boolean
+    /**
+     * Absolute epoch timestamp (ms) after which the AI repair loop should stop
+     * spawning new batches and return whatever it has already repaired. When
+     * absent, a conservative default budget is applied so a misbehaving document
+     * can never monopolise the import worker.
+     */
+    repairDeadlineAt?: number
 }
+
+// Default wall-clock ceiling for `repairStructuredQuestionSetWithAI`. The import
+// worker is bounded by DOCUMENT_IMPORT_JOB_TIMEOUT_MS (210s) and Vercel's 300s
+// serverless limit; keeping repair under 2 minutes leaves room for extraction,
+// verification, metadata enrichment, and persistence.
+const DEFAULT_AI_REPAIR_BUDGET_MS = 120_000
 
 function normalizeExactAnalysis(
     analysis: PreciseDocumentQuestionAnalysis,
@@ -2799,7 +2837,11 @@ export async function extractQuestionsFromDocumentTextPrecisely(
         }
     }
 
-    const repairResult = await repairStructuredQuestionSetWithAI(context, auditUserId)
+    const repairResult = await repairStructuredQuestionSetWithAI(
+        context,
+        auditUserId,
+        { deadlineAt: options.repairDeadlineAt },
+    )
     const repairedQuestionsByNumber = new Map<number, GeneratedQuestion>()
 
     for (const parsedQuestion of context.parsedQuestions.values()) {
@@ -5071,7 +5113,13 @@ function normalizeVisualReferences(rawReferences: unknown) {
 
 async function loadCanvasModule(): Promise<CanvasModule | null> {
     try {
-        return requireCanvasModule(OPTIONAL_CANVAS_MODULE) as CanvasModule
+        // Static import so Next's bundler + `serverExternalPackages: ['@napi-rs/canvas']`
+        // can route it to the Node runtime. Earlier code hid the module behind
+        // createRequire + a runtime-assembled string, which Turbopack could not
+        // trace — at runtime that produced MODULE_NOT_FOUND and every visual
+        // path silently disabled itself.
+        const canvasModule = await import('@napi-rs/canvas')
+        return canvasModule as unknown as CanvasModule
     } catch (error) {
         console.warn('[AI] Canvas-backed PDF rendering unavailable in this runtime:', error)
         return null

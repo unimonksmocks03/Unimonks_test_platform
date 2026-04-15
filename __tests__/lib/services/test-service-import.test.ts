@@ -1579,10 +1579,16 @@ test('generateAdminTestFromDocument creates a draft from exact extraction first 
     if ('error' in result) return
 
     expect(extractQuestionsFromDocumentTextPreciselyMock).toHaveBeenCalled()
+    // Diagram PDFs run the cheap exact pass (no AI fallback/repair) so the
+    // stable lane can't burn the import budget on expensive batch repair
+    // for questions the admin will attach visuals to by hand.
     expect(extractQuestionsFromDocumentTextPreciselyMock).toHaveBeenCalledWith(
         expect.any(String),
         'admin-1',
-        undefined,
+        {
+            allowAiFallback: false,
+            allowAiRepair: false,
+        },
     )
     expect(extractQuestionsFromPdfMultimodalMock).not.toHaveBeenCalled()
     expect(result.strategy).toBe('EXTRACTED')
