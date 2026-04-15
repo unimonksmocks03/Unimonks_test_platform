@@ -5,7 +5,6 @@ import {
     QuestionReferenceKind,
     QuestionReferenceMode,
     Role,
-    SessionStatus,
     TestStatus,
 } from '@prisma/client'
 
@@ -23,6 +22,7 @@ import {
     extractQuestionsFromDocumentTextPrecisely,
     generateQuestionsFromPdfVisionFallback,
     generateQuestionsFromText,
+    getPdfPageCount,
     parseDocumentToText,
     reconcileGeneratedQuestionsWithTextAnswerHints,
     verifyExtractedQuestions,
@@ -64,8 +64,8 @@ import type {
     UpdateTestInput,
 } from '@/lib/validations/test.schema'
 
-const COMPLETED_SESSION_STATUSES: SessionStatus[] = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED']
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
+const MAX_PDF_PAGE_COUNT = 60
 const MIN_GENERATED_QUESTIONS = 30
 const VISUAL_REFERENCE_KINDS = new Set<QuestionReferenceKind>(['DIAGRAM', 'GRAPH', 'MAP'])
 
@@ -2041,6 +2041,21 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     }
 
     const buffer = Buffer.from(await input.file.arrayBuffer())
+    const isPdfUpload = uploadValidation.sanitizedFileName.toLowerCase().endsWith('.pdf')
+    if (isPdfUpload) {
+        try {
+            const pageCount = await getPdfPageCount(buffer)
+            if (pageCount > MAX_PDF_PAGE_COUNT) {
+                return serviceError(
+                    'BAD_REQUEST',
+                    `PDF too large. Max ${MAX_PDF_PAGE_COUNT} pages.`,
+                )
+            }
+        } catch (error) {
+            console.warn('[AI-DOC][ADMIN] Failed to determine PDF page count before import:', error)
+        }
+    }
+
     const reportProgress = async (update: DocumentImportProgressUpdate) => {
         await input.onProgress?.(update)
     }
@@ -2083,7 +2098,6 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         message: undefined as string | undefined,
     }
 
-    const isPdfUpload = uploadValidation.sanitizedFileName.toLowerCase().endsWith('.pdf')
     const shouldDeferReferenceEnrichment = Boolean(input.deferReferenceEnrichment && isPdfUpload)
     const importPlan = resolveDocumentImportPlan({
         classifierRoutingEnabled: isClassifierRoutingEnabled(),

@@ -779,7 +779,7 @@ export async function processDocumentImportJob(
             try {
                 await enqueueDocumentImportReferenceEnrichment(job.id)
                 queuedReferenceEnrichment = true
-            } catch (error) {
+            } catch {
                 payloadObject = {
                     ...payloadObject,
                     importDiagnostics: {

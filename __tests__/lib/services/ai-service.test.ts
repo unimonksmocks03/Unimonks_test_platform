@@ -714,3 +714,62 @@ Answer: (B)`,
     expect(enriched).toHaveLength(1)
     expect(enriched[0]?.sharedContext ?? null).toBeNull()
 })
+
+test('attachSharedContextsFromPageText prefers sourcePage matches before question-order propagation', async () => {
+    const { attachSharedContextsFromPageText } = await aiServicePromise
+
+    const questions = [
+        {
+            stem: 'Q1 refers to the following passage',
+            options: [
+                { id: 'A', text: 'A', isCorrect: true },
+                { id: 'B', text: 'B', isCorrect: false },
+                { id: 'C', text: 'C', isCorrect: false },
+                { id: 'D', text: 'D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Comprehension',
+            sharedContext: null,
+            sourcePage: 2,
+        },
+        {
+            stem: 'Q2 refers to the following passage',
+            options: [
+                { id: 'A', text: 'A', isCorrect: false },
+                { id: 'B', text: 'B', isCorrect: true },
+                { id: 'C', text: 'C', isCorrect: false },
+                { id: 'D', text: 'D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'Comprehension',
+            sharedContext: null,
+            sourcePage: 1,
+        },
+    ]
+
+    const pages = [
+        `Passage Alpha
+The first passage belongs to page one.
+Q1. Page one placeholder question
+(A) A
+(B) B
+(C) C
+(D) D
+Answer: (A)`,
+        `Passage Beta
+The second passage belongs to page two.
+Q2. Page two placeholder question
+(A) A
+(B) B
+(C) C
+(D) D
+Answer: (B)`,
+    ]
+
+    const enriched = attachSharedContextsFromPageText(questions, pages)
+
+    expect(enriched[0]?.sharedContext).toContain('Passage Beta')
+    expect(enriched[1]?.sharedContext).toContain('Passage Alpha')
+})

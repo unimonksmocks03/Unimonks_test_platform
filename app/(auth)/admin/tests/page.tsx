@@ -208,10 +208,6 @@ export default function AdminTestsPage() {
     }, [urlPage, urlSearch, urlStatus]);
 
     useEffect(() => {
-        setLivePage(1);
-    }, [search, statusFilter]);
-
-    useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional data refetch when filters change
         void fetchTests({
             search: appliedSearch.trim() || undefined,
@@ -221,6 +217,7 @@ export default function AdminTestsPage() {
     }, [appliedSearch, fetchTests, page, statusFilter]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- async index refresh populates local instant-search cache for the chosen status
         void fetchSearchIndex(statusFilter === "ALL" ? undefined : statusFilter);
     }, [fetchSearchIndex, statusFilter]);
 
@@ -308,7 +305,10 @@ export default function AdminTestsPage() {
                             <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                             <Input
                                 value={search}
-                                onChange={(event) => setSearch(event.target.value)}
+                                onChange={(event) => {
+                                    setSearch(event.target.value);
+                                    setLivePage(1);
+                                }}
                                 placeholder="Search tests by title..."
                                 className="h-12 rounded-xl border-transparent bg-surface-2 pl-10 font-medium"
                             />
@@ -322,6 +322,7 @@ export default function AdminTestsPage() {
                         onValueChange={(value) => {
                             setStatusFilter(value as typeof statusFilter);
                             setPage(1);
+                            setLivePage(1);
                             syncQueryState({
                                 search: appliedSearch,
                                 status: value as (typeof STATUS_FILTERS)[number]["value"],

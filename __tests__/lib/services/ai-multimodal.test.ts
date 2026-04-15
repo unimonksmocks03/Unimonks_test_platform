@@ -235,6 +235,82 @@ test('extractQuestionsFromPdfMultimodal retries with chunked page windows when o
     expect(mockRenderPageAsImage).toHaveBeenCalledTimes(4)
 })
 
+test('extractQuestionsFromPdfMultimodal recovers a stalled chunk with OCR text fallback after multimodal truncation', async () => {
+    const { extractQuestionsFromPdfMultimodal } = await aiServicePromise
+
+    mockResponsesParse.mockReset()
+    mockGetDocumentProxy.mockReset()
+    mockExtractText.mockReset()
+    mockRenderPageAsImage.mockReset()
+
+    mockGetDocumentProxy.mockResolvedValueOnce({
+        numPages: 1,
+        cleanup: vi.fn(),
+    })
+    mockExtractText.mockResolvedValueOnce({
+        text: [
+            'Q1. Assertion (A): Light travels in a straight line. Reason (R): Shadows are formed because light cannot bend around opaque objects. (A) Both A and R are true and R is the correct explanation of A (B) Both A and R are true but R is not the correct explanation of A (C) A is true but R is false (D) A is false but R is true Answer: (A)',
+        ],
+    })
+    mockRenderPageAsImage.mockResolvedValueOnce('data:image/png;base64,fake')
+    mockResponsesParse
+        .mockResolvedValueOnce({
+            status: 'incomplete',
+            incomplete_details: {
+                reason: 'max_output_tokens',
+            },
+            output_parsed: null,
+            usage: {
+                input_tokens: 800,
+                output_tokens: 120,
+            },
+        })
+        .mockResolvedValueOnce({
+            output_parsed: {
+                questions: [
+                    {
+                        questionNumber: 1,
+                        stem: 'Assertion (A): Light travels in a straight line. Reason (R): Shadows are formed because light cannot bend around opaque objects.',
+                        options: [
+                            { id: 'A', text: 'Both A and R are true and R is the correct explanation of A', isCorrect: true },
+                            { id: 'B', text: 'Both A and R are true but R is not the correct explanation of A', isCorrect: false },
+                            { id: 'C', text: 'A is true but R is false', isCorrect: false },
+                            { id: 'D', text: 'A is false but R is true', isCorrect: false },
+                        ],
+                        explanation: 'Straight-line propagation of light explains shadow formation.',
+                        difficulty: 'MEDIUM',
+                        topic: 'Light',
+                        sourcePage: 1,
+                        sourceSnippet: 'Q1. Assertion (A): Light travels in a straight line.',
+                        answerSource: 'INLINE_ANSWER',
+                        confidence: 0.93,
+                    },
+                ],
+            },
+            usage: {
+                input_tokens: 260,
+                output_tokens: 140,
+            },
+        })
+
+    const result = await extractQuestionsFromPdfMultimodal(
+        Buffer.from('fake-pdf'),
+        1,
+        undefined,
+        'fixture.pdf',
+        {
+            preferChunkedVisualExtraction: true,
+            allowOneShotFallbackAfterChunked: false,
+        },
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.questions).toHaveLength(1)
+    expect(result.questions?.[0]?.stem).toContain('Assertion (A): Light travels in a straight line')
+    expect(result.message).toContain('OCR text fallback')
+    expect(mockResponsesParse).toHaveBeenCalledTimes(2)
+})
+
 test('extractQuestionsFromPdfMultimodal chunks visual PDFs by page window and merges numbered questions', async () => {
     const { extractQuestionsFromPdfMultimodal } = await aiServicePromise
 

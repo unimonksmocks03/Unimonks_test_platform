@@ -185,6 +185,7 @@ export default function UserManagementPage() {
     }, [deferredSearchQuery, roleFilter, statusFilter, page, fetchUsers]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- async batch-option preload updates local selection data after the request resolves
         void fetchAvailableBatches();
     }, [fetchAvailableBatches]);
 
@@ -442,8 +443,6 @@ export default function UserManagementPage() {
                             users.map((user) => {
                                 const isOwnerAdminRow = user.role === "ADMIN";
                                 const isSubAdminRow = user.role === "SUB_ADMIN";
-                                const isOwnerAdminProtected = isOwnerAdminRow && !isPrimaryAdmin;
-                                const isSubAdminProtected = isSubAdminRow && !isPrimaryAdmin;
                                 const canDeleteUser =
                                     user.status !== "INACTIVE" &&
                                     !isOwnerAdminRow &&
@@ -581,16 +580,21 @@ function EditUserSheet({
     const [batchSearch, setBatchSearch] = useState("");
     const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>(user.batches.map((batch) => batch.id));
 
-    useEffect(() => {
-        if (!open) {
-            setName(user.name);
-            setEmail(user.email);
-            setRole(user.role as "ADMIN" | "SUB_ADMIN" | "STUDENT");
-            setStatus(user.status as "ACTIVE" | "INACTIVE" | "SUSPENDED");
-            setSelectedBatchIds(user.batches.map((batch) => batch.id));
-            setBatchSearch("");
+    const resetFormState = useCallback(() => {
+        setName(user.name);
+        setEmail(user.email);
+        setRole(user.role as "ADMIN" | "SUB_ADMIN" | "STUDENT");
+        setStatus(user.status as "ACTIVE" | "INACTIVE" | "SUSPENDED");
+        setSelectedBatchIds(user.batches.map((batch) => batch.id));
+        setBatchSearch("");
+    }, [user]);
+
+    const handleOpenChange = useCallback((nextOpen: boolean) => {
+        setOpen(nextOpen);
+        if (!nextOpen) {
+            resetFormState();
         }
-    }, [open, user]);
+    }, [resetFormState]);
 
     const isOwnerAdminRow = user.role === "ADMIN";
     const isSubAdminRow = user.role === "SUB_ADMIN";
@@ -631,7 +635,7 @@ function EditUserSheet({
     };
 
     return (
-        <Sheet open={open} onOpenChange={setOpen}>
+        <Sheet open={open} onOpenChange={handleOpenChange}>
             <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-9 w-9 shadow-none text-slate-400 hover:text-primary hover:bg-surface-2 rounded-xl">
                     <Edit className="h-4 w-4" />

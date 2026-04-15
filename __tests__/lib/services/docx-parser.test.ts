@@ -30,6 +30,7 @@ test('parseDocxToText prefers HTML conversion to preserve table and list boundar
         value: `
             <h1>Reasoning Mock</h1>
             <p>Match the following:</p>
+            <img src="data:image/png;base64,abc" alt="Figure series with three arrows" />
             <table>
                 <tr><th>List I</th><th>List II</th></tr>
                 <tr><td>A. Analogy</td><td>1. Relationship</td></tr>
@@ -41,6 +42,7 @@ test('parseDocxToText prefers HTML conversion to preserve table and list boundar
 
     expect(result).toContain('Reasoning Mock')
     expect(result).toContain('Match the following:')
+    expect(result).toContain('[Image: Figure series with three arrows]')
     expect(result).toContain('List I')
     expect(result).toContain('A. Analogy')
     expect(result).toContain('1. Relationship')

@@ -42,17 +42,17 @@ export const VerificationIssueSeveritySchema = z.enum([
 ])
 
 export const McqOptionSchema = z.object({
-    id: z.enum(['A', 'B', 'C', 'D']),
+    id: z.string().trim().min(1).max(4),
     text: z.string().trim().min(1),
-    isCorrect: z.boolean(),
+    isCorrect: z.boolean().optional().default(false),
 })
 
 export const McqQuestionSchema = z.object({
     stem: z.string().trim().min(3),
-    options: z.array(McqOptionSchema).length(4),
-    explanation: z.string(),
-    difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']),
-    topic: z.string().trim().min(1),
+    options: z.array(McqOptionSchema).min(2).max(6),
+    explanation: z.string().trim().max(5000).optional().default(''),
+    difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']).optional().default('MEDIUM'),
+    topic: z.string().trim().min(1).max(120).optional().default('General aptitude'),
     sharedContext: z.string().trim().max(12000).optional().nullable(),
     sourcePage: z.number().int().positive().optional().nullable(),
     sourceSnippet: z.string().trim().min(1).max(2000).optional().nullable(),
@@ -79,7 +79,7 @@ export const NumberedMcqExtractionResponseSchema = z.object({
 
 export const VisualReferenceExtractionSchema = z.object({
     questionNumber: z.number().int().positive(),
-    sharedContext: z.string().trim().max(12000),
+    sharedContext: z.string().trim().max(12000).optional().default(''),
     sourcePage: z.number().int().positive().optional().nullable(),
     sourceSnippet: z.string().trim().min(1).max(2000).optional().nullable(),
     sharedContextEvidence: z.string().trim().min(1).max(12000).optional().nullable(),

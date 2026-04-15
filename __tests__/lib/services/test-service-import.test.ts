@@ -41,6 +41,7 @@ const extractQuestionsFromDocumentTextPreciselyMock = vi.fn()
 const extractQuestionsFromPdfMultimodalMock = vi.fn()
 const generateQuestionsFromPdfVisionFallbackMock = vi.fn()
 const generateQuestionsFromTextMock = vi.fn()
+const getPdfPageCountMock = vi.fn()
 const attachSharedContextsFromPdfMock = vi.fn()
 const enrichGeneratedQuestionsMetadataMock = vi.fn()
 const verifyExtractedQuestionsMock = vi.fn()
@@ -64,6 +65,7 @@ vi.mock('@/lib/services/ai-service', () => ({
     extractQuestionsFromPdfMultimodal: extractQuestionsFromPdfMultimodalMock,
     generateQuestionsFromPdfVisionFallback: generateQuestionsFromPdfVisionFallbackMock,
     generateQuestionsFromText: generateQuestionsFromTextMock,
+    getPdfPageCount: getPdfPageCountMock,
     attachSharedContextsFromPdf: attachSharedContextsFromPdfMock,
     enrichGeneratedQuestionsMetadata: enrichGeneratedQuestionsMetadataMock,
     verifyExtractedQuestions: verifyExtractedQuestionsMock,
@@ -320,6 +322,7 @@ beforeEach(() => {
         assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
         bbox: null,
     })
+    getPdfPageCountMock.mockResolvedValue(12)
 })
 
 test('generateAdminTestFromDocument persists per-question evidence and durable import diagnostics', async () => {
@@ -374,6 +377,25 @@ test('generateAdminTestFromDocument persists per-question evidence and durable i
             }),
         }),
     })
+})
+
+test('generateAdminTestFromDocument rejects PDFs that exceed the page cap before import processing starts', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    getPdfPageCountMock.mockResolvedValueOnce(61)
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('large.pdf', 'application/pdf'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect(result).toEqual({
+        error: true,
+        code: 'BAD_REQUEST',
+        message: 'PDF too large. Max 60 pages.',
+    })
+    expect(parseDocumentToTextMock).not.toHaveBeenCalled()
 })
 
 test('generateAdminTestFromDocument persists normalized question references when extracted questions include shared context', async () => {

@@ -24,20 +24,19 @@ test('McqQuestionSchema accepts a valid MCQ question', () => {
     expect(McqQuestionSchema.safeParse(valid).success).toBe(true)
 })
 
-test('McqQuestionSchema rejects question with 3 options', () => {
-    const invalid = {
+test('McqQuestionSchema accepts question batches with 3 options so one malformed item does not reject the whole response', () => {
+    const partiallyValid = {
         stem: 'Some question?',
         options: [
             { id: 'A', text: 'Opt A', isCorrect: false },
             { id: 'B', text: 'Opt B', isCorrect: true },
             { id: 'C', text: 'Opt C', isCorrect: false },
         ],
-        explanation: 'Reason',
         difficulty: 'EASY',
         topic: 'Test',
     }
 
-    expect(McqQuestionSchema.safeParse(invalid).success).toBe(false)
+    expect(McqQuestionSchema.safeParse(partiallyValid).success).toBe(true)
 })
 
 test('McqQuestionSchema rejects empty stem', () => {
@@ -93,6 +92,20 @@ test('McqExtractionResponseSchema accepts a valid extraction response', () => {
     }
 
     expect(McqExtractionResponseSchema.safeParse(valid).success).toBe(true)
+})
+
+test('McqQuestionSchema fills optional explanation and difficulty defaults', () => {
+    const parsed = McqQuestionSchema.parse({
+        stem: 'Which option is correct?',
+        options: [
+            { id: 'A', text: 'Option A', isCorrect: false },
+            { id: 'B', text: 'Option B', isCorrect: true },
+        ],
+        topic: 'General Aptitude',
+    })
+
+    expect(parsed.explanation).toBe('')
+    expect(parsed.difficulty).toBe('MEDIUM')
 })
 
 test('VerificationResultSchema accepts a valid verifier result', () => {
