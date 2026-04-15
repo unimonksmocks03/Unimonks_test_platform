@@ -84,6 +84,7 @@ export interface PdfVisionFallbackResult {
     failedCount?: number
     cost?: CostInfo
     error?: boolean
+    truncated?: boolean
     message?: string
     pageCount: number
     chunkCount: number

@@ -158,7 +158,7 @@ test('validateAdminDocumentUpload enforces AI import file rules and generation f
 
     const oversizedFile = validateAdminDocumentUpload({
         fileName: 'biology-notes.pdf',
-        fileSize: 6 * 1024 * 1024,
+        fileSize: 26 * 1024 * 1024,
     })
     expect('error' in oversizedFile && oversizedFile.code).toBe('BAD_REQUEST')
 })

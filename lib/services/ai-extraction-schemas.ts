@@ -79,7 +79,7 @@ export const NumberedMcqExtractionResponseSchema = z.object({
 
 export const VisualReferenceExtractionSchema = z.object({
     questionNumber: z.number().int().positive(),
-    sharedContext: z.string().trim().min(3).max(12000),
+    sharedContext: z.string().trim().max(12000),
     sourcePage: z.number().int().positive().optional().nullable(),
     sourceSnippet: z.string().trim().min(1).max(2000).optional().nullable(),
     sharedContextEvidence: z.string().trim().min(1).max(12000).optional().nullable(),

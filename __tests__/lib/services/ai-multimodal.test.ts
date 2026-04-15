@@ -112,6 +112,129 @@ test('extractQuestionsFromPdfMultimodal sends the PDF to GPT-4o responses.parse 
     )
 })
 
+test('extractQuestionsFromPdfMultimodal retries with chunked page windows when one-shot extraction hits max_output_tokens', async () => {
+    const { extractQuestionsFromPdfMultimodal } = await aiServicePromise
+
+    mockResponsesParse.mockReset()
+    mockGetDocumentProxy.mockReset()
+    mockExtractText.mockReset()
+    mockRenderPageAsImage.mockReset()
+
+    mockGetDocumentProxy
+        .mockResolvedValueOnce({
+            numPages: 3,
+            cleanup: vi.fn(),
+        })
+        .mockResolvedValueOnce({
+            numPages: 3,
+            cleanup: vi.fn(),
+        })
+    mockExtractText.mockResolvedValueOnce({
+        text: [
+            'Q1 figure question',
+            'Q2 figure question',
+            'Q3 figure question',
+        ],
+    })
+    mockRenderPageAsImage.mockResolvedValue('data:image/png;base64,fake')
+    mockResponsesParse
+        .mockResolvedValueOnce({
+            status: 'incomplete',
+            incomplete_details: {
+                reason: 'max_output_tokens',
+            },
+            output_parsed: null,
+            usage: {
+                input_tokens: 900,
+                output_tokens: 100,
+            },
+        })
+        .mockResolvedValueOnce({
+            output_parsed: {
+                questions: [
+                    {
+                        questionNumber: 1,
+                        stem: 'Find figure 1',
+                        options: [
+                            { id: 'A', text: 'Option A1', isCorrect: false },
+                            { id: 'B', text: 'Option B1', isCorrect: true },
+                            { id: 'C', text: 'Option C1', isCorrect: false },
+                            { id: 'D', text: 'Option D1', isCorrect: false },
+                        ],
+                        explanation: 'Figure 1 explanation',
+                        difficulty: 'EASY',
+                        topic: 'Figures',
+                    },
+                    {
+                        questionNumber: 2,
+                        stem: 'Find figure 2',
+                        options: [
+                            { id: 'A', text: 'Option A2', isCorrect: true },
+                            { id: 'B', text: 'Option B2', isCorrect: false },
+                            { id: 'C', text: 'Option C2', isCorrect: false },
+                            { id: 'D', text: 'Option D2', isCorrect: false },
+                        ],
+                        explanation: 'Figure 2 explanation',
+                        difficulty: 'MEDIUM',
+                        topic: 'Figures',
+                    },
+                ],
+            },
+            usage: {
+                input_tokens: 320,
+                output_tokens: 160,
+            },
+        })
+        .mockResolvedValueOnce({
+            output_parsed: {
+                questions: [
+                    {
+                        questionNumber: 2,
+                        stem: 'Find figure 2',
+                        options: [
+                            { id: 'A', text: 'Option A2', isCorrect: true },
+                            { id: 'B', text: 'Option B2', isCorrect: false },
+                            { id: 'C', text: 'Option C2', isCorrect: false },
+                            { id: 'D', text: 'Option D2', isCorrect: false },
+                        ],
+                        explanation: 'Figure 2 explanation',
+                        difficulty: 'MEDIUM',
+                        topic: 'Figures',
+                    },
+                    {
+                        questionNumber: 3,
+                        stem: 'Find figure 3',
+                        options: [
+                            { id: 'A', text: 'Option A3', isCorrect: false },
+                            { id: 'B', text: 'Option B3', isCorrect: false },
+                            { id: 'C', text: 'Option C3', isCorrect: true },
+                            { id: 'D', text: 'Option D3', isCorrect: false },
+                        ],
+                        explanation: 'Figure 3 explanation',
+                        difficulty: 'MEDIUM',
+                        topic: 'Figures',
+                    },
+                ],
+            },
+            usage: {
+                input_tokens: 320,
+                output_tokens: 160,
+            },
+        })
+
+    const result = await extractQuestionsFromPdfMultimodal(
+        Buffer.from('fake-pdf'),
+        3,
+        undefined,
+        'fixture.pdf',
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.questions).toHaveLength(3)
+    expect(result.message).toContain('retried with chunked page windows')
+    expect(mockRenderPageAsImage).toHaveBeenCalledTimes(4)
+})
+
 test('extractQuestionsFromPdfMultimodal chunks visual PDFs by page window and merges numbered questions', async () => {
     const { extractQuestionsFromPdfMultimodal } = await aiServicePromise
 
@@ -272,6 +395,172 @@ test('extractVisualReferencesFromPdfImages degrades gracefully when visual-refer
     expect(result.references).toEqual([])
 
     mockCanvasImport.mockImplementation(() => ({ createCanvas: vi.fn() }))
+})
+
+test('extractQuestionsFromDocumentTextPrecisely retries text-AI extraction with smaller chunks after max_output_tokens truncation', async () => {
+    const { extractQuestionsFromDocumentTextPrecisely } = await aiServicePromise
+
+    mockResponsesParse.mockReset()
+    mockResponsesParse
+        .mockResolvedValueOnce({
+            status: 'incomplete',
+            incomplete_details: {
+                reason: 'max_output_tokens',
+            },
+            output_parsed: null,
+            usage: {
+                input_tokens: 700,
+                output_tokens: 80,
+            },
+        })
+        .mockResolvedValueOnce({
+            output_parsed: {
+                questions: [
+                    {
+                        stem: 'Which number completes the series?',
+                        options: [
+                            { id: 'A', text: '12', isCorrect: false },
+                            { id: 'B', text: '14', isCorrect: true },
+                            { id: 'C', text: '16', isCorrect: false },
+                            { id: 'D', text: '18', isCorrect: false },
+                        ],
+                        explanation: '14 continues the observed pattern.',
+                        difficulty: 'MEDIUM',
+                        topic: 'Series',
+                    },
+                ],
+            },
+            usage: {
+                input_tokens: 320,
+                output_tokens: 120,
+            },
+        })
+        .mockResolvedValueOnce({
+            output_parsed: {
+                questions: [],
+            },
+            usage: {
+                input_tokens: 320,
+                output_tokens: 10,
+            },
+        })
+
+    const result = await extractQuestionsFromDocumentTextPrecisely(
+        'Reasoning theory notes. '.repeat(80),
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.aiRepairUsed).toBe(true)
+    expect(result.questions).toHaveLength(1)
+    expect(result.questions[0]?.stem).toBe('Which number completes the series?')
+})
+
+test('generateQuestionsFromText does not collapse distinct questions that share a long common prefix', async () => {
+    const { generateQuestionsFromText } = await aiServicePromise
+
+    const commonPrefix = 'In the following question, select the related word from the given alternatives and choose the best answer based on the relationship shown: '
+    const firstStem = `${commonPrefix}ALPHA : BETA :: ?`
+    const secondStem = `${commonPrefix}GAMMA : DELTA :: ?`
+
+    mockChatCreate.mockReset()
+    mockChatCreate
+        .mockResolvedValueOnce({
+            choices: [{
+                message: {
+                    content: JSON.stringify({
+                        questions: [
+                            {
+                                stem: firstStem,
+                                options: [
+                                    { id: 'A', text: 'Option A1', isCorrect: false },
+                                    { id: 'B', text: 'Option B1', isCorrect: true },
+                                    { id: 'C', text: 'Option C1', isCorrect: false },
+                                    { id: 'D', text: 'Option D1', isCorrect: false },
+                                ],
+                                explanation: 'First explanation',
+                                difficulty: 'MEDIUM',
+                                topic: 'Analogy',
+                            },
+                        ],
+                    }),
+                },
+            }],
+            usage: { prompt_tokens: 100, completion_tokens: 40 },
+        })
+        .mockResolvedValueOnce({
+            choices: [{
+                message: {
+                    content: JSON.stringify({
+                        questions: [
+                            {
+                                stem: secondStem,
+                                options: [
+                                    { id: 'A', text: 'Option A2', isCorrect: true },
+                                    { id: 'B', text: 'Option B2', isCorrect: false },
+                                    { id: 'C', text: 'Option C2', isCorrect: false },
+                                    { id: 'D', text: 'Option D2', isCorrect: false },
+                                ],
+                                explanation: 'Second explanation',
+                                difficulty: 'MEDIUM',
+                                topic: 'Analogy',
+                            },
+                        ],
+                    }),
+                },
+            }],
+            usage: { prompt_tokens: 100, completion_tokens: 40 },
+        })
+
+    const result = await generateQuestionsFromText('A'.repeat(20050), 2)
+
+    expect(result.error).toBeUndefined()
+    expect(result.questions).toHaveLength(2)
+    expect(result.questions?.map((question) => question.stem)).toEqual([firstStem, secondStem])
+})
+
+test('extractVisualReferencesFromPdfImages drops empty sharedContext rows without failing the whole chunk', async () => {
+    const { extractVisualReferencesFromPdfImages } = await aiServicePromise
+
+    mockResponsesParse.mockClear()
+    mockGetDocumentProxy.mockClear()
+    mockExtractText.mockClear()
+    mockRenderPageAsImage.mockClear()
+
+    mockGetDocumentProxy.mockResolvedValueOnce({
+        numPages: 1,
+        cleanup: vi.fn(),
+    })
+    mockExtractText.mockResolvedValueOnce({
+        text: ['Q1 depends on a diagram.'],
+    })
+    mockRenderPageAsImage.mockResolvedValueOnce('data:image/png;base64,page-1')
+    mockResponsesParse.mockResolvedValueOnce({
+        output_parsed: {
+            references: [
+                {
+                    questionNumber: 1,
+                    sharedContext: '',
+                    sourcePage: 1,
+                    sourceSnippet: 'Q1 depends on a diagram.',
+                    sharedContextEvidence: 'Diagram on page 1.',
+                    confidence: 0.4,
+                },
+            ],
+        },
+        usage: {
+            input_tokens: 220,
+            output_tokens: 40,
+        },
+    })
+
+    const result = await extractVisualReferencesFromPdfImages(
+        Buffer.from('fake-pdf'),
+        undefined,
+        'visual.pdf',
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(result.references).toEqual([])
 })
 
 test('verifyExtractedQuestionsWithAI preserves global question numbering across batches', async () => {
@@ -505,7 +794,8 @@ test('verifyExtractedQuestions flags missing shared context for table-referenced
 
     const result = verifyExtractedQuestions(questions, 1)
 
-    expect(result.passed).toBe(false)
+    expect(result.passed).toBe(true)
+    expect(result.reviewRecommended).toBe(true)
     expect(result.issues.some((issue) => issue.issue.includes('shared context'))).toBe(true)
 })
 
@@ -570,7 +860,8 @@ test('verifyExtractedQuestions flags multimodal questions without source pages a
 
     const result = verifyExtractedQuestions(questions as never, 20)
 
-    expect(result.passed).toBe(false)
+    expect(result.passed).toBe(true)
+    expect(result.reviewRecommended).toBe(true)
     expect(result.issues.some((issue) => issue.code === 'MISSING_SOURCE_PAGE')).toBe(true)
     expect(result.issues.some((issue) => issue.code === 'ANSWER_SKEW')).toBe(true)
 })

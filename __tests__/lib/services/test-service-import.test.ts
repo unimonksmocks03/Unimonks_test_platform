@@ -1074,7 +1074,104 @@ test('generateAdminTestFromDocument fails fast when verification reports structu
     expect(prismaMock.test.create).not.toHaveBeenCalled()
 })
 
-test('generateAdminTestFromDocument skips inline AI verification and metadata enrichment for large classifier imports', async () => {
+test('generateAdminTestFromDocument keeps partially recovered imports for review when enough valid questions survive', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    const recoveredQuestions = Array.from({ length: 18 }, (_, index) => (
+        createQuestion(`Recovered question ${index + 1}`)
+    ))
+
+    executeDocumentImportPlanMock.mockResolvedValueOnce({
+        useLegacyFlow: false,
+        strategy: 'EXTRACTED',
+        result: {
+            error: false,
+            message: 'Chunked multimodal extraction skipped 1 page chunk while recovering the question set.',
+            questions: recoveredQuestions,
+            failedCount: 12,
+            cost: {
+                model: 'gpt-5.4',
+                inputTokens: 240,
+                outputTokens: 48,
+                costUSD: 0.31,
+            },
+        },
+        extracted: {
+            detectedAsMcqDocument: true,
+            answerHintCount: 18,
+            candidateBlockCount: 30,
+            questions: recoveredQuestions,
+            expectedQuestionCount: 30,
+            exactMatchAchieved: false,
+            invalidQuestionNumbers: [],
+            missingQuestionNumbers: [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30],
+            duplicateQuestionNumbers: [],
+            aiRepairUsed: false,
+            cost: undefined,
+            error: false,
+            message: undefined,
+        },
+        parserStatus: 'WEAK_OUTPUT',
+        aiFallbackUsed: true,
+        reportParserIssue: true,
+        warning: 'Recovered the usable pages but one extraction chunk failed.',
+        needsAdminReview: false,
+        reviewIssueCount: 0,
+    })
+    verifyExtractedQuestionsMock.mockReturnValueOnce(createVerification({
+        totalQuestions: 18,
+        validQuestions: 18,
+        passed: false,
+        reviewRecommended: true,
+        issues: [
+            {
+                questionNumber: 0,
+                issue: 'Missing numbered questions: 19-30',
+                category: 'STRUCTURAL',
+                severity: 'ERROR',
+                code: 'NUMBERING_GAP',
+            },
+        ],
+        issueSummary: {
+            structural: 1,
+            evidence: 0,
+            cross: 0,
+            errors: 1,
+            warnings: 0,
+        },
+    }))
+    enrichGeneratedQuestionsMetadataMock.mockResolvedValueOnce({
+        questions: recoveredQuestions,
+        description: 'Recovered description',
+        aiUsed: true,
+        cost: undefined,
+        warning: undefined,
+    })
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('partial.pdf', 'application/pdf'),
+        ipAddress: '127.0.0.1',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(result.test.reviewStatus).toBe('NEEDS_REVIEW')
+    expect(result.importDiagnostics).toMatchObject({
+        decision: 'REVIEW_REQUIRED',
+        reviewRequired: true,
+        reviewStatus: 'NEEDS_REVIEW',
+        extractedQuestions: 18,
+        failedCount: 12,
+    })
+    expect(result.importDiagnostics.failureReason).toContain('Recovered 18 usable question(s) from an expected 30')
+
+    const createCall = prismaMock.test.create.mock.calls.at(-1)?.[0]
+    expect(createCall?.data.importDiagnostics.warning).toContain('Chunked multimodal extraction skipped 1 page chunk')
+})
+
+test('generateAdminTestFromDocument runs inline AI verification and metadata enrichment for classifier imports', async () => {
     const { generateAdminTestFromDocument } = await servicePromise
 
     const extractedQuestions = Array.from({ length: 50 }, (_, index) =>
@@ -1121,6 +1218,18 @@ test('generateAdminTestFromDocument skips inline AI verification and metadata en
         needsAdminReview: false,
         reviewIssueCount: 0,
     })
+    enrichGeneratedQuestionsMetadataMock.mockResolvedValueOnce({
+        questions: extractedQuestions,
+        description: 'Reasoning import summary',
+        aiUsed: true,
+        cost: {
+            model: 'gpt-5.4-mini',
+            inputTokens: 90,
+            outputTokens: 18,
+            costUSD: 0.11,
+        },
+        warning: undefined,
+    })
 
     const result = await generateAdminTestFromDocument({
         adminId: 'admin-1',
@@ -1131,13 +1240,13 @@ test('generateAdminTestFromDocument skips inline AI verification and metadata en
     expect('error' in result).toBe(false)
     if ('error' in result) return
 
-    expect(verifyExtractedQuestionsWithAIMock).not.toHaveBeenCalled()
-    expect(enrichGeneratedQuestionsMetadataMock).not.toHaveBeenCalled()
+    expect(verifyExtractedQuestionsWithAIMock).toHaveBeenCalledOnce()
+    expect(enrichGeneratedQuestionsMetadataMock).toHaveBeenCalledOnce()
 
     const createCall = prismaMock.test.create.mock.calls.at(-1)?.[0]
     expect(createCall?.data.importDiagnostics).toMatchObject({
         fileName: 'reasoning.pdf',
-        metadataAiUsed: false,
+        metadataAiUsed: true,
         extractedQuestions: 50,
         questionsGenerated: 50,
     })
@@ -1291,6 +1400,11 @@ test('generateAdminTestFromDocument creates a draft from exact extraction first 
     if ('error' in result) return
 
     expect(extractQuestionsFromDocumentTextPreciselyMock).toHaveBeenCalled()
+    expect(extractQuestionsFromDocumentTextPreciselyMock).toHaveBeenCalledWith(
+        expect.any(String),
+        'admin-1',
+        undefined,
+    )
     expect(extractQuestionsFromPdfMultimodalMock).not.toHaveBeenCalled()
     expect(result.strategy).toBe('EXTRACTED')
     expect(result.test.reviewStatus).toBe('NEEDS_REVIEW')

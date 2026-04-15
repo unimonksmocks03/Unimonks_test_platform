@@ -2124,21 +2124,19 @@ ${batchContext}`
 // Sends the raw text to GPT-4o and asks it to extract any existing MCQs faithfully.
 // Unlike generateFromChunk, this never invents new questions — if no MCQs are found
 // it returns an empty array so the caller can decide whether to fall through to generation.
-async function extractQuestionsFromTextWithAI(
-    text: string,
-    auditUserId?: string,
-): Promise<{ questions: GeneratedQuestion[]; cost?: CostInfo; error?: boolean; message?: string }> {
-    if (!openai) {
-        return { questions: [], error: true, message: 'OpenAI API key not configured.' }
-    }
-
-    const model = 'gpt-4o-mini'
-    const chunks = chunkDocumentTextForGeneration(text, 12000, 200)
-    const allQuestions: GeneratedQuestion[] = []
-    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
-
-    for (const chunk of chunks) {
-        const prompt = `You are an expert at extracting existing MCQs from educational documents.
+async function extractQuestionsFromTextWithAIChunk(
+    chunk: string,
+    model: string,
+    chunkLabel: string,
+    depth = 0,
+): Promise<{
+    questions: GeneratedQuestion[]
+    failedCount: number
+    cost?: CostInfo
+    failure?: AIChunkFailure
+    warnings: string[]
+}> {
+    const prompt = `You are an expert at extracting existing MCQs from educational documents.
 
 TASK: If the text contains pre-existing multiple-choice questions (MCQs), extract them faithfully. Do NOT create new questions.
 
@@ -2212,34 +2210,134 @@ Rules:
 Text:
 ${chunk}`
 
-        try {
-            const response = await openai.chat.completions.create({
+    try {
+        const response = await withOpenAIRetries(
+            chunkLabel,
+            () => openai!.responses.parse({
                 model,
                 temperature: 0,
-                max_tokens: 4000,
-                response_format: { type: 'json_object' },
-                messages: [{ role: 'user', content: prompt }],
-            })
+                max_output_tokens: 8000,
+                input: [
+                    {
+                        role: 'system',
+                        content: 'You faithfully extract existing MCQs from source documents and return only strict structured output.',
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'input_text',
+                                text: prompt,
+                            },
+                        ],
+                    },
+                ],
+                text: {
+                    format: zodTextFormat(McqExtractionResponseSchema, 'mcq_text_extraction_response'),
+                },
+            }),
+        )
 
-            const content = response.choices[0]?.message?.content
-            const cost = calculateCost(model, response.usage as { prompt_tokens?: number; completion_tokens?: number })
-            totalCost.inputTokens += cost.inputTokens
-            totalCost.outputTokens += cost.outputTokens
-            totalCost.costUSD += cost.costUSD
+        const cost = calculateCost(model, response.usage)
+        if (isMaxOutputTokenTruncationResponse(response)) {
+            const truncationWarning = `${chunkLabel} hit max_output_tokens; retrying with smaller text windows.`
+            console.warn(`[AI] ${truncationWarning}`)
+            const retryChunks = splitTextChunkForRetry(chunk)
 
-            if (content) {
-                const parsed = JSON.parse(content) as { questions?: GeneratedQuestion[] }
-                const { questions } = coerceGeneratedQuestions(parsed.questions)
-                allQuestions.push(...questions)
+            if (depth >= 2 || retryChunks.length < 2) {
+                return {
+                    questions: [],
+                    failedCount: 0,
+                    cost,
+                    failure: buildMaxOutputTokenFailure(chunkLabel),
+                    warnings: [truncationWarning],
+                }
             }
-        } catch (error) {
-            const failure = toAIChunkFailure(error)
+
+            const retriedResults = await Promise.all(
+                retryChunks.map((retryChunk, index) => (
+                    extractQuestionsFromTextWithAIChunk(
+                        retryChunk,
+                        model,
+                        `${chunkLabel} (split ${index + 1})`,
+                        depth + 1,
+                    )
+                )),
+            )
+
+            const mergedQuestions = deduplicateQuestions(
+                retriedResults.flatMap((result) => result.questions),
+            )
+            const mergedCost = mergeCosts(cost, ...retriedResults.map((result) => result.cost))
+            const warnings = [truncationWarning, ...retriedResults.flatMap((result) => result.warnings)]
+            const lastFailure = retriedResults.find((result) => result.failure)?.failure
+
             return {
-                questions: allQuestions,
-                cost: totalCost.inputTokens > 0 ? totalCost : undefined,
-                error: true,
-                message: failure.message,
+                questions: mergedQuestions,
+                failedCount: retriedResults.reduce((sum, result) => sum + result.failedCount, 0),
+                cost: mergedCost,
+                ...(lastFailure && mergedQuestions.length === 0 ? { failure: lastFailure } : {}),
+                warnings,
             }
+        }
+
+        const { questions, failedCount } = coerceGeneratedQuestions(response.output_parsed?.questions ?? [])
+        return {
+            questions,
+            failedCount,
+            cost,
+            warnings: [],
+        }
+    } catch (error) {
+        return {
+            questions: [],
+            failedCount: 0,
+            failure: toAIChunkFailure(error),
+            warnings: [],
+        }
+    }
+}
+
+async function extractQuestionsFromTextWithAI(
+    text: string,
+    auditUserId?: string,
+): Promise<{ questions: GeneratedQuestion[]; cost?: CostInfo; error?: boolean; message?: string }> {
+    if (!openai) {
+        return { questions: [], error: true, message: 'OpenAI API key not configured.' }
+    }
+
+    const model = 'gpt-4o-mini'
+    const chunks = chunkDocumentTextForGeneration(text, 12000, 200)
+    const allQuestions: GeneratedQuestion[] = []
+    const chunkWarnings: string[] = []
+    const totalCost: CostInfo = { model, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+    let lastFailure: AIChunkFailure | null = null
+
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+        const chunk = chunks[chunkIndex]
+        const chunkResult = await extractQuestionsFromTextWithAIChunk(
+            chunk,
+            model,
+            `Text extraction chunk ${chunkIndex + 1}/${chunks.length}`,
+        )
+
+        if (chunkResult.cost) {
+            totalCost.inputTokens += chunkResult.cost.inputTokens
+            totalCost.outputTokens += chunkResult.cost.outputTokens
+            totalCost.costUSD += chunkResult.cost.costUSD
+        }
+
+        if (chunkResult.questions.length > 0) {
+            allQuestions.push(...chunkResult.questions)
+        }
+
+        if (chunkResult.warnings.length > 0) {
+            chunkWarnings.push(...chunkResult.warnings)
+        }
+
+        if (chunkResult.failure) {
+            lastFailure = chunkResult.failure
+            console.warn(`[AI] ${chunkResult.failure.message}`)
         }
     }
 
@@ -2247,9 +2345,27 @@ ${chunk}`
         await logCostToAudit(auditUserId, 'AI_DOC_EXTRACT', totalCost)
     }
 
+    const dedupedQuestions = deduplicateQuestions(allQuestions)
+    const warningMessage = chunkWarnings.reduce<string | undefined>(
+        (message, warning) => appendAIMessage(message, warning),
+        undefined,
+    )
+
+    if (dedupedQuestions.length === 0 && lastFailure) {
+        return {
+            questions: [],
+            cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+            error: true,
+            message: warningMessage
+                ? appendAIMessage(lastFailure.message, warningMessage)
+                : lastFailure.message,
+        }
+    }
+
     return {
-        questions: deduplicateQuestions(allQuestions),
+        questions: dedupedQuestions,
         cost: totalCost.inputTokens > 0 || totalCost.outputTokens > 0 ? totalCost : undefined,
+        ...(warningMessage ? { message: warningMessage } : {}),
     }
 }
 
@@ -2894,11 +3010,19 @@ function coerceGeneratedQuestions(rawQuestions: unknown): { questions: Generated
 
     const questions: GeneratedQuestion[] = []
     let failedCount = 0
-    for (const rawQuestion of rawQuestions) {
+    for (let index = 0; index < rawQuestions.length; index += 1) {
+        const rawQuestion = rawQuestions[index]
         const validatedQuestion = toValidatedGeneratedQuestion(rawQuestion as Partial<GeneratedQuestion>)
         if (validatedQuestion) {
             questions.push(validatedQuestion)
         } else {
+            const stemPreview = rawQuestion
+                && typeof rawQuestion === 'object'
+                && 'stem' in rawQuestion
+                && typeof rawQuestion.stem === 'string'
+                ? rawQuestion.stem.slice(0, 120)
+                : 'unknown stem'
+            console.warn(`[AI] Dropped invalid generated question at index ${index + 1}: ${stemPreview}`)
             failedCount += 1
         }
     }
@@ -2928,7 +3052,12 @@ export function verifyExtractedQuestions(
 function deduplicateQuestions(questions: GeneratedQuestion[]): GeneratedQuestion[] {
     const seen = new Set<string>()
     return questions.filter(q => {
-        const key = q.stem.toLowerCase().replace(/\s+/g, ' ').trim().substring(0, 80)
+        const normalizedStem = q.stem.toLowerCase().replace(/\s+/g, ' ').trim()
+        const normalizedOptions = q.options
+            .map((option) => option.text.toLowerCase().replace(/\s+/g, ' ').trim())
+            .join('|')
+        const normalizedSharedContext = normalizeSharedContextText(q.sharedContext)?.toLowerCase() ?? ''
+        const key = `${normalizedStem}::${normalizedOptions}::${normalizedSharedContext}`
         if (seen.has(key)) return false
         seen.add(key)
         return true
@@ -3002,9 +3131,11 @@ function coerceNumberedGeneratedQuestions(
     const questions: Array<{ questionNumber: number; question: GeneratedQuestion }> = []
     let failedCount = 0
 
-    for (const rawQuestion of rawQuestions) {
+    for (let index = 0; index < rawQuestions.length; index += 1) {
+        const rawQuestion = rawQuestions[index]
         const parsed = NumberedMcqExtractionResponseSchema.shape.questions.element.safeParse(rawQuestion)
         if (!parsed.success) {
+            console.warn(`[AI] Dropped invalid numbered question at index ${index + 1}.`, parsed.error.issues.map((issue) => issue.path.join('.')).join(', '))
             failedCount += 1
             continue
         }
@@ -3099,6 +3230,99 @@ function mergeCosts(...costs: Array<CostInfo | undefined>) {
         outputTokens: 0,
         costUSD: 0,
     })
+}
+
+const OPENAI_RETRY_DELAYS_MS = process.env.NODE_ENV === 'test'
+    ? [0, 0, 0]
+    : [2000, 8000, 20000]
+const MAX_OUTPUT_TOKENS_INCOMPLETE_REASON = 'max_output_tokens'
+
+async function sleepForRetry(delayMs: number) {
+    if (delayMs <= 0) {
+        return
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+}
+
+async function withOpenAIRetries<T>(
+    label: string,
+    operation: () => Promise<T>,
+): Promise<T> {
+    let lastError: unknown
+
+    for (let attempt = 0; attempt < OPENAI_RETRY_DELAYS_MS.length; attempt += 1) {
+        try {
+            return await operation()
+        } catch (error) {
+            lastError = error
+            const failure = toAIChunkFailure(error)
+            if (!failure.retryable || attempt === OPENAI_RETRY_DELAYS_MS.length - 1) {
+                throw error
+            }
+
+            console.warn(`[AI] ${label} failed on attempt ${attempt + 1}; retrying.`, failure.message)
+            await sleepForRetry(OPENAI_RETRY_DELAYS_MS[attempt] ?? 0)
+        }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(`${label} failed.`)
+}
+
+function isMaxOutputTokenTruncationResponse(
+    response: {
+        status?: string | null
+        incomplete_details?: { reason?: string | null } | null
+    } | null | undefined,
+) {
+    return response?.status === 'incomplete'
+        && response.incomplete_details?.reason === MAX_OUTPUT_TOKENS_INCOMPLETE_REASON
+}
+
+function buildMaxOutputTokenFailure(context: string): AIChunkFailure {
+    return {
+        code: MAX_OUTPUT_TOKENS_INCOMPLETE_REASON,
+        message: `${context} hit the max_output_tokens limit and needs a smaller retry window.`,
+        retryable: true,
+    }
+}
+
+function splitTextChunkForRetry(text: string): string[] {
+    const normalized = text.trim()
+    if (normalized.length < 400) {
+        return []
+    }
+
+    const midpoint = Math.floor(normalized.length / 2)
+    const newlineBefore = normalized.lastIndexOf('\n', midpoint)
+    const newlineAfter = normalized.indexOf('\n', midpoint)
+    const splitIndexCandidates = [newlineBefore, newlineAfter]
+        .filter((value) => value > 120 && value < normalized.length - 120)
+    const splitIndex = splitIndexCandidates[0] ?? midpoint
+
+    const left = normalized.slice(0, splitIndex).trim()
+    const right = normalized.slice(splitIndex).trim()
+    if (!left || !right) {
+        return []
+    }
+
+    return [left, right]
+}
+
+function appendAIMessage(currentMessage: string | undefined, nextMessage: string | undefined) {
+    if (!nextMessage) {
+        return currentMessage
+    }
+
+    if (!currentMessage) {
+        return nextMessage
+    }
+
+    if (currentMessage.includes(nextMessage)) {
+        return currentMessage
+    }
+
+    return `${currentMessage} ${nextMessage}`.trim()
 }
 
 function normalizeDifficultyLabel(
@@ -3213,7 +3437,12 @@ function toAIChunkFailure(error: unknown): AIChunkFailure {
         return {
             code,
             message,
-            retryable: status !== 400,
+            retryable: status === undefined
+                || status === 429
+                || status === 500
+                || status === 502
+                || status === 503
+                || status === 504,
         }
     }
 
@@ -3298,6 +3527,7 @@ export async function generateQuestionsFromText(
 
     // Trim to requested count
     if (allQuestions.length > count) {
+        console.info(`[AI] Generated ${allQuestions.length} questions for a requested count of ${count}; trimming overflow.`)
         allQuestions = allQuestions.slice(0, count)
     }
 
@@ -3482,21 +3712,23 @@ async function extractQuestionsFromPdfMultimodalOneShot(
             }
         }
 
-        const response = await openai.responses.parse({
-            model,
-            temperature: 0,
-            max_output_tokens: 16000,
-            input: [
-                {
-                    role: 'system',
-                    content: 'You extract existing CUET-style MCQs from uploaded PDF files with high precision and return only strict structured output.',
-                },
-                {
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'input_text',
-                            text: `Extract the existing MCQs from this PDF with high precision.
+        const response = await withOpenAIRetries(
+            'Multimodal PDF extraction (one-shot)',
+            () => openai.responses.parse({
+                model,
+                temperature: 0,
+                max_output_tokens: 32000,
+                input: [
+                    {
+                        role: 'system',
+                        content: 'You extract existing CUET-style MCQs from uploaded PDF files with high precision and return only strict structured output.',
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'input_text',
+                                text: `Extract the existing MCQs from this PDF with high precision.
 
 FORMAT HANDLING RULES:
 
@@ -3577,31 +3809,43 @@ GENERAL RULES:
 
 Return strict JSON with a top-level "questions" array only.`,
                         },
-                        {
-                            type: 'input_file',
-                            filename: fileName,
-                            file_data: `data:application/pdf;base64,${buffer.toString('base64')}`,
-                        },
-                    ],
+                            {
+                                type: 'input_file',
+                                filename: fileName,
+                                file_data: `data:application/pdf;base64,${buffer.toString('base64')}`,
+                            },
+                        ],
+                    },
+                ],
+                text: {
+                    format: zodTextFormat(McqExtractionResponseSchema, 'mcq_extraction_response'),
                 },
-            ],
-            text: {
-                format: zodTextFormat(McqExtractionResponseSchema, 'mcq_extraction_response'),
-            },
-        })
+            }),
+        )
 
         const cost = calculateCost(model, response.usage)
         totalCost.inputTokens += cost.inputTokens
         totalCost.outputTokens += cost.outputTokens
         totalCost.costUSD += cost.costUSD
 
+        if (isMaxOutputTokenTruncationResponse(response)) {
+            console.warn('[AI] Multimodal PDF extraction (one-shot) hit max_output_tokens; retrying with chunked page windows.')
+            return {
+                mode: 'EXTRACTED',
+                error: true,
+                truncated: true,
+                message: buildMaxOutputTokenFailure('Multimodal PDF extraction (one-shot)').message,
+                pageCount,
+                chunkCount: 1,
+                questions: [],
+                failedCount: Math.max(1, expectedCount),
+                cost: totalCost,
+            }
+        }
+
         const { questions, failedCount } = coerceGeneratedQuestions(response.output_parsed?.questions ?? [])
         const dedupedQuestions = deduplicateQuestions(questions)
         const verification = verifyExtractedQuestions(dedupedQuestions, expectedCount)
-
-        if (auditUserId) {
-            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', totalCost)
-        }
 
         return {
             mode: 'EXTRACTED',
@@ -3689,7 +3933,15 @@ async function extractQuestionsFromPdfMultimodalChunked(
         let chunkFailures = 0
         let lastFailure: AIChunkFailure | null = null
 
-        for (const pageChunk of pageChunks) {
+        const extractPageChunkQuestions = async (
+            pageChunk: number[],
+            depth = 0,
+        ): Promise<{
+            questions: Array<{ questionNumber: number; question: GeneratedQuestion }>
+            failedCount: number
+            chunkFailures: number
+            failure: AIChunkFailure | null
+        }> => {
             const userContent: Array<
                 | { type: 'input_text'; text: string }
                 | { type: 'input_image'; image_url: string; detail: 'auto' }
@@ -3752,49 +4004,98 @@ Return strict JSON with a top-level "questions" array only.`,
             }
 
             try {
-                const response = await openai.responses.parse({
-                    model,
-                    temperature: 0,
-                    max_output_tokens: 8000,
-                    input: [
-                        {
-                            role: 'system',
-                            content: 'You extract existing CUET-style MCQs from specific PDF page windows and return only strict structured output.',
+                const response = await withOpenAIRetries(
+                    `Chunked multimodal PDF extraction (pages ${pageChunk.join(', ')})`,
+                    () => openai.responses.parse({
+                        model,
+                        temperature: 0,
+                        max_output_tokens: 16000,
+                        input: [
+                            {
+                                role: 'system',
+                                content: 'You extract existing CUET-style MCQs from specific PDF page windows and return only strict structured output.',
+                            },
+                            {
+                                role: 'user',
+                                content: userContent,
+                            },
+                        ],
+                        text: {
+                            format: zodTextFormat(
+                                NumberedMcqExtractionResponseSchema,
+                                'numbered_mcq_extraction_response',
+                            ),
                         },
-                        {
-                            role: 'user',
-                            content: userContent,
-                        },
-                    ],
-                    text: {
-                        format: zodTextFormat(
-                            NumberedMcqExtractionResponseSchema,
-                            'numbered_mcq_extraction_response',
-                        ),
-                    },
-                })
+                    }),
+                )
 
                 const cost = calculateCost(model, response.usage)
                 totalCost.inputTokens += cost.inputTokens
                 totalCost.outputTokens += cost.outputTokens
                 totalCost.costUSD += cost.costUSD
 
+                if (isMaxOutputTokenTruncationResponse(response)) {
+                    console.warn(`[AI] Chunked multimodal PDF extraction hit max_output_tokens for ${fileName} pages ${pageChunk.join(', ')}.`)
+                    if (depth >= 1 || pageChunk.length <= 1) {
+                        return {
+                            questions: [],
+                            failedCount: 0,
+                            chunkFailures: 1,
+                            failure: buildMaxOutputTokenFailure(
+                                `Chunked multimodal PDF extraction for ${fileName} pages ${pageChunk.join(', ')}`,
+                            ),
+                        }
+                    }
+
+                    let nestedQuestions: Array<{ questionNumber: number; question: GeneratedQuestion }> = []
+                    let nestedFailedCount = 0
+                    let nestedChunkFailures = 0
+                    let nestedFailure: AIChunkFailure | null = null
+
+                    for (const pageNumber of pageChunk) {
+                        const nestedResult = await extractPageChunkQuestions([pageNumber], depth + 1)
+                        nestedQuestions = nestedQuestions.concat(nestedResult.questions)
+                        nestedFailedCount += nestedResult.failedCount
+                        nestedChunkFailures += nestedResult.chunkFailures
+                        nestedFailure = nestedFailure ?? nestedResult.failure
+                    }
+
+                    return {
+                        questions: nestedQuestions,
+                        failedCount: nestedFailedCount,
+                        chunkFailures: nestedChunkFailures,
+                        failure: nestedFailure,
+                    }
+                }
+
                 const normalized = coerceNumberedGeneratedQuestions(response.output_parsed?.questions ?? [])
-                extractedQuestions.push(...normalized.questions)
-                failedCount += normalized.failedCount
+                return {
+                    questions: normalized.questions,
+                    failedCount: normalized.failedCount,
+                    chunkFailures: 0,
+                    failure: null,
+                }
             } catch (error) {
-                chunkFailures += 1
-                lastFailure = toAIChunkFailure(error)
                 console.error('[AI] Chunked multimodal PDF extraction failed for page chunk:', pageChunk, error)
+                return {
+                    questions: [],
+                    failedCount: 0,
+                    chunkFailures: 1,
+                    failure: toAIChunkFailure(error),
+                }
             }
+        }
+
+        for (const pageChunk of pageChunks) {
+            const chunkResult = await extractPageChunkQuestions(pageChunk)
+            extractedQuestions.push(...chunkResult.questions)
+            failedCount += chunkResult.failedCount
+            chunkFailures += chunkResult.chunkFailures
+            lastFailure = chunkResult.failure ?? lastFailure
         }
 
         const mergedQuestions = mergeChunkedMultimodalQuestions(extractedQuestions)
         const verification = verifyExtractedQuestions(mergedQuestions, expectedCount)
-
-        if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
-            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', totalCost)
-        }
 
         if (mergedQuestions.length === 0) {
             return {
@@ -3849,7 +4150,33 @@ export async function extractQuestionsFromPdfMultimodal(
     options: PdfMultimodalExtractionOptions = {},
 ): Promise<PdfVisionFallbackResult> {
     if (!options.preferChunkedVisualExtraction) {
-        return extractQuestionsFromPdfMultimodalOneShot(buffer, expectedCount, auditUserId, fileName)
+        const oneShot = await extractQuestionsFromPdfMultimodalOneShot(buffer, expectedCount, auditUserId, fileName)
+        if (oneShot.truncated) {
+            const chunkedRetry = await extractQuestionsFromPdfMultimodalChunked(
+                buffer,
+                expectedCount,
+                auditUserId,
+                fileName,
+            )
+            const mergedCost = mergeCosts(oneShot.cost, chunkedRetry.cost)
+            if (auditUserId && mergedCost) {
+                await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', mergedCost)
+            }
+            return {
+                ...chunkedRetry,
+                cost: mergedCost,
+                message: appendAIMessage(
+                    'One-shot multimodal extraction hit max_output_tokens and was retried with chunked page windows.',
+                    chunkedRetry.message,
+                ),
+            }
+        }
+
+        if (auditUserId && oneShot.cost) {
+            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', oneShot.cost)
+        }
+
+        return oneShot
     }
 
     const chunked = await extractQuestionsFromPdfMultimodalChunked(
@@ -3859,10 +4186,16 @@ export async function extractQuestionsFromPdfMultimodal(
         fileName,
     )
     if (shouldPreferChunkedMultimodalResult(chunked, expectedCount)) {
+        if (auditUserId && chunked.cost) {
+            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', chunked.cost)
+        }
         return chunked
     }
 
     if (options.allowOneShotFallbackAfterChunked === false) {
+        if (auditUserId && chunked.cost) {
+            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', chunked.cost)
+        }
         return chunked
     }
 
@@ -3872,8 +4205,29 @@ export async function extractQuestionsFromPdfMultimodal(
         auditUserId,
         fileName,
     )
+    if (oneShot.truncated) {
+        if (auditUserId && chunked.cost) {
+            await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', chunked.cost)
+        }
+        return {
+            ...chunked,
+            message: appendAIMessage(
+                chunked.message,
+                'One-shot multimodal fallback also hit max_output_tokens and the chunked result was kept.',
+            ),
+        }
+    }
 
-    return shouldPreferPdfResult(chunked, oneShot) ? chunked : oneShot
+    const preferredResult = shouldPreferPdfResult(chunked, oneShot) ? chunked : oneShot
+    const mergedCost = mergeCosts(chunked.cost, oneShot.cost)
+    if (auditUserId && mergedCost) {
+        await logCostToAudit(auditUserId, 'AI_MULTIMODAL_EXTRACT', mergedCost)
+    }
+
+    return {
+        ...preferredResult,
+        cost: mergedCost,
+    }
 }
 
 function normalizeVisualReferences(rawReferences: unknown) {
@@ -3971,7 +4325,14 @@ export async function extractVisualReferencesFromPdfImages(
         let chunkFailures = 0
         let lastFailure: AIChunkFailure | null = null
 
-        for (const pageChunk of pageChunks) {
+        const extractPageChunkReferences = async (
+            pageChunk: number[],
+            depth = 0,
+        ): Promise<{
+            references: ReturnType<typeof normalizeVisualReferences>
+            chunkFailures: number
+            failure: AIChunkFailure | null
+        }> => {
             const userContent: Array<
                 | { type: 'input_text'; text: string }
                 | { type: 'input_image'; image_url: string; detail: 'auto' }
@@ -4042,44 +4403,95 @@ Rules:
             }
 
             try {
-                const response = await openai.responses.parse({
-                    model,
-                    temperature: 0,
-                    max_output_tokens: 4000,
-                    input: [
-                        {
-                            role: 'system',
-                            content: 'You extract only visual-reference context from uploaded CUET mock-test PDF pages and return strict structured output.',
+                const response = await withOpenAIRetries(
+                    `Visual-reference extraction (pages ${pageChunk.join(', ')})`,
+                    () => openai.responses.parse({
+                        model,
+                        temperature: 0,
+                        max_output_tokens: 8000,
+                        input: [
+                            {
+                                role: 'system',
+                                content: 'You extract only visual-reference context from uploaded CUET mock-test PDF pages and return strict structured output.',
+                            },
+                            {
+                                role: 'user',
+                                content: userContent,
+                            },
+                        ],
+                        text: {
+                            format: zodTextFormat(
+                                VisualReferenceExtractionResponseSchema,
+                                'visual_reference_extraction_response',
+                            ),
                         },
-                        {
-                            role: 'user',
-                            content: userContent,
-                        },
-                    ],
-                    text: {
-                        format: zodTextFormat(
-                            VisualReferenceExtractionResponseSchema,
-                            'visual_reference_extraction_response',
-                        ),
-                    },
-                })
+                    }),
+                )
 
                 const cost = calculateCost(model, response.usage)
                 totalCost.inputTokens += cost.inputTokens
                 totalCost.outputTokens += cost.outputTokens
                 totalCost.costUSD += cost.costUSD
 
+                if (isMaxOutputTokenTruncationResponse(response)) {
+                    console.warn(`[AI] Visual-reference extraction hit max_output_tokens for ${fileName} pages ${pageChunk.join(', ')}.`)
+                    if (depth >= 1 || pageChunk.length <= 1) {
+                        return {
+                            references: [],
+                            chunkFailures: 1,
+                            failure: buildMaxOutputTokenFailure(
+                                `Visual-reference extraction for ${fileName} pages ${pageChunk.join(', ')}`,
+                            ),
+                        }
+                    }
+
+                    let nestedReferences: ReturnType<typeof normalizeVisualReferences> = []
+                    let nestedFailures = 0
+                    let nestedFailure: AIChunkFailure | null = null
+
+                    for (const pageNumber of pageChunk) {
+                        const nestedResult = await extractPageChunkReferences([pageNumber], depth + 1)
+                        nestedReferences = nestedReferences.concat(nestedResult.references)
+                        nestedFailures += nestedResult.chunkFailures
+                        nestedFailure = nestedFailure ?? nestedResult.failure
+                    }
+
+                    return {
+                        references: nestedReferences,
+                        chunkFailures: nestedFailures,
+                        failure: nestedFailure,
+                    }
+                }
+
                 const parsedReferences = VisualReferenceExtractionResponseSchema.safeParse(response.output_parsed)
                 if (parsedReferences.success) {
-                    extractedReferences.push(
-                        ...normalizeVisualReferences(parsedReferences.data.references),
-                    )
+                    return {
+                        references: normalizeVisualReferences(parsedReferences.data.references),
+                        chunkFailures: 0,
+                        failure: null,
+                    }
+                }
+
+                return {
+                    references: [],
+                    chunkFailures: 0,
+                    failure: null,
                 }
             } catch (error) {
-                chunkFailures += 1
-                lastFailure = toAIChunkFailure(error)
                 console.error('[AI] Visual-reference extraction failed for page chunk:', pageChunk, error)
+                return {
+                    references: [],
+                    chunkFailures: 1,
+                    failure: toAIChunkFailure(error),
+                }
             }
+        }
+
+        for (const pageChunk of pageChunks) {
+            const chunkResult = await extractPageChunkReferences(pageChunk)
+            extractedReferences.push(...chunkResult.references)
+            chunkFailures += chunkResult.chunkFailures
+            lastFailure = chunkResult.failure ?? lastFailure
         }
 
         if (auditUserId && (totalCost.inputTokens > 0 || totalCost.outputTokens > 0)) {
@@ -4210,16 +4622,19 @@ Respond in JSON format:
       "topic": "topic name"
     }
   ]
-}`
+    }`
 
     try {
-        const response = await openai!.chat.completions.create({
-            model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.3,
-            max_tokens: 4000,
-            response_format: { type: 'json_object' },
-        })
+        const response = await withOpenAIRetries(
+            `Question generation chunk (${model})`,
+            () => openai!.chat.completions.create({
+                model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.3,
+                max_tokens: 4000,
+                response_format: { type: 'json_object' },
+            }),
+        )
 
         const content = response.choices[0]?.message?.content
         if (!content) throw new Error('Empty AI response')
@@ -4237,10 +4652,34 @@ Respond in JSON format:
 
 // ── Parse DOCX to Plain Text ──
 export async function parseDocxToText(buffer: Buffer): Promise<string> {
-    // Dynamic import to avoid bundling issues
     const mammoth = await import('mammoth')
-    const result = await mammoth.extractRawText({ buffer })
-    return normalizeDocumentText(result.value)
+
+    const normalizeDocxHtml = (html: string) => normalizeDocumentText(
+        html
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/(p|div|section|article|h[1-6]|table|tr|ul|ol)>/gi, '\n')
+            .replace(/<(li|td|th)[^>]*>/gi, '\n')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
+            .replace(/&#39;/g, '\'')
+            .replace(/&quot;/gi, '"'),
+    )
+
+    try {
+        const htmlResult = await mammoth.convertToHtml({ buffer })
+        const normalizedHtml = normalizeDocxHtml(htmlResult.value)
+        if (normalizedHtml.length > 0) {
+            return normalizedHtml
+        }
+    } catch (error) {
+        console.warn('[AI] DOCX HTML conversion failed, falling back to raw text extraction.', error)
+    }
+
+    const rawTextResult = await mammoth.extractRawText({ buffer })
+    return normalizeDocumentText(rawTextResult.value)
 }
 
 export async function parsePdfToText(buffer: Buffer): Promise<string> {

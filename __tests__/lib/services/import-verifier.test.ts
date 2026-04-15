@@ -210,6 +210,61 @@ test('resolveImportVerificationOutcome returns FAILED_WITH_REASON for error veri
     expect(outcome.message).toContain('Missing numbered questions')
 })
 
+test('resolveImportVerificationOutcome returns REVIEW_REQUIRED for evidence-only errors', () => {
+    const outcome = resolveImportVerificationOutcome({
+        totalQuestions: 10,
+        validQuestions: 9,
+        issues: [
+            {
+                questionNumber: 4,
+                issue: 'Question reference kind TABLE requires attached shared context',
+                category: 'EVIDENCE',
+                severity: 'ERROR',
+                code: 'MISSING_REFERENCE_ATTACHMENT',
+            },
+        ],
+        passed: false,
+        reviewRecommended: true,
+        issueSummary: {
+            structural: 0,
+            evidence: 1,
+            cross: 0,
+            errors: 1,
+            warnings: 0,
+        },
+    })
+
+    expect(outcome.decision).toBe('REVIEW_REQUIRED')
+    expect(outcome.message).toContain('Q4:')
+})
+
+test('verifyExtractedQuestionsV2 downgrades missing audit evidence to warnings', () => {
+    const verification = verifyExtractedQuestionsV2(
+        [
+            createQuestion({
+                stem: 'Based on the following table, what is the correct answer?',
+                sharedContext: null,
+                sourcePage: null,
+                sourceSnippet: null,
+                answerSource: null,
+                sharedContextEvidence: null,
+                extractionMode: 'MULTIMODAL_EXTRACT',
+                referenceKind: 'NONE',
+                referenceMode: 'TEXT',
+            }),
+        ],
+        1,
+        normalizeQuestion,
+    )
+
+    expect(verification.passed).toBe(true)
+    expect(verification.validQuestions).toBe(1)
+    expect(verification.issues.some((issue) => issue.code === 'MISSING_SHARED_CONTEXT' && issue.severity === 'WARNING')).toBe(true)
+    expect(verification.issues.some((issue) => issue.code === 'MISSING_SOURCE_SNIPPET' && issue.severity === 'WARNING')).toBe(true)
+    expect(verification.issues.some((issue) => issue.code === 'MISSING_SOURCE_PAGE' && issue.severity === 'WARNING')).toBe(true)
+    expect(verification.issues.some((issue) => issue.code === 'MISSING_ANSWER_SOURCE' && issue.severity === 'WARNING')).toBe(true)
+})
+
 test('verifyExtractedQuestionsV2 fails when a text-backed reference has no shared context attached', () => {
     const verification = verifyExtractedQuestionsV2(
         [

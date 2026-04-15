@@ -65,7 +65,7 @@ import type {
 } from '@/lib/validations/test.schema'
 
 const COMPLETED_SESSION_STATUSES: SessionStatus[] = ['SUBMITTED', 'TIMED_OUT', 'FORCE_SUBMITTED']
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 const MIN_GENERATED_QUESTIONS = 30
 const VISUAL_REFERENCE_KINDS = new Set<QuestionReferenceKind>(['DIAGRAM', 'GRAPH', 'MAP'])
 
@@ -162,6 +162,10 @@ type DocumentImportDiagnostics = {
     reviewIssueCount?: number
     metadataAiUsed?: boolean
     referenceEnrichmentDeferred?: boolean
+    extractedQuestions?: number
+    questionsGenerated?: number
+    failedCount?: number
+    reviewStatus?: string | null
 }
 
 type QuestionImportEvidencePayload = {
@@ -848,19 +852,57 @@ function shouldRunInlineAiPostProcessing(input: {
     strategy: 'EXTRACTED' | 'AI_GENERATED' | 'AI_VISION_FALLBACK'
     routingMode?: DocumentImportRoutingMode
 }) {
-    if (input.questionCount >= MIN_GENERATED_QUESTIONS) {
+    return input.routingMode !== 'LEGACY'
+}
+
+function appendDiagnosticWarning(
+    currentWarning: string | null | undefined,
+    nextWarning: string | null | undefined,
+) {
+    if (!nextWarning) {
+        return currentWarning ?? null
+    }
+
+    if (!currentWarning) {
+        return nextWarning
+    }
+
+    if (currentWarning.includes(nextWarning)) {
+        return currentWarning
+    }
+
+    return `${currentWarning} ${nextWarning}`.trim()
+}
+
+function countStructuralVerificationErrors(verification: VerificationResult | null | undefined) {
+    if (!verification) {
+        return 0
+    }
+
+    return verification.issues.filter((issue) => (
+        issue.category === 'STRUCTURAL' && issue.severity === 'ERROR'
+    )).length
+}
+
+function shouldAcceptPartialImportRecovery(input: {
+    verification: VerificationResult | null | undefined
+    expectedCount: number | null | undefined
+}) {
+    const verification = input.verification
+    if (!verification) {
         return false
     }
 
-    if (input.isPdfUpload) {
-        return false
-    }
+    const baselineCount = input.expectedCount && input.expectedCount > 0
+        ? input.expectedCount
+        : verification.totalQuestions
+    const validQuestionThreshold = Math.max(5, Math.floor(baselineCount * 0.4))
+    const structuralErrorThreshold = Math.max(2, Math.floor(baselineCount * 0.1))
 
-    if (input.routingMode === 'CLASSIFIER') {
-        return false
-    }
-
-    return input.strategy === 'AI_GENERATED'
+    return (
+        verification.validQuestions >= validQuestionThreshold
+        && countStructuralVerificationErrors(verification) <= structuralErrorThreshold
+    )
 }
 
 export function classifyBatchAudience(batchKinds: readonly BatchKind[]): BatchAudience {
@@ -2062,7 +2104,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     const shouldKeepExactPassCheap =
         shouldDeferReferenceEnrichment
         && importPlan.selectedStrategy === 'HYBRID_RECONCILE'
-        && importDiagnostics.classification.hasDiagramReasoning
+        && !importDiagnostics.classification.hasDiagramReasoning
     const effectiveGenerationTarget =
         importDiagnostics.classification.documentType === 'MCQ_PAPER'
         && importDiagnostics.classification.detectedQuestionCount
@@ -2374,13 +2416,16 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         )
     }
 
+    importDiagnostics.warning = appendDiagnosticWarning(importDiagnostics.warning, result.message)
+
     if (isPdfUpload && text.length >= 50 && strategy !== 'AI_GENERATED') {
         const reconciledAnswers = reconcileGeneratedQuestionsWithTextAnswerHints(result.questions, text)
         if (reconciledAnswers.repairedCount > 0) {
             result.questions = annotateQuestionsWithReferencePolicy(reconciledAnswers.questions)
-            importDiagnostics.warning = importDiagnostics.warning
-                ? `${importDiagnostics.warning} Reconciled ${reconciledAnswers.repairedCount} question answer(s) from the PDF text layer.`
-                : `Reconciled ${reconciledAnswers.repairedCount} question answer(s) from the PDF text layer.`
+            importDiagnostics.warning = appendDiagnosticWarning(
+                importDiagnostics.warning,
+                `Reconciled ${reconciledAnswers.repairedCount} question answer(s) from the PDF text layer.`,
+            )
         } else {
             result.questions = annotateQuestionsWithReferencePolicy(reconciledAnswers.questions)
         }
@@ -2434,6 +2479,29 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         }
     }
 
+    const partialRecoveryExpectedCount = strategy === 'AI_GENERATED'
+        ? effectiveGenerationTarget
+        : extracted.expectedQuestionCount ?? verification?.totalQuestions ?? result.questions.length
+    if (
+        importDecision.decision === 'FAILED_WITH_REASON'
+        && shouldAcceptPartialImportRecovery({
+            verification,
+            expectedCount: partialRecoveryExpectedCount,
+        })
+    ) {
+        const validQuestions = verification?.validQuestions ?? result.questions.length
+        importDecision = {
+            decision: 'REVIEW_REQUIRED',
+            message: `Recovered ${validQuestions} usable question(s) from an expected ${partialRecoveryExpectedCount}. The draft has been kept for admin review instead of failing the entire import.`,
+            errorCount: countStructuralVerificationErrors(verification),
+            warningCount: verification?.issueSummary?.warnings ?? 0,
+        }
+        importDiagnostics.warning = appendDiagnosticWarning(
+            importDiagnostics.warning,
+            result.message,
+        )
+    }
+
     if (importDecision.decision === 'FAILED_WITH_REASON') {
         return serviceError(
             strategy === 'AI_GENERATED' ? 'GENERATION_FAILED' : 'PARSE_ERROR',
@@ -2453,15 +2521,18 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         importDiagnostics.reviewRequired = true
         importDiagnostics.reviewIssueCount = reviewIssueCount
         importDiagnostics.reportParserIssue = true
-        importDiagnostics.warning = importDiagnostics.warning
-            ? `${importDiagnostics.warning} Verification also found ${reviewIssueCount} issue(s), so the draft needs admin review.`
-            : importDecision.message
+        importDiagnostics.warning = appendDiagnosticWarning(
+            importDiagnostics.warning,
+            importDecision.message
                 ? `${importDecision.message} The draft has been flagged for admin review before publishing.`
-                : `Verification found ${reviewIssueCount} issue(s), so the draft has been flagged for admin review before publishing.`
+                : `Verification found ${reviewIssueCount} issue(s), so the draft has been flagged for admin review before publishing.`,
+        )
     }
     importDiagnostics.decision = importDecision.decision
     importDiagnostics.failureReason = importDecision.message
     importDiagnostics.referenceEnrichmentDeferred = shouldDeferReferenceEnrichment
+    importDiagnostics.extractedQuestions = extracted.questions.length
+    importDiagnostics.failedCount = result.failedCount || 0
 
     await reportProgress({
         stage: 'VERIFYING',
@@ -2506,6 +2577,8 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     const testDuration = metadataEnrichment.suggestedDurationMinutes
         ?? Math.max(15, finalQuestions.length * 2)
     importDiagnostics.metadataAiUsed = metadataEnrichment.aiUsed
+    importDiagnostics.questionsGenerated = finalQuestions.length
+    importDiagnostics.reviewStatus = needsAdminReview ? 'NEEDS_REVIEW' : null
 
     if (metadataEnrichment.warning) {
         importDiagnostics.warning = importDiagnostics.warning

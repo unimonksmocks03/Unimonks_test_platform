@@ -308,7 +308,6 @@ function verifyStructuralIssues(
     for (let index = 0; index < validatedQuestions.length; index += 1) {
         const questionNumber = index + 1
         const rawQuestion = questions[index]
-        const rawStem = normalizeWhitespace(rawQuestion?.stem)
         const rawStemKey = buildDedupStemKey(rawQuestion)
         const duplicateOf = rawStemKey ? seenExactStems.get(rawStemKey) : undefined
         if (duplicateOf && !hasMeaningfullyDifferentQuestionPayload(rawQuestion, duplicateOf.question)) {
@@ -432,7 +431,7 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
         const hasSharedContext = Boolean(sharedContext)
         const hasVisualEvidence = hasUsableVisualEvidencePayload([
             question.sharedContext,
-            question.sharedContextEvidence,
+            sharedContextEvidence,
             question.sourceSnippet,
         ])
 
@@ -445,11 +444,10 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                     questionNumber,
                     'Question references shared source material but has no shared context attached',
                     'EVIDENCE',
-                    'ERROR',
+                    'WARNING',
                     'MISSING_SHARED_CONTEXT',
                 ),
             )
-            invalidQuestionNumbers.add(questionNumber)
         }
 
         if (question.extractionMode && question.extractionMode !== 'GENERATE_FROM_SOURCE' && !sourceSnippet) {
@@ -458,11 +456,10 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                     questionNumber,
                     'Question has no source snippet evidence attached',
                     'EVIDENCE',
-                    'ERROR',
+                    'WARNING',
                     'MISSING_SOURCE_SNIPPET',
                 ),
             )
-            invalidQuestionNumbers.add(questionNumber)
         }
 
         if (question.extractionMode === 'MULTIMODAL_EXTRACT' && !Number.isInteger(question.sourcePage)) {
@@ -471,11 +468,10 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                     questionNumber,
                     'Multimodal question is missing source page evidence',
                     'EVIDENCE',
-                    'ERROR',
+                    'WARNING',
                     'MISSING_SOURCE_PAGE',
                 ),
             )
-            invalidQuestionNumbers.add(questionNumber)
         }
 
         if (question.extractionMode && question.extractionMode !== 'GENERATE_FROM_SOURCE' && !question.answerSource) {
@@ -484,11 +480,10 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                     questionNumber,
                     'Question has no answer provenance attached',
                     'EVIDENCE',
-                    'ERROR',
+                    'WARNING',
                     'MISSING_ANSWER_SOURCE',
                 ),
             )
-            invalidQuestionNumbers.add(questionNumber)
         }
 
         if (normalizeSharedContextText(question.sharedContext) && !normalizeWhitespace(question.sharedContextEvidence)) {
@@ -497,11 +492,10 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                     questionNumber,
                     'Question has shared context but no shared-context evidence attached',
                     'EVIDENCE',
-                    'ERROR',
+                    'WARNING',
                     'MISSING_SHARED_CONTEXT_EVIDENCE',
                 ),
             )
-            invalidQuestionNumbers.add(questionNumber)
         }
 
         if (typeof question.confidence === 'number' && question.confidence < LOW_CONFIDENCE_THRESHOLD) {
@@ -514,7 +508,6 @@ function verifyEvidenceIssues(validatedQuestions: Array<GeneratedQuestion | null
                     'LOW_CONFIDENCE',
                 ),
             )
-            invalidQuestionNumbers.add(questionNumber)
         }
 
         if (referenceKind !== 'NONE' && !referenceMode) {
@@ -745,7 +738,11 @@ export function resolveImportVerificationOutcome(
     }
 
     const issueSummary = verification.issueSummary ?? buildIssueSummary(verification.issues)
-    if (issueSummary.errors > 0) {
+    const structuralErrorCount = verification.issues.filter((issue) => (
+        issue.severity === 'ERROR' && issue.category === 'STRUCTURAL'
+    )).length
+
+    if (issueSummary.errors > 0 && structuralErrorCount > 0) {
         return {
             decision: 'FAILED_WITH_REASON',
             message: buildVerificationOutcomeMessage(verification.issues, 'ERROR'),
@@ -754,10 +751,13 @@ export function resolveImportVerificationOutcome(
         }
     }
 
-    if (issueSummary.warnings > 0 || verification.reviewRecommended) {
+    if (issueSummary.errors > 0 || issueSummary.warnings > 0 || verification.reviewRecommended) {
         return {
             decision: 'REVIEW_REQUIRED',
-            message: buildVerificationOutcomeMessage(verification.issues, 'WARNING'),
+            message: buildVerificationOutcomeMessage(
+                verification.issues,
+                issueSummary.errors > 0 ? 'ERROR' : 'WARNING',
+            ),
             errorCount: issueSummary.errors,
             warningCount: issueSummary.warnings,
         }
