@@ -1737,24 +1737,65 @@ export async function upsertAdminQuestionReferenceImage(
 
     await prisma.$transaction(async (tx) => {
         if (existingVisualReference?.id) {
-            await tx.questionReference.update({
-                where: { id: existingVisualReference.id },
-                data: {
-                    kind: nextKind,
-                    mode: nextMode,
-                    title: nextTitle,
-                    textContent:
-                        sanitizeReferenceText(existingVisualReference.textContent)
-                        ?? sanitizeReferenceText(existingQuestion.sharedContext)
-                        ?? null,
-                    assetUrl: uploadedSnapshot.assetUrl,
-                    bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
-                    evidence: mergeReferenceEvidence(existingVisualReference.evidence as Prisma.JsonValue | null, {
-                        source: 'MANUAL_UPLOAD',
-                        uploadedAt: new Date().toISOString(),
-                    }),
-                },
+            const linkCount = await tx.questionReferenceLink.count({
+                where: { referenceId: existingVisualReference.id },
             })
+
+            if (linkCount > 1) {
+                await tx.questionReferenceLink.deleteMany({
+                    where: { questionId, referenceId: existingVisualReference.id },
+                })
+
+                const forkedReference = await tx.questionReference.create({
+                    data: {
+                        testId,
+                        kind: nextKind,
+                        mode: nextMode,
+                        title: nextTitle,
+                        textContent:
+                            sanitizeReferenceText(existingVisualReference.textContent)
+                            ?? sanitizeReferenceText(existingQuestion.sharedContext)
+                            ?? null,
+                        assetUrl: uploadedSnapshot.assetUrl,
+                        sourcePage: existingVisualReference.sourcePage,
+                        bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
+                        confidence: existingVisualReference.confidence,
+                        evidence: {
+                            source: 'MANUAL_UPLOAD',
+                            forkedFrom: existingVisualReference.id,
+                            uploadedAt: new Date().toISOString(),
+                        } satisfies Prisma.InputJsonValue,
+                    },
+                    select: { id: true },
+                })
+
+                await tx.questionReferenceLink.create({
+                    data: {
+                        questionId,
+                        referenceId: forkedReference.id,
+                        order: 1,
+                    },
+                })
+            } else {
+                await tx.questionReference.update({
+                    where: { id: existingVisualReference.id },
+                    data: {
+                        kind: nextKind,
+                        mode: nextMode,
+                        title: nextTitle,
+                        textContent:
+                            sanitizeReferenceText(existingVisualReference.textContent)
+                            ?? sanitizeReferenceText(existingQuestion.sharedContext)
+                            ?? null,
+                        assetUrl: uploadedSnapshot.assetUrl,
+                        bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
+                        evidence: mergeReferenceEvidence(existingVisualReference.evidence as Prisma.JsonValue | null, {
+                            source: 'MANUAL_UPLOAD',
+                            uploadedAt: new Date().toISOString(),
+                        }),
+                    },
+                })
+            }
         } else {
             const createdReference = await tx.questionReference.create({
                 data: {
@@ -1864,7 +1905,45 @@ export async function removeAdminQuestionReferenceImage(
     })
 
     await prisma.$transaction(async (tx) => {
-        if (fallbackTextContent) {
+        const linkCount = await tx.questionReferenceLink.count({
+            where: { referenceId: existingVisualReference.id },
+        })
+        const isShared = linkCount > 1
+
+        if (isShared) {
+            await tx.questionReferenceLink.deleteMany({
+                where: { questionId, referenceId: existingVisualReference.id },
+            })
+
+            if (fallbackTextContent) {
+                const textOnlyReference = await tx.questionReference.create({
+                    data: {
+                        testId,
+                        kind: existingVisualReference.kind,
+                        mode: nextMode,
+                        title: sanitizeReferenceTitle(existingVisualReference.title),
+                        textContent: fallbackTextContent,
+                        assetUrl: null,
+                        sourcePage: existingVisualReference.sourcePage,
+                        confidence: existingVisualReference.confidence,
+                        evidence: {
+                            source: 'MANUAL_REMOVE',
+                            forkedFrom: existingVisualReference.id,
+                            removedAt: new Date().toISOString(),
+                        } satisfies Prisma.InputJsonValue,
+                    },
+                    select: { id: true },
+                })
+
+                await tx.questionReferenceLink.create({
+                    data: {
+                        questionId,
+                        referenceId: textOnlyReference.id,
+                        order: 1,
+                    },
+                })
+            }
+        } else if (fallbackTextContent) {
             await tx.questionReference.update({
                 where: { id: existingVisualReference.id },
                 data: {
@@ -1876,10 +1955,7 @@ export async function removeAdminQuestionReferenceImage(
             })
         } else {
             await tx.questionReferenceLink.deleteMany({
-                where: {
-                    questionId,
-                    referenceId: existingVisualReference.id,
-                },
+                where: { questionId, referenceId: existingVisualReference.id },
             })
             await tx.questionReference.delete({
                 where: { id: existingVisualReference.id },

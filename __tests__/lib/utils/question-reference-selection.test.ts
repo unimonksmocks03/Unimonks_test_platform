@@ -71,7 +71,7 @@ test('getPreferredVisualReference prefers an explicit visual placeholder over a 
     expect(preferred?.id).toBe('reference-diagram')
 })
 
-test('mergeQuestionReferenceState keeps new server references on the refreshed question', () => {
+test('mergeQuestionReferenceState updates only the target question', () => {
     const currentSharedReference = createReference({
         id: 'reference-placeholder',
         order: 1,
@@ -116,5 +116,5 @@ test('mergeQuestionReferenceState keeps new server references on the refreshed q
     })
 
     expect(merged[0]?.references).toEqual([refreshedSharedReference, newUploadedReference])
-    expect(merged[1]?.references).toEqual([refreshedSharedReference])
+    expect(merged[1]?.references).toEqual([currentSharedReference])
 })

@@ -86,28 +86,15 @@ export function mergeQuestionReferenceState<
     currentQuestions: TQuestion[],
     nextQuestion: TQuestion,
 ): TQuestion[] {
-    const updatedReferences = new Map(
-        (nextQuestion.references ?? [])
-            .filter((reference): reference is TReference & { id: string } => Boolean(reference.id))
-            .map((reference) => [reference.id, reference] as const),
-    )
-
     return currentQuestions.map((question) => {
-        const mergedReferences = (question.references ?? []).map((reference) =>
-            reference.id ? updatedReferences.get(reference.id) ?? reference : reference,
-        )
-
         if (question.dbId === nextQuestion.dbId) {
             return {
                 ...question,
                 ...nextQuestion,
-                references: nextQuestion.references ?? mergedReferences,
+                references: nextQuestion.references ?? question.references,
             }
         }
 
-        return {
-            ...question,
-            references: mergedReferences,
-        }
+        return question
     })
 }

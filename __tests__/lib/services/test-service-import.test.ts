@@ -26,6 +26,7 @@ const prismaMock = {
         deleteMany: vi.fn(),
     },
     questionReferenceLink: {
+        count: vi.fn(),
         create: vi.fn(),
         createMany: vi.fn(),
         deleteMany: vi.fn(),
@@ -222,6 +223,7 @@ beforeEach(() => {
     prismaMock.questionReference.update.mockResolvedValue({ id: 'reference-1' })
     prismaMock.questionReference.delete.mockResolvedValue({ id: 'reference-1' })
     prismaMock.questionReference.deleteMany.mockResolvedValue({ count: 0 })
+    prismaMock.questionReferenceLink.count.mockResolvedValue(1)
     prismaMock.questionReferenceLink.create.mockResolvedValue({ id: 'reference-link-1' })
     prismaMock.questionReferenceLink.createMany.mockResolvedValue({ count: 1 })
     prismaMock.questionReferenceLink.deleteMany.mockResolvedValue({ count: 1 })
