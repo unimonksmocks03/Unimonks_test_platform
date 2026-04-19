@@ -286,7 +286,7 @@ function AdminTestBuilderForm() {
     const [description, setDescription] = useState("");
     const [testDuration, setTestDuration] = useState("60");
     const [savedDuration, setSavedDuration] = useState("60");
-    const [savedTitle, setSavedTitle] = useState("");
+
     const [testStatus, setTestStatus] = useState<"DRAFT" | "PUBLISHED" | "ARCHIVED">("DRAFT");
     const [savedAudience, setSavedAudience] = useState<BatchAudience>("UNASSIGNED");
 
@@ -328,7 +328,6 @@ function AdminTestBuilderForm() {
         const test = testResponse.data.test;
         setTestId(test.id);
         setTestName(test.title);
-        setSavedTitle(test.title);
         setDescription(test.description || "");
         const durationValue = String(test.durationMinutes);
         setTestDuration(durationValue);
@@ -377,7 +376,6 @@ function AdminTestBuilderForm() {
     const isPublishedTest = testStatus === "PUBLISHED";
     const normalizedDuration = String(Number.parseInt(testDuration, 10) || 60);
     const hasPublishedDurationChange = isPublishedTest && normalizedDuration !== savedDuration;
-    const hasPublishedTitleChange = isPublishedTest && testName.trim() !== savedTitle.trim();
 
     const updateActiveQuestion = (updates: Partial<Question>) => {
         setQuestions((currentQuestions) =>
@@ -598,18 +596,13 @@ function AdminTestBuilderForm() {
 
                 currentTestId = createResponse.data.test.id;
                 setTestId(currentTestId);
-                setSavedTitle(testName.trim());
                 setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             } else {
-                const updatePayload = isPublishedTest
-                    ? {
-                        title: testName.trim(),
-                    }
-                    : {
-                        title: testName.trim(),
-                        description: description.trim() || null,
-                        durationMinutes: Number.parseInt(testDuration, 10) || 60,
-                    };
+                const updatePayload = {
+                    title: testName.trim(),
+                    description: description.trim() || null,
+                    durationMinutes: Number.parseInt(testDuration, 10) || 60,
+                };
 
                 const updateResponse = await apiClient.patch(`/api/admin/tests/${currentTestId}`, updatePayload);
 
@@ -617,7 +610,6 @@ function AdminTestBuilderForm() {
                     throw new Error(updateResponse.message);
                 }
 
-                setSavedTitle(testName.trim());
                 setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             }
 
@@ -673,8 +665,10 @@ function AdminTestBuilderForm() {
 
             if (showSuccessToast) {
                 if (isPublishedTest) {
-                    toast.success("Title updated", {
-                        description: "The published test name has been updated without changing question content.",
+                    toast.success("Changes saved", {
+                        description: savedCount > 0
+                            ? `${savedCount} question(s) and test details updated on the live test.`
+                            : "Test details updated on the live test.",
                     });
                 } else if (failedCount > 0) {
                     toast.warning("Draft saved partially", {
@@ -818,14 +812,13 @@ function AdminTestBuilderForm() {
             }
 
             setTestStatus("PUBLISHED");
-            setIsContentLocked(true);
+            setIsContentLocked(false);
             setCanEditTitle(true);
             setCanEditDuration(true);
             setCanManageAssignments(true);
-            setSavedTitle(testName.trim());
             setSavedDuration(String(Number.parseInt(testDuration, 10) || 60));
             toast.success("Test published", {
-                description: "The test is now immediately available. Question content stays locked, while title, duration, and batch assignment remain adjustable for future attempts.",
+                description: "The test is now live. You can still edit questions, answers, title, duration, and batch assignments at any time.",
             });
             router.replace(`/admin/tests/create?edit=${savedId}`);
         } finally {
@@ -1508,11 +1501,7 @@ function AdminTestBuilderForm() {
                         <div className="flex flex-col gap-3 border-t bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
                             <Button
                                 onClick={() => void saveDraft()}
-                                disabled={
-                                    isBusy ||
-                                    (!isPublishedTest && isContentLocked) ||
-                                    (isPublishedTest && !hasPublishedTitleChange)
-                                }
+                                disabled={isBusy || isContentLocked}
                                 variant="outline"
                                 className="h-12 w-full rounded-xl border-slate-200 text-base font-bold shadow-sm disabled:opacity-60"
                             >
@@ -1520,7 +1509,7 @@ function AdminTestBuilderForm() {
                                 {isSavingDraft
                                     ? "Saving..."
                                     : isPublishedTest
-                                        ? "Save Title"
+                                        ? "Save Changes"
                                         : "Save Draft"}
                             </Button>
                             <Button

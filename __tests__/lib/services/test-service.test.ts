@@ -17,9 +17,7 @@ test('validateDraftEditableStatus allows draft edits only', async () => {
     } = await servicePromise
 
     expect(validateDraftEditableStatus(TestStatus.DRAFT)).toBeNull()
-
-    const publishedResult = validateDraftEditableStatus(TestStatus.PUBLISHED)
-    expect(publishedResult?.code).toBe('NOT_EDITABLE')
+    expect(validateDraftEditableStatus(TestStatus.PUBLISHED)).toBeNull()
 
     const archivedResult = validateDraftEditableStatus(TestStatus.ARCHIVED)
     expect(archivedResult?.code).toBe('NOT_EDITABLE')

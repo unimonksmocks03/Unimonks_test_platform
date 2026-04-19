@@ -948,12 +948,12 @@ test('upsertAdminQuestionReferenceImage prefers the linked visual slot over a sh
     ])
 })
 
-test('upsertAdminQuestionReferenceImage rejects updates for published tests', async () => {
+test('upsertAdminQuestionReferenceImage rejects updates for archived tests', async () => {
     const { upsertAdminQuestionReferenceImage } = await servicePromise
 
     prismaMock.test.findUnique.mockResolvedValueOnce({
         id: 'test-1',
-        status: 'PUBLISHED',
+        status: 'ARCHIVED',
     })
 
     const result = await upsertAdminQuestionReferenceImage(

@@ -1106,15 +1106,13 @@ function buildAdminTestListItem(test: {
 }
 
 function ensureDraftEditable(status: TestStatus) {
-    if (status === 'DRAFT') {
+    if (status === 'DRAFT' || status === 'PUBLISHED') {
         return null
     }
 
     return serviceError(
         'NOT_EDITABLE',
-        status === 'PUBLISHED'
-            ? 'Published tests are immutable'
-            : 'Archived tests are read-only',
+        'Archived tests are read-only',
     )
 }
 
@@ -1339,7 +1337,7 @@ export async function getAdminTest(testId: string) {
     return {
         test: {
             ...buildAdminTestListItem(test),
-            isEditable: test.status === 'DRAFT',
+            isEditable: test.status !== 'ARCHIVED',
             canEditTitle: test.status === 'DRAFT' || test.status === 'PUBLISHED',
             canEditDuration: test.status === 'DRAFT' || test.status === 'PUBLISHED',
             canManageAssignments: test.status !== 'ARCHIVED',
@@ -1424,7 +1422,7 @@ export async function updateAdminTest(adminId: string, testId: string, data: Upd
                     ? 'INVALID_TRANSITION'
                     : 'NOT_EDITABLE',
                 existing.status === 'PUBLISHED'
-                    ? 'Archiving is the only allowed change for a published test'
+                    ? 'Cannot modify other fields while archiving — archive first, then edit'
                     : 'Only published tests can be archived',
             )
         }
@@ -2696,8 +2694,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     const testTitle = input.title?.trim()
         || metadataEnrichment.suggestedTitle
         || `AI Generated Test - ${baseTitle || new Date().toLocaleDateString()}`
-    const testDuration = metadataEnrichment.suggestedDurationMinutes
-        ?? Math.max(15, finalQuestions.length * 2)
+    const testDuration = 60
     importDiagnostics.metadataAiUsed = metadataEnrichment.aiUsed
     importDiagnostics.questionsGenerated = finalQuestions.length
     importDiagnostics.reviewStatus = needsAdminReview ? 'NEEDS_REVIEW' : null
