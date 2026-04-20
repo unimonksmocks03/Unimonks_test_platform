@@ -386,8 +386,9 @@ function AdminTestBuilderForm() {
     };
 
     const handleOptionTextChange = (optionIndex: number, text: string) => {
-        const nextOptions = [...activeQuestion.options];
-        nextOptions[optionIndex].text = text;
+        const nextOptions = activeQuestion.options.map((option, index) =>
+            index === optionIndex ? { ...option, text } : option
+        );
         updateActiveQuestion({ options: nextOptions });
     };
 
@@ -1341,9 +1342,14 @@ function AdminTestBuilderForm() {
                                         <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[9px] text-rose-500">Required</span>
                                     )}
                                 </Label>
+                                {!activeQuestion.options.some((option) => option.isCorrect) && (
+                                    <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+                                        No correct answer is set for this question. Students will be marked wrong regardless of their choice. Click an option below to fix this.
+                                    </div>
+                                )}
                                 <RadioGroup
                                     disabled={isContentLocked || isBusy}
-                                    value={activeQuestion.options.find((option) => option.isCorrect)?.id || "A"}
+                                    value={activeQuestion.options.find((option) => option.isCorrect)?.id ?? ""}
                                     onValueChange={handleCorrectAnswerChange}
                                     className="grid grid-cols-2 gap-4"
                                 >

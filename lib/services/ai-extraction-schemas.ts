@@ -49,7 +49,10 @@ export const McqOptionSchema = z.object({
 
 export const McqQuestionSchema = z.object({
     stem: z.string().trim().min(3),
-    options: z.array(McqOptionSchema).min(2).max(6),
+    options: z.array(McqOptionSchema).min(2).max(6).refine(
+        (opts) => opts.filter((o) => o.isCorrect).length === 1,
+        { message: 'Exactly 1 option must be marked as correct' },
+    ),
     explanation: z.string().trim().max(5000).optional().default(''),
     difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']).optional().default('MEDIUM'),
     topic: z.string().trim().min(1).max(120).optional().default('General aptitude'),

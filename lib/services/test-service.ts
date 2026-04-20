@@ -2689,7 +2689,24 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
             questionsWithSharedContext,
             uploadValidation.sanitizedFileName,
         )
-    const finalQuestions = annotateQuestionsWithReferencePolicy(metadataEnrichment.questions)
+    const allAnnotatedQuestions = annotateQuestionsWithReferencePolicy(metadataEnrichment.questions)
+    const finalQuestions = allAnnotatedQuestions.filter((question) => {
+        const correctCount = question.options.filter((option) => option.isCorrect).length
+        return correctCount === 1
+    })
+    if (finalQuestions.length < allAnnotatedQuestions.length) {
+        const dropped = allAnnotatedQuestions.length - finalQuestions.length
+        importDiagnostics.warning = appendDiagnosticWarning(
+            importDiagnostics.warning,
+            `Dropped ${dropped} question(s) with missing or ambiguous correct answers.`,
+        )
+    }
+    if (finalQuestions.length === 0) {
+        return serviceError(
+            strategy === 'AI_GENERATED' ? 'GENERATION_FAILED' : 'PARSE_ERROR',
+            'No questions survived answer-key validation. Every extracted question was missing a correct answer.',
+        )
+    }
     const finalDescription = metadataEnrichment.description
     const testTitle = input.title?.trim()
         || metadataEnrichment.suggestedTitle
