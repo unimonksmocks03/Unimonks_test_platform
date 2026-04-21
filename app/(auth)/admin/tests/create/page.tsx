@@ -31,6 +31,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import type { QuestionReferencePayload } from "@/lib/types/question-reference";
 import {
+    buildAdminQuestionCreatePayload,
+    buildAdminQuestionUpdatePayload,
+} from "@/lib/utils/admin-question-payload";
+import {
     buildPublishedTestUpdatePayload,
     hasPublishedBuilderChanges,
 } from "@/lib/utils/admin-test-publish";
@@ -685,22 +689,10 @@ function AdminTestBuilderForm() {
                 const question = updatedQuestions[index];
                 if (question.saved || !question.stem.trim()) continue;
 
-                const payload = {
-                    stem: question.stem.trim(),
-                    sharedContext: question.sharedContext.trim() || undefined,
-                    options: question.options.map((option) => ({
-                        ...option,
-                        text: option.text.trim(),
-                    })),
-                    difficulty: question.difficulty,
-                    topic: question.topic.trim() || undefined,
-                    explanation: question.explanation.trim() || undefined,
-                };
-
                 if (question.dbId) {
                     const updateQuestionResponse = await apiClient.patch<{ question: { id: string } }>(
                         `/api/admin/tests/${currentTestId}/questions/${question.dbId}`,
-                        payload
+                        buildAdminQuestionUpdatePayload(question)
                     );
 
                     if (updateQuestionResponse.ok) {
@@ -712,7 +704,7 @@ function AdminTestBuilderForm() {
                 } else {
                     const createQuestionResponse = await apiClient.post<{ question: { id: string } }>(
                         `/api/admin/tests/${currentTestId}/questions`,
-                        payload
+                        buildAdminQuestionCreatePayload(question)
                     );
 
                     if (createQuestionResponse.ok && createQuestionResponse.data.question) {
