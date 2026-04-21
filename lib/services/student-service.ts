@@ -2,11 +2,14 @@ import { SessionStatus } from '@prisma/client'
 
 import { MAX_PAID_TOTAL_ATTEMPTS } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
+import { applySessionQuestionOrder } from '@/lib/utils/session-question-order'
 import {
-    mapQuestionReferences,
+    buildSessionTestSnapshot,
+    parseSessionTestSnapshot,
+} from '@/lib/utils/test-session-snapshot'
+import {
     QUESTION_REFERENCE_LINK_SELECT,
 } from '@/lib/utils/question-references'
-import { sanitizeReferenceText } from '@/lib/utils/reference-sanitizer'
 
 /**
  * Student-scoped service.
@@ -289,11 +292,14 @@ export async function getResult(studentId: string, sessionId: string) {
             submittedAt: true,
             startedAt: true,
             tabSwitchCount: true,
+            testSnapshot: true,
             test: {
                 select: {
                     id: true,
                     title: true,
+                    description: true,
                     durationMinutes: true,
+                    settings: true,
                     questions: {
                         orderBy: { order: 'asc' },
                         select: {
@@ -343,7 +349,14 @@ export async function getResult(studentId: string, sessionId: string) {
     if (!session) return { error: true, code: 'NOT_FOUND', message: 'Test session not found' }
     if (session.studentId !== studentId) return { error: true, code: 'FORBIDDEN', message: 'Access denied' }
 
+    const testSnapshot = parseSessionTestSnapshot(session.testSnapshot)
+        ?? buildSessionTestSnapshot(session.test)
     const attemptSummary = buildAttemptSummary(session.test.sessions)
+    const orderedQuestions = applySessionQuestionOrder(
+        testSnapshot.questions,
+        testSnapshot.settings ?? session.test.settings,
+        session.id,
+    )
 
     return {
         session: {
@@ -360,13 +373,9 @@ export async function getResult(studentId: string, sessionId: string) {
         },
         test: {
             id: session.test.id,
-            title: session.test.title,
-            durationMinutes: session.test.durationMinutes,
-            questions: session.test.questions.map((question) => ({
-                ...question,
-                sharedContext: sanitizeReferenceText(question.sharedContext),
-                references: mapQuestionReferences(question.referenceLinks),
-            })),
+            title: testSnapshot.title,
+            durationMinutes: testSnapshot.durationMinutes,
+            questions: orderedQuestions,
         },
         attemptSummary,
         feedback: session.aiFeedback

@@ -3,6 +3,11 @@ import { Prisma } from '@prisma/client'
 import { MAX_PAID_TOTAL_ATTEMPTS } from '@/lib/config/platform-policy'
 import { enqueueForceSubmit } from '@/lib/queue/qstash'
 import {
+    buildSessionTestSnapshot,
+    parseSessionTestSnapshot,
+} from '@/lib/utils/test-session-snapshot'
+import { applySessionQuestionOrder } from '@/lib/utils/session-question-order'
+import {
     mapQuestionReferences,
     QUESTION_REFERENCE_LINK_SELECT,
 } from '@/lib/utils/question-references'
@@ -37,6 +42,8 @@ export async function startTestSession(studentId: string, testId: string) {
             where: { id: testId },
             select: {
                 id: true,
+                title: true,
+                description: true,
                 status: true,
                 durationMinutes: true,
                 settings: true,
@@ -85,6 +92,7 @@ export async function startTestSession(studentId: string, testId: string) {
                 status: true,
                 serverDeadline: true,
                 answers: true,
+                testSnapshot: true,
             },
         })
 
@@ -101,13 +109,19 @@ export async function startTestSession(studentId: string, testId: string) {
                 } as const
             }
 
-            const safeQuestions = stripCorrectAnswers(test.questions, test.settings)
+            const sessionSnapshot = parseSessionTestSnapshot(inProgressSession.testSnapshot)
+                ?? buildSessionTestSnapshot(test)
+            const safeQuestions = stripCorrectAnswers(
+                sessionSnapshot.questions,
+                sessionSnapshot.settings,
+                inProgressSession.id,
+            )
             return {
                 sessionId: inProgressSession.id,
                 attemptNumber: inProgressSession.attemptNumber,
                 questions: safeQuestions,
                 serverDeadline: inProgressSession.serverDeadline.toISOString(),
-                durationMinutes: test.durationMinutes,
+                durationMinutes: sessionSnapshot.durationMinutes,
                 answers: inProgressSession.answers as unknown as AnswerEntry[] || [],
                 resumed: true,
             } as const
@@ -130,6 +144,7 @@ export async function startTestSession(studentId: string, testId: string) {
         const now = new Date()
         const deadline = new Date(now.getTime() + test.durationMinutes * 60 * 1000)
         const nextAttemptNumber = completedAttempts + 1
+        const testSnapshot = buildSessionTestSnapshot(test)
 
         const session = await tx.testSession.create({
             data: {
@@ -140,19 +155,24 @@ export async function startTestSession(studentId: string, testId: string) {
                 startedAt: now,
                 serverDeadline: deadline,
                 answers: [] as unknown as Prisma.InputJsonValue,
+                testSnapshot: testSnapshot as unknown as Prisma.InputJsonValue,
                 tabSwitchCount: 0,
-                totalMarks: calculateTotalMarks(test.questions.length, test.settings),
+                totalMarks: calculateTotalMarks(testSnapshot.questions.length, testSnapshot.settings),
             },
         })
 
-        const safeQuestions = stripCorrectAnswers(test.questions, test.settings)
+        const safeQuestions = stripCorrectAnswers(
+            testSnapshot.questions,
+            testSnapshot.settings,
+            session.id,
+        )
 
         return {
             sessionId: session.id,
             attemptNumber: nextAttemptNumber,
             questions: safeQuestions,
             serverDeadline: deadline.toISOString(),
-            durationMinutes: test.durationMinutes,
+            durationMinutes: testSnapshot.durationMinutes,
             answers: [],
             resumed: false,
             forceSubmitNotBefore: Math.ceil(deadline.getTime() / 1000) + 1,
@@ -313,8 +333,9 @@ export async function submitTest(
             startedAt: Date
             serverDeadline: Date
             answers: unknown
+            testSnapshot: Prisma.JsonValue | null
         }>>(
-            `SELECT id, "studentId", "testId", status, "startedAt", "serverDeadline", answers
+            `SELECT id, "studentId", "testId", status, "startedAt", "serverDeadline", answers, "testSnapshot"
              FROM "TestSession" WHERE id = $1 FOR UPDATE`,
             sessionId
         )
@@ -331,14 +352,38 @@ export async function submitTest(
             }
         }
 
-        const test = await tx.test.findUnique({
-            where: { id: session.testId },
-            include: {
-                questions: { orderBy: { order: 'asc' } },
-            },
-        })
+        let testSnapshot = parseSessionTestSnapshot(session.testSnapshot)
+        if (!testSnapshot) {
+            const test = await tx.test.findUnique({
+                where: { id: session.testId },
+                select: {
+                    title: true,
+                    description: true,
+                    durationMinutes: true,
+                    settings: true,
+                    questions: {
+                        orderBy: { order: 'asc' },
+                        select: {
+                            id: true,
+                            order: true,
+                            stem: true,
+                            sharedContext: true,
+                            options: true,
+                            difficulty: true,
+                            topic: true,
+                            explanation: true,
+                            referenceLinks: {
+                                orderBy: { order: 'asc' },
+                                select: QUESTION_REFERENCE_LINK_SELECT,
+                            },
+                        },
+                    },
+                },
+            })
 
-        if (!test) return { error: true, code: 'NOT_FOUND', message: 'Test not found' }
+            if (!test) return { error: true, code: 'NOT_FOUND', message: 'Test not found' }
+            testSnapshot = buildSessionTestSnapshot(test)
+        }
 
         const answers = mergeAnswerEntries(
             (session.answers as unknown as AnswerEntry[] | null) || [],
@@ -349,7 +394,7 @@ export async function submitTest(
             score,
             totalMarks,
             percentage,
-        } = calculateQuestionAttemptSummary(test.questions, answers, test.settings)
+        } = calculateQuestionAttemptSummary(testSnapshot.questions, answers, testSnapshot.settings)
         const timeTakenMs = Date.now() - new Date(session.startedAt).getTime()
         const timeTakenSeconds = Math.floor(timeTakenMs / 1000)
 
@@ -428,6 +473,7 @@ export async function getSessionStatus(studentId: string, sessionId: string) {
             serverDeadline: true,
             tabSwitchCount: true,
             answers: true,
+            testSnapshot: true,
             test: { select: { _count: { select: { questions: true } } } },
         },
     })
@@ -441,69 +487,65 @@ export async function getSessionStatus(studentId: string, sessionId: string) {
 
     const answers = (session.answers as unknown as AnswerEntry[] | null) || []
     const answeredCount = answers.filter(a => a.optionId !== null).length
+    const sessionSnapshot = parseSessionTestSnapshot(session.testSnapshot)
 
     return {
         timeRemaining,
         answeredCount,
-        totalQuestions: session.test._count.questions,
+        totalQuestions: sessionSnapshot?.questions.length ?? session.test._count.questions,
         tabSwitchCount: session.tabSwitchCount,
         status: session.status,
     }
 }
 
+type SafeArenaQuestionSource = {
+    id: string
+    order: number
+    stem: string
+    sharedContext: string | null
+    references?: ReturnType<typeof mapQuestionReferences>
+    referenceLinks?: Parameters<typeof mapQuestionReferences>[0]
+    options: unknown
+    difficulty: string
+    topic: string | null
+}
+
 // ── Helper: Strip correct answers from questions ──
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function stripCorrectAnswers(questions: Array<any>, settings: unknown) {
-    // Check if shuffle is enabled
-    const testSettings = settings as { shuffleQuestions?: boolean } | null
-    let processed = questions.map(q => {
-        const opts = q.options as unknown
+function stripCorrectAnswers(
+    questions: SafeArenaQuestionSource[],
+    settings: unknown,
+    sessionSeed?: string,
+) {
+    const sanitized = questions.map((question) => {
+        const opts = question.options as unknown
 
         let safeOptions: Array<{ id: string; text: string }>
 
         if (Array.isArray(opts)) {
-            // New format: [{ id, text, isCorrect }] → strip isCorrect
             safeOptions = (opts as Array<{ id: string; text: string; isCorrect: boolean }>)
-                .map(o => ({ id: o.id, text: o.text }))
+                .map((option) => ({ id: option.id, text: option.text }))
         } else if (typeof opts === 'object' && opts !== null) {
-            // Legacy format: { A: "text", B: "text", correct: "B" } → strip correct
-            const obj = opts as Record<string, string>
+            const optionMap = opts as Record<string, string>
             safeOptions = ['A', 'B', 'C', 'D']
-                .filter(k => k !== 'correct' && obj[k])
-                .map(k => ({ id: k, text: obj[k] }))
+                .filter((key) => key !== 'correct' && optionMap[key])
+                .map((key) => ({ id: key, text: optionMap[key] }))
         } else {
             safeOptions = []
         }
 
         return {
-            id: q.id,
-            order: q.order,
-            stem: q.stem,
-            sharedContext: sanitizeReferenceText(q.sharedContext),
-            references: mapQuestionReferences(q.referenceLinks),
+            id: question.id,
+            order: question.order,
+            stem: question.stem,
+            sharedContext: sanitizeReferenceText(question.sharedContext),
+            references: question.references ?? mapQuestionReferences(question.referenceLinks),
             options: safeOptions,
-            difficulty: q.difficulty,
-            topic: q.topic,
+            difficulty: question.difficulty,
+            topic: question.topic,
         }
     })
 
-    // Shuffle if settings say so
-    if (testSettings?.shuffleQuestions) {
-        processed = shuffleArray(processed)
-        // Re-assign order based on new positions
-        processed = processed.map((q, i) => ({ ...q, order: i + 1 }))
-    }
-
-    return processed
-}
-
-function shuffleArray<T>(arr: T[]): T[] {
-    const shuffled = [...arr]
-    for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
-    }
-    return shuffled
+    return applySessionQuestionOrder(sanitized, settings, sessionSeed)
 }
 
 function mergeAnswerEntries(

@@ -981,8 +981,23 @@ function isStatusOnlyArchiveRequest(existingStatus: TestStatus, data: UpdateTest
     return existingStatus === 'PUBLISHED' && data.status === 'ARCHIVED' && nonStatusKeys.length === 0
 }
 
+function isPublishedMutableMetadataUpdate(existingStatus: TestStatus, data: UpdateTestInput) {
+    if (existingStatus !== 'PUBLISHED') {
+        return false
+    }
+
+    const allowedKeys = new Set(['title', 'description', 'durationMinutes', 'settings', 'status'])
+    const keys = Object.keys(data)
+
+    if (keys.length === 0 || keys.some((key) => !allowedKeys.has(key))) {
+        return false
+    }
+
+    return data.status === undefined || data.status === 'PUBLISHED'
+}
+
 function isPublishedDurationOnlyUpdate(existingStatus: TestStatus, data: UpdateTestInput) {
-    if (existingStatus !== 'PUBLISHED' || data.durationMinutes === undefined) {
+    if (!isPublishedMutableMetadataUpdate(existingStatus, data) || data.durationMinutes === undefined) {
         return false
     }
 
@@ -997,18 +1012,18 @@ function isPublishedDurationOnlyUpdate(existingStatus: TestStatus, data: UpdateT
 }
 
 function isPublishedTitleOnlyUpdate(existingStatus: TestStatus, data: UpdateTestInput) {
-    if (existingStatus !== 'PUBLISHED' || data.title === undefined) {
+    if (!isPublishedMutableMetadataUpdate(existingStatus, data) || data.title === undefined) {
         return false
     }
 
-    const allowedKeys = new Set(['title'])
+    const allowedKeys = new Set(['title', 'status'])
     const keys = Object.keys(data)
 
     if (keys.some((key) => !allowedKeys.has(key))) {
         return false
     }
 
-    return true
+    return data.status === undefined || data.status === 'PUBLISHED'
 }
 
 export function validatePublishedDurationRepublish(status: TestStatus, data: UpdateTestInput) {
@@ -1017,6 +1032,10 @@ export function validatePublishedDurationRepublish(status: TestStatus, data: Upd
 
 export function validatePublishedTitleUpdate(status: TestStatus, data: UpdateTestInput) {
     return isPublishedTitleOnlyUpdate(status, data)
+}
+
+export function validatePublishedMetadataUpdate(status: TestStatus, data: UpdateTestInput) {
+    return isPublishedMutableMetadataUpdate(status, data)
 }
 
 function mergeSettings(
@@ -1394,9 +1413,7 @@ export async function updateAdminTest(adminId: string, testId: string, data: Upd
         data.description !== undefined ||
         data.durationMinutes !== undefined ||
         data.settings !== undefined
-    const publishedDurationOnlyUpdate = isPublishedDurationOnlyUpdate(existing.status, data)
-    const publishedTitleOnlyUpdate = isPublishedTitleOnlyUpdate(existing.status, data)
-    const publishedAllowedMetadataUpdate = publishedDurationOnlyUpdate || publishedTitleOnlyUpdate
+    const publishedAllowedMetadataUpdate = isPublishedMutableMetadataUpdate(existing.status, data)
 
     if (metadataUpdateRequested && !publishedAllowedMetadataUpdate) {
         const editableError = ensureDraftEditable(existing.status)

@@ -35,7 +35,7 @@ test('validateAssignmentEditableStatus allows published batch changes but keeps 
     expect(archivedResult?.code).toBe('NOT_EDITABLE')
 })
 
-test('validatePublishedDurationRepublish allows only duration updates for published tests', async () => {
+test('validatePublishedDurationRepublish still allows duration-only republish updates', async () => {
     const {
         validatePublishedDurationRepublish,
     } = await servicePromise
@@ -59,13 +59,18 @@ test('validatePublishedDurationRepublish allows only duration updates for publis
     })).toBe(false)
 })
 
-test('validatePublishedTitleUpdate allows only title updates for published tests', async () => {
+test('validatePublishedTitleUpdate still allows title-only updates for published tests', async () => {
     const {
         validatePublishedTitleUpdate,
     } = await servicePromise
 
     expect(validatePublishedTitleUpdate(TestStatus.PUBLISHED, {
         title: 'Updated published title',
+    })).toBe(true)
+
+    expect(validatePublishedTitleUpdate(TestStatus.PUBLISHED, {
+        title: 'Updated published title',
+        status: TestStatus.PUBLISHED,
     })).toBe(true)
 
     expect(validatePublishedTitleUpdate(TestStatus.PUBLISHED, {
@@ -80,6 +85,36 @@ test('validatePublishedTitleUpdate allows only title updates for published tests
 
     expect(validatePublishedTitleUpdate(TestStatus.DRAFT, {
         title: 'Draft title',
+    })).toBe(false)
+})
+
+test('validatePublishedMetadataUpdate allows mixed live metadata updates for published tests', async () => {
+    const {
+        validatePublishedMetadataUpdate,
+    } = await servicePromise
+
+    expect(validatePublishedMetadataUpdate(TestStatus.PUBLISHED, {
+        title: 'Updated published title',
+        description: 'Updated description',
+        durationMinutes: 90,
+    })).toBe(true)
+
+    expect(validatePublishedMetadataUpdate(TestStatus.PUBLISHED, {
+        description: null,
+        settings: {
+            shuffleQuestions: true,
+        },
+        status: TestStatus.PUBLISHED,
+    })).toBe(true)
+
+    expect(validatePublishedMetadataUpdate(TestStatus.PUBLISHED, {
+        title: 'Updated published title',
+        status: TestStatus.ARCHIVED,
+    })).toBe(false)
+
+    expect(validatePublishedMetadataUpdate(TestStatus.DRAFT, {
+        title: 'Draft title',
+        durationMinutes: 90,
     })).toBe(false)
 })
 

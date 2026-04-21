@@ -6,6 +6,12 @@ import {
     STANDARD_BATCH_KIND,
 } from '@/lib/config/platform-policy'
 import { prisma } from '@/lib/prisma'
+import { applySessionQuestionOrder } from '@/lib/utils/session-question-order'
+import {
+    buildSessionTestSnapshot,
+    parseSessionTestSnapshot,
+    type SessionQuestionSnapshot,
+} from '@/lib/utils/test-session-snapshot'
 import {
     calculateQuestionAttemptSummary,
     calculateTotalMarks,
@@ -224,39 +230,6 @@ function readPassingScore(settings: unknown) {
     return resolveTestSettings(settings).passingScore
 }
 
-function shouldShuffleQuestions(settings: unknown) {
-    return resolveTestSettings(settings).shuffleQuestions
-}
-
-function createSeededRandom(seed: string) {
-    let hash = 2166136261
-
-    for (let index = 0; index < seed.length; index += 1) {
-        hash ^= seed.charCodeAt(index)
-        hash = Math.imul(hash, 16777619)
-    }
-
-    return () => {
-        hash += 0x6d2b79f5
-        let value = hash
-        value = Math.imul(value ^ (value >>> 15), value | 1)
-        value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
-        return ((value ^ (value >>> 14)) >>> 0) / 4294967296
-    }
-}
-
-function shuffleArray<T>(input: T[], seed: string) {
-    const shuffled = [...input]
-    const random = createSeededRandom(seed)
-
-    for (let index = shuffled.length - 1; index > 0; index -= 1) {
-        const swapIndex = Math.floor(random() * (index + 1))
-        ;[shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]
-    }
-
-    return shuffled
-}
-
 function toSafeOptions(rawOptions: unknown): SafeQuestionOption[] {
     if (Array.isArray(rawOptions)) {
         return (rawOptions as Array<{ id: string; text: string }>).map((option) => ({
@@ -279,16 +252,7 @@ function toSafeOptions(rawOptions: unknown): SafeQuestionOption[] {
 }
 
 function stripCorrectAnswers(
-    questions: Array<{
-        id: string
-        order: number
-        stem: string
-        sharedContext: string | null
-        referenceLinks?: Parameters<typeof mapQuestionReferences>[0]
-        options: unknown
-        difficulty: string
-        topic: string | null
-    }>,
+    questions: SessionQuestionSnapshot[],
     settings: unknown,
     sessionSeed?: string,
 ) {
@@ -297,45 +261,21 @@ function stripCorrectAnswers(
         order: question.order,
         stem: question.stem,
         sharedContext: sanitizeReferenceText(question.sharedContext),
-        references: mapQuestionReferences(question.referenceLinks),
+        references: question.references,
         options: toSafeOptions(question.options),
         difficulty: question.difficulty,
         topic: question.topic,
     }))
 
-    if (!shouldShuffleQuestions(settings) || !sessionSeed) {
-        return sanitized
-    }
-
-    return shuffleArray(sanitized, sessionSeed).map((question, index) => ({
-        ...question,
-        order: index + 1,
-    }))
+    return applySessionQuestionOrder(sanitized, settings, sessionSeed)
 }
 
 function orderQuestionReviewForSession(
-    questions: Array<{
-        id: string
-        order: number
-        stem: string
-        sharedContext: string | null
-        referenceLinks?: Parameters<typeof mapQuestionReferences>[0]
-        options: Prisma.JsonValue
-        difficulty: string
-        topic: string | null
-        explanation: string | null
-    }>,
+    questions: SessionQuestionSnapshot[],
     settings: Prisma.JsonValue,
     sessionSeed: string,
 ) {
-    if (!shouldShuffleQuestions(settings)) {
-        return questions
-    }
-
-    return shuffleArray(questions, sessionSeed).map((question, index) => ({
-        ...question,
-        order: index + 1,
-    }))
+    return applySessionQuestionOrder(questions, settings, sessionSeed)
 }
 
 function mergeAnswerEntries(
@@ -437,6 +377,7 @@ function toResultPayload(session: {
     totalMarks: number
     percentage: number | null
     answers: Prisma.JsonValue | null
+    testSnapshot: Prisma.JsonValue | null
     test: {
         id: string
         title: string
@@ -452,9 +393,12 @@ function toResultPayload(session: {
             difficulty: string
             topic: string | null
             explanation: string | null
+            referenceLinks: Parameters<typeof mapQuestionReferences>[0]
         }>
     }
 }): PublicFreeResultPayload {
+    const testSnapshot = parseSessionTestSnapshot(session.testSnapshot)
+        ?? buildSessionTestSnapshot(session.test)
     const answers = ((session.answers as AnswerEntry[] | null) ?? []).reduce<Record<string, AnswerEntry>>(
         (accumulator, answer) => {
             accumulator[answer.questionId] = answer
@@ -464,8 +408,8 @@ function toResultPayload(session: {
     )
 
     const orderedQuestions = orderQuestionReviewForSession(
-        session.test.questions,
-        session.test.settings,
+        testSnapshot.questions,
+        testSnapshot.settings ?? session.test.settings,
         session.id,
     )
 
@@ -478,7 +422,7 @@ function toResultPayload(session: {
             order: question.order,
             stem: question.stem,
             sharedContext: sanitizeReferenceText(question.sharedContext),
-            references: mapQuestionReferences(question.referenceLinks),
+            references: question.references,
             difficulty: question.difficulty,
             topic: question.topic,
             explanation: question.explanation,
@@ -492,7 +436,7 @@ function toResultPayload(session: {
     const correctCount = questionReview.filter((question) => question.isCorrect).length
     const unansweredCount = questionReview.filter((question) => question.selectedOptionId === null).length
     const incorrectCount = questionReview.length - correctCount - unansweredCount
-    const passingScore = readPassingScore(session.test.settings)
+    const passingScore = readPassingScore(testSnapshot.settings ?? session.test.settings)
     const percentage = session.percentage ?? 0
 
     return {
@@ -504,13 +448,13 @@ function toResultPayload(session: {
             percentage,
             submittedAt: session.submittedAt?.toISOString() ?? null,
             startedAt: session.startedAt.toISOString(),
-            durationMinutes: session.test.durationMinutes,
+            durationMinutes: testSnapshot.durationMinutes,
         },
         test: {
             id: session.test.id,
-            title: session.test.title,
-            description: session.test.description,
-            questionCount: session.test.questions.length,
+            title: testSnapshot.title,
+            description: testSnapshot.description,
+            questionCount: testSnapshot.questions.length,
         },
         performance: {
             correctCount,
@@ -670,6 +614,7 @@ export async function startPublicFreeTestSession(
             select: {
                 id: true,
                 title: true,
+                description: true,
                 durationMinutes: true,
                 settings: true,
                 questions: {
@@ -704,6 +649,13 @@ export async function startPublicFreeTestSession(
                     leadId,
                 },
             },
+            select: {
+                id: true,
+                status: true,
+                serverDeadline: true,
+                answers: true,
+                testSnapshot: true,
+            },
         })
 
         if (existingSession) {
@@ -728,14 +680,17 @@ export async function startPublicFreeTestSession(
                     )
                 }
 
+                const sessionSnapshot = parseSessionTestSnapshot(existingSession.testSnapshot)
+                    ?? buildSessionTestSnapshot(test)
+
                 return {
                     sessionId: existingSession.id,
                     testId: test.id,
-                    testTitle: test.title,
-                    questions: stripCorrectAnswers(test.questions, test.settings, existingSession.id),
+                    testTitle: sessionSnapshot.title,
+                    questions: stripCorrectAnswers(sessionSnapshot.questions, sessionSnapshot.settings, existingSession.id),
                     answers: (existingSession.answers as AnswerEntry[] | null) ?? [],
                     serverDeadline: existingSession.serverDeadline.toISOString(),
-                    durationMinutes: test.durationMinutes,
+                    durationMinutes: sessionSnapshot.durationMinutes,
                     resumed: true,
                 }
             }
@@ -752,6 +707,7 @@ export async function startPublicFreeTestSession(
 
         const now = new Date()
         const serverDeadline = new Date(now.getTime() + test.durationMinutes * 60 * 1000)
+        const testSnapshot = buildSessionTestSnapshot(test)
 
         const session = await tx.leadTestSession.create({
             data: {
@@ -761,18 +717,19 @@ export async function startPublicFreeTestSession(
                 startedAt: now,
                 serverDeadline,
                 answers: [] as Prisma.InputJsonValue,
-                totalMarks: calculateTotalMarks(test.questions.length, test.settings),
+                testSnapshot: testSnapshot as unknown as Prisma.InputJsonValue,
+                totalMarks: calculateTotalMarks(testSnapshot.questions.length, testSnapshot.settings),
             },
         })
 
         return {
             sessionId: session.id,
             testId: test.id,
-            testTitle: test.title,
-            questions: stripCorrectAnswers(test.questions, test.settings, session.id),
+            testTitle: testSnapshot.title,
+            questions: stripCorrectAnswers(testSnapshot.questions, testSnapshot.settings, session.id),
             answers: [],
             serverDeadline: serverDeadline.toISOString(),
-            durationMinutes: test.durationMinutes,
+            durationMinutes: testSnapshot.durationMinutes,
             resumed: false,
         }
     })
@@ -792,10 +749,12 @@ export async function getPublicFreeSession(
             status: true,
             answers: true,
             serverDeadline: true,
+            testSnapshot: true,
             test: {
                 select: {
                     id: true,
                     title: true,
+                    description: true,
                     durationMinutes: true,
                     settings: true,
                     questions: {
@@ -845,14 +804,17 @@ export async function getPublicFreeSession(
         })
     }
 
+    const sessionSnapshot = parseSessionTestSnapshot(session.testSnapshot)
+        ?? buildSessionTestSnapshot(session.test)
+
     return {
         sessionId: session.id,
         testId: session.test.id,
-        testTitle: session.test.title,
-        questions: stripCorrectAnswers(session.test.questions, session.test.settings, session.id),
+        testTitle: sessionSnapshot.title,
+        questions: stripCorrectAnswers(sessionSnapshot.questions, sessionSnapshot.settings, session.id),
         answers: (session.answers as AnswerEntry[] | null) ?? [],
         serverDeadline: session.serverDeadline.toISOString(),
-        durationMinutes: session.test.durationMinutes,
+        durationMinutes: sessionSnapshot.durationMinutes,
         resumed: true,
     }
 }
@@ -940,6 +902,7 @@ export async function getPublicFreeSessionStatus(
             status: true,
             serverDeadline: true,
             answers: true,
+            testSnapshot: true,
             test: {
                 select: {
                     _count: {
@@ -961,6 +924,7 @@ export async function getPublicFreeSessionStatus(
     }
 
     const answers = (session.answers as AnswerEntry[] | null) ?? []
+    const sessionSnapshot = parseSessionTestSnapshot(session.testSnapshot)
     const timeRemaining = Math.max(
         0,
         Math.floor((session.serverDeadline.getTime() - Date.now()) / 1000),
@@ -969,7 +933,7 @@ export async function getPublicFreeSessionStatus(
     return {
         timeRemaining,
         answeredCount: answers.filter((answer) => answer.optionId !== null).length,
-        totalQuestions: session.test._count.questions,
+        totalQuestions: sessionSnapshot?.questions.length ?? session.test._count.questions,
         status: session.status,
     }
 }
@@ -989,6 +953,7 @@ async function submitLeadSessionWithTransaction(
         startedAt: Date
         serverDeadline: Date
         answers: Prisma.JsonValue | null
+        testSnapshot: Prisma.JsonValue | null
     }>>(
         `SELECT id,
                 "leadId",
@@ -996,7 +961,8 @@ async function submitLeadSessionWithTransaction(
                 status,
                 "startedAt",
                 "serverDeadline",
-                answers
+                answers,
+                "testSnapshot"
          FROM "LeadTestSession"
          WHERE id = $1
          FOR UPDATE`,
@@ -1026,40 +992,45 @@ async function submitLeadSessionWithTransaction(
         })
     }
 
-    const test = await tx.test.findUnique({
-        where: {
-            id: session.testId,
-        },
-        select: {
-            id: true,
-            title: true,
-            description: true,
-            durationMinutes: true,
-            settings: true,
-            questions: {
-                orderBy: {
-                    order: 'asc',
-                },
-                select: {
-                    id: true,
-                    order: true,
-                    stem: true,
-                    sharedContext: true,
-                    options: true,
-                    difficulty: true,
-                    topic: true,
-                    explanation: true,
-                    referenceLinks: {
-                        orderBy: { order: 'asc' },
-                        select: QUESTION_REFERENCE_LINK_SELECT,
+    let testSnapshot = parseSessionTestSnapshot(session.testSnapshot)
+    if (!testSnapshot) {
+        const test = await tx.test.findUnique({
+            where: {
+                id: session.testId,
+            },
+            select: {
+                id: true,
+                title: true,
+                description: true,
+                durationMinutes: true,
+                settings: true,
+                questions: {
+                    orderBy: {
+                        order: 'asc',
+                    },
+                    select: {
+                        id: true,
+                        order: true,
+                        stem: true,
+                        sharedContext: true,
+                        options: true,
+                        difficulty: true,
+                        topic: true,
+                        explanation: true,
+                        referenceLinks: {
+                            orderBy: { order: 'asc' },
+                            select: QUESTION_REFERENCE_LINK_SELECT,
+                        },
                     },
                 },
             },
-        },
-    })
+        })
 
-    if (!test) {
-        return serviceError('NOT_FOUND', 'This free mock is not available.')
+        if (!test) {
+            return serviceError('NOT_FOUND', 'This free mock is not available.')
+        }
+
+        testSnapshot = buildSessionTestSnapshot(test)
     }
 
     const answers = mergeAnswerEntries(
@@ -1071,7 +1042,7 @@ async function submitLeadSessionWithTransaction(
         score,
         totalMarks,
         percentage,
-    } = calculateQuestionAttemptSummary(test.questions, answers, test.settings)
+    } = calculateQuestionAttemptSummary(testSnapshot.questions, answers, testSnapshot.settings)
     const submittedAt = new Date()
     const nextStatus: SessionStatus = force
         ? (new Date(session.serverDeadline).getTime() < Date.now() ? 'TIMED_OUT' : 'FORCE_SUBMITTED')
@@ -1130,6 +1101,7 @@ export async function getPublicFreeResult(
             percentage: true,
             serverDeadline: true,
             answers: true,
+            testSnapshot: true,
             test: {
                 select: {
                     id: true,
@@ -1197,6 +1169,7 @@ export async function getPublicFreeResult(
                 percentage: true,
                 serverDeadline: true,
                 answers: true,
+                testSnapshot: true,
                 test: {
                     select: {
                         id: true,

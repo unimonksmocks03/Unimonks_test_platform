@@ -253,6 +253,7 @@ model TestSession {
   serverDeadline DateTime
   submittedAt    DateTime?
   answers        Json?
+  testSnapshot   Json?
   tabSwitchCount Int           @default(0)
   score          Int?
   totalMarks     Int
@@ -295,6 +296,7 @@ model LeadTestSession {
   serverDeadline DateTime
   submittedAt    DateTime?
   answers        Json?
+  testSnapshot   Json?
   score          Int?
   totalMarks     Int
   percentage     Float?

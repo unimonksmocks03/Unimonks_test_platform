@@ -3,6 +3,10 @@ import { Receiver } from '@upstash/qstash'
 import { getQStashEnv } from '@/lib/env'
 import { prisma } from '@/lib/prisma'
 import { generatePersonalizedFeedback } from '@/lib/services/ai-service'
+import {
+    buildSessionTestSnapshot,
+    parseSessionTestSnapshot,
+} from '@/lib/utils/test-session-snapshot'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60 // Allow up to 60s for AI generation (Vercel Pro/Enterprise)
@@ -55,9 +59,38 @@ export async function POST(req: NextRequest) {
         // 2. Fetch session with test questions
         const session = await prisma.testSession.findUnique({
             where: { id: sessionId },
-            include: {
+            select: {
+                id: true,
+                studentId: true,
+                status: true,
+                score: true,
+                totalMarks: true,
+                percentage: true,
+                answers: true,
+                tabSwitchCount: true,
+                startedAt: true,
+                submittedAt: true,
+                testSnapshot: true,
                 test: {
-                    include: { questions: { orderBy: { order: 'asc' } } },
+                    select: {
+                        title: true,
+                        description: true,
+                        durationMinutes: true,
+                        settings: true,
+                        questions: {
+                            orderBy: { order: 'asc' },
+                            select: {
+                                id: true,
+                                order: true,
+                                stem: true,
+                                sharedContext: true,
+                                options: true,
+                                difficulty: true,
+                                topic: true,
+                                explanation: true,
+                            },
+                        },
+                    },
                 },
             },
         })
@@ -84,8 +117,11 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ skipped: true })
         }
 
+        const testSnapshot = parseSessionTestSnapshot(session.testSnapshot)
+            ?? buildSessionTestSnapshot(session.test)
+
         // 4. Generate feedback via AI
-        const feedback = await generatePersonalizedFeedback(session, session.test.questions)
+        const feedback = await generatePersonalizedFeedback(session, testSnapshot.questions)
 
         // 5. Store feedback
         await prisma.aIFeedback.create({
