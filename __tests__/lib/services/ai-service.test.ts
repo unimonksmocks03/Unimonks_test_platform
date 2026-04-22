@@ -9,6 +9,7 @@ const {
   physicsPdfLikeMcqText,
   answerBeforeOptionsPdfMcqText,
   answerInHeaderPsychologyMcqText,
+  compactInlineOptionsPdfMcqText,
   emojiAnswerOutlierMcqText,
   humanGeoDocxLikeMcqText,
   statementStyleMcqText,
@@ -73,6 +74,85 @@ test('extractQuestionsFromDocumentText keeps parsing options when answer hints a
     ])
     expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('C')
     expect(analysis.questions[3]?.options.find((option) => option.isCorrect)?.id).toBe('D')
+})
+
+test('extractQuestionsFromDocumentText parses compact two-options-per-line PDFs with OCR-prefixed answer hints', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(compactInlineOptionsPdfMcqText)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.answerHintCount).toBe(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.missingQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.options).toEqual([
+        { id: 'A', text: '9', isCorrect: false },
+        { id: 'B', text: '10', isCorrect: false },
+        { id: 'C', text: '11', isCorrect: true },
+        { id: 'D', text: '12', isCorrect: false },
+    ])
+    expect(analysis.questions[3]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+    expect(analysis.questions[4]?.options.find((option) => option.isCorrect)?.id).toBe('B')
+})
+
+test('extractQuestionsFromDocumentText does not split blocks on hyphenated explanation continuations like "25-yard" or "25-second"', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+    } = await aiServicePromise
+
+    const analysis = extractQuestionsFromDocumentText(`
+1. A penalty corner in hockey is also called:
+A) Short corner B) Long corner
+C) Short circle D) Drag flick
+4 Correct Answer: A) Short corner
+Explanation: A Penalty Corner is awarded for a foul inside the circle or intentional foul inside the
+25-yard area; the ball is placed on the goal line.
+Topic: Hockey – Fouls and Penalties
+
+2. In Judo, a full point resulting in immediate victory is called:
+A) Waza-ari B) Ippon
+C) Yuko D) Shido
+4 Correct Answer: B) Ippon
+Explanation: Ippon is the highest score in Judo, resulting in immediate victory; it is awarded for a perfect throw, a
+25-second pin, or a submission.
+Topic: Judo – Scoring Rules
+
+3. The height of the volleyball net for men's competition is:
+A) 2.24 m B) 2.43 m
+C) 2.55 m D) 2.60 m
+4 Correct Answer: B) 2.43 m
+Explanation: The official net height in men's volleyball is 2.43 m.
+Topic: Volleyball – Equipment
+
+4. The number of players on court per team in a standard basketball game is:
+A) 4 B) 5
+C) 6 D) 7
+4 Correct Answer: B) 5
+Explanation: Basketball is played with 5 players per team on court at any time.
+Topic: Basketball – Number of Players
+
+5. The dimensions of an official table tennis table are:
+A) 2.40 m × 1.20 m B) 2.74 m × 1.52 m
+C) 3.00 m × 1.50 m D) 2.00 m × 1.00 m
+4 Correct Answer: B) 2.74 m × 1.52 m
+Explanation: An official table tennis table is 2.74 m long and 1.525 m wide.
+Topic: Table Tennis – Equipment
+`)
+
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.exactMatchAchieved).toBe(true)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.duplicateQuestionNumbers).toEqual([])
+    expect(analysis.questions[0]?.explanation).toContain('25-yard area')
+    expect(analysis.questions[1]?.explanation).toContain('25-second pin')
+    expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('B')
 })
 
 test('extractQuestionsFromDocumentText parses header-only numbered blocks that carry answer hints on the first line', async () => {

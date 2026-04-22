@@ -574,11 +574,23 @@ function stripQuestionLabel(line: string): QuestionLabel | null {
         }
     }
 
-    const bareQuestionMatch = normalizedLine.match(/^(\d+)\s*(?:(?:\.(?!\d))|(?:\)(?!\d))|(?:-(?!\d))|(?::(?!\d)))\s*(.+)$/)
+    const bareQuestionMatch = normalizedLine.match(/^(\d+)\s*((?:\.(?!\d))|(?:\)(?!\d))|(?:-(?!\d))|(?::(?!\d)))(\s*)(.+)$/)
     if (!bareQuestionMatch) return null
 
     const questionNumber = Number.parseInt(bareQuestionMatch[1], 10)
-    const stem = normalizeStem(bareQuestionMatch[2])
+    const delimiter = bareQuestionMatch[2] ?? ''
+    const delimiterSpacing = bareQuestionMatch[3] ?? ''
+    const rawStem = bareQuestionMatch[4] ?? ''
+    if (
+        delimiter === '-'
+        && delimiterSpacing.length === 0
+        && /^[a-z]/.test(rawStem)
+        && !/^(?:which|what|who|where|when|why|how|choose|select|identify|find|consider|read|study|assertion|reason|match)\b/i.test(rawStem)
+    ) {
+        return null
+    }
+
+    const stem = normalizeStem(rawStem)
     if (isLikelyQuestionStemNoise(questionNumber, stem, false)) {
         return null
     }
@@ -806,8 +818,10 @@ function shouldTreatAsNestedNumberedStemLine(
 const OPTION_LETTER_REGEX = /^(?:\(([A-D])\)|([A-D])[.)\-:])(?:\s*[.)\-:])*\s*(.+)$/i
 const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?(?:\s*[.)\-:]\s*|\s+)(.+)$/i
 // Matches answer hints including numbered format: "Answer 3: (b)" / "Answer: B" / "Ans: 2"
+// Some PDF text layers prepend a stray option-count digit before the answer label,
+// e.g. "4 Correct Answer: C) ...". Tolerate that OCR artifact.
 const ANSWER_LINE_REGEX =
-    /^(?:[^A-Za-z0-9]+\s*)*(?:revised\s+)?(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:\d+\s*)?(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
+    /^(?:\d+\s+)?(?:[^A-Za-z0-9]+\s*)*(?:revised\s+)?(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:\d+\s*)?(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
 const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
 const DIFFICULTY_LINE_REGEX = /^difficulty\s*[:\-]?\s*(easy|medium|hard)\b/i
 const TOPIC_LINE_REGEX = /^topic\s*[:\-]?\s*(.+)$/i
@@ -904,6 +918,49 @@ function extractInlineLetterOptions(
     if (options.length !== 4) return null
 
     return { stem, options }
+}
+
+function extractInlineLetterOptionRun(line: string): Array<{ optionId: string; text: string }> | null {
+    const trimmed = line.trim()
+    if (!trimmed) return null
+
+    const matches = [...trimmed.matchAll(/(?<![A-Za-z0-9])\(?([A-Da-d])\)?\s*[.)]\s*/g)]
+    if (matches.length < 2) return null
+    if ((matches[0]?.index ?? -1) !== 0) return null
+
+    const orderedMatches = matches
+        .map((match) => ({
+            optionId: match[1]?.toUpperCase() ?? '',
+            index: match.index ?? -1,
+            marker: match[0],
+        }))
+        .filter((match) => match.index >= 0)
+
+    for (let index = 1; index < orderedMatches.length; index++) {
+        const previous = orderedMatches[index - 1]
+        const current = orderedMatches[index]
+        if (!previous || !current) continue
+
+        if (current.optionId.charCodeAt(0) !== previous.optionId.charCodeAt(0) + 1) {
+            return null
+        }
+    }
+
+    const options = orderedMatches.map((current, index) => {
+        const next = orderedMatches[index + 1]
+        const contentStart = current.index + current.marker.length
+        const contentEnd = next?.index ?? trimmed.length
+        return {
+            optionId: current.optionId,
+            text: normalizeOptionText(trimmed.slice(contentStart, contentEnd)),
+        }
+    }).filter((option) => option.text.length > 0)
+
+    if (options.length !== orderedMatches.length) {
+        return null
+    }
+
+    return options
 }
 
 function isSelectionPromptLine(line: string) {
@@ -1707,6 +1764,18 @@ function parseQuestionBlock(
                 }
 
                 activeOption = null
+                activeSection = 'option'
+                activeStatement = false
+                continue
+            }
+
+            const inlineOptionRun = extractInlineLetterOptionRun(line)
+            if (inlineOptionRun) {
+                for (const option of inlineOptionRun) {
+                    options.set(option.optionId, option.text)
+                }
+
+                activeOption = inlineOptionRun.at(-1)?.optionId ?? null
                 activeSection = 'option'
                 activeStatement = false
                 continue

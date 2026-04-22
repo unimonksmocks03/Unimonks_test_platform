@@ -143,6 +143,46 @@ Alfred Binet was the first psychologist to:
 (d) Study twins for intelligence research
 `
 
+export const compactInlineOptionsPdfMcqText = `
+CUET (UG) – Physical Education (Code: 321)
+UNIT – III: Theoretical Aspects of Games, Sports & Yogic Practice
+
+1. In Test Cricket, the total number of players in each team is:
+A) 9 B) 10
+C) 11 D) 12
+4 Correct Answer: C) 11
+Explanation: Each cricket team consists of 11 players.
+Topic: Cricket – Number of Players
+
+2. The standard length of a cricket pitch (from crease to crease) is:
+A) 18 yards B) 20 yards
+C) 22 yards D) 24 yards
+4 Correct Answer: C) 22 yards
+Explanation: A cricket pitch is 22 yards long.
+Topic: Cricket – Play Field
+
+3. The standard dimensions of a football field (length) as per FIFA rules are:
+A) 50–70 m B) 70–90 m
+C) 100–110 m D) 100–130 m
+4 Correct Answer: D) 100–130 m
+Explanation: FIFA specifies football pitch length as 100–130 metres.
+Topic: Football – Play Field
+
+4. The Libero in volleyball is a specialist player who:
+A) Can serve, spike, and block without restriction B) Is a defensive specialist
+C) Plays only in the front row D) Acts as team captain exclusively
+4 Correct Answer: B) Is a defensive specialist
+Explanation: The Libero is a back-row defensive specialist identifiable by a contrasting jersey.
+Topic: Volleyball – Rules
+
+5. The dimensions of an official table tennis table are:
+A) 2.40 m × 1.20 m B) 2.74 m × 1.52 m
+C) 3.00 m × 1.50 m D) 2.00 m × 1.00 m
+4 Correct Answer: B) 2.74 m × 1.52 m
+Explanation: An official table tennis table is 2.74 m long and 1.525 m wide.
+Topic: Table Tennis – Equipment
+`
+
 export const emojiAnswerOutlierMcqText = `
 SECTIONAL MOCKTEST
 REASONING
@@ -576,6 +616,7 @@ export const regressionFixtures: McqTextFixture[] = [
   { name: 'physicsPdfLikeMcqText', text: physicsPdfLikeMcqText, expectedCount: 50 },
   { name: 'answerBeforeOptionsPdfMcqText', text: answerBeforeOptionsPdfMcqText, expectedCount: 50 },
   { name: 'answerInHeaderPsychologyMcqText', text: answerInHeaderPsychologyMcqText, expectedCount: 50 },
+  { name: 'compactInlineOptionsPdfMcqText', text: compactInlineOptionsPdfMcqText, expectedCount: 5 },
   { name: 'humanGeoDocxLikeMcqText', text: humanGeoDocxLikeMcqText, expectedCount: 5 },
   { name: 'statementStyleMcqText', text: statementStyleMcqText, expectedCount: 1 },
   { name: 'markdownStyledPdfMcqText', text: markdownStyledPdfMcqText, expectedCount: 5 },

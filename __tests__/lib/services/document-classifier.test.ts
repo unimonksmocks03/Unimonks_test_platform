@@ -110,6 +110,44 @@ test('classifyDocumentForImport routes source material to generation mode', () =
     expect(result.preferredStrategy).toBe('GENERATE_FROM_SOURCE')
 })
 
+test('classifyDocumentForImport does not treat sports MCQs mentioning "table tennis table" or "specialist identifiable" as table/match-heavy', () => {
+    const sportsMcqText = `
+CUET (UG) – Physical Education
+UNIT – III: Theoretical Aspects of Games, Sports & Yogic Practice
+1. The dimensions of an official table tennis table are:
+A) 2.40 m x 1.20 m
+B) 2.74 m x 1.52 m
+C) 3.00 m x 1.50 m
+D) 2.00 m x 1.00 m
+Correct Answer: B) 2.74 m x 1.525 m
+Explanation: An official ITTF table tennis table is 2.74 m long.
+2. The 'Libero' in volleyball is a specialist player who:
+A) Can serve and spike without restriction
+B) Is a defensive specialist who wears a different coloured jersey
+C) Plays only in the front row
+D) Acts as team captain exclusively
+Correct Answer: B)
+Explanation: The Libero is a back-row defensive specialist identifiable by a contrasting jersey.
+3. An 'indoor' sport from the following list is:
+A) Football
+B) Hockey
+C) Athletics
+D) Table Tennis
+Correct Answer: D)
+`
+
+    const result = classifyDocumentForImport({
+        fileName: 'CUET_PhysEd_Unit3_MockTest.pdf',
+        text: sportsMcqText,
+    })
+
+    expect(result.documentType).toBe('MCQ_PAPER')
+    expect(result.hasTables).toBe(false)
+    expect(result.hasMatchFollowing).toBe(false)
+    expect(result.preferredStrategy).toBe('TEXT_EXACT')
+    expect(result.layoutRisk).toBe('LOW')
+})
+
 test('classifyDocumentForImport treats low-text PDFs as scanned-like and multimodal-first', () => {
     const result = classifyDocumentForImport({
         fileName: 'scan-heavy-paper.pdf',

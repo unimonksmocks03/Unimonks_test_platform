@@ -67,6 +67,36 @@ Explanation: Charge is a scalar quantity.
 Di culty: Easy
 `
 
+export const sportsPhysEdPdfText = `
+CUET (UG) – Physical Education
+UNIT – III: Theoretical Aspects of Games, Sports & Yogic Practice
+MOCK TEST | Total Questions: 50 | Attempt: Any 40 | Marks: +5 / –1 | Time: 60 Minutes
+
+Q1. The dimensions of an official table tennis table are:
+(A) 2.40 m x 1.20 m
+(B) 2.74 m x 1.52 m
+(C) 3.00 m x 1.50 m
+(D) 2.00 m x 1.00 m
+Answer: (B)
+Explanation: An official ITTF table tennis table is 2.74 m long and 1.525 m wide.
+
+Q2. The 'Libero' in volleyball is a specialist player who:
+(A) Can serve and spike without restriction
+(B) Is a defensive specialist who wears a different coloured jersey
+(C) Plays only in the front row
+(D) Acts as team captain exclusively
+Answer: (B)
+Explanation: The Libero is a back-row defensive specialist identifiable by a contrasting jersey.
+
+Q3. An indoor sport from the following list is:
+(A) Football
+(B) Hockey
+(C) Athletics
+(D) Table Tennis
+Answer: (D)
+Explanation: Table tennis is played indoors and is classified as an indoor sport.
+`
+
 export const humanGeoDocxLikeMcqText = `
 45 Minutes
 Section A
@@ -408,6 +438,20 @@ export const importRegressionFixtures: ImportRegressionFixture[] = [
         acceptableDecision: 'EXACT_ACCEPTED',
         tags: ['pdf', 'born-digital', 'mcq-paper', 'clean-layout'],
         text: physicsPdfLikeMcqText,
+    },
+    {
+        id: 'physed-sports-pdf',
+        sourceLabel: 'CUET_PhysEd_Unit3_MockTest.pdf',
+        fileName: 'CUET_PhysEd_Unit3_MockTest.pdf',
+        expectedQuestionCount: 3,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'TEXT_EXACT',
+        expectedSelectedStrategy: 'TEXT_EXACT',
+        expectedLane: 'STABLE',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'EXACT_ACCEPTED',
+        tags: ['pdf', 'born-digital', 'mcq-paper', 'sports-terminology', 'false-positive-guard'],
+        text: sportsPhysEdPdfText,
     },
     {
         id: 'human-geo-docx',

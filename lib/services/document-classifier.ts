@@ -111,7 +111,11 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
         return /^[A-Za-z][A-Za-z0-9.&/()\- ]*\s+\d+(?:\s+\d+){3,}$/i.test(line)
             || /^(?:[A-Za-z]|\d+)\s+\d+(?:\s+\d+){3,}$/i.test(line)
     }).length
-    const hasTables = /\b(table(?!\s+tennis\b)|data interpretation|chart|graph|dataset|tabulation)\b/i.test(normalizedText)
+    // Bare `table` was too loose — PhysEd MCQs mentioning "table tennis table"
+    // or "ball goes off the table" tripped this and routed to multimodal
+    // extraction, which timed out. Require a data-table context phrase; rely
+    // on tableLikeRowCount for actual numeric tables.
+    const hasTables = /\b((?:answer\s+key|horizontal(?:\s+box)?|vertical(?:\s+box)?|following|data|box)\s+table|table\s+(?:below|above|shows?|showing|contains?|depicts?|displays?|displaying|presented|given|of\s+(?:values|answers?|contents|data)|illustrates?)|data interpretation|chart|graph|dataset|tabulation)\b/i.test(normalizedText)
         || tableLikeRowCount >= 2
     const hasPassages = /(read the passage|following passage|based on the passage|study the following passage|case study based|case-study based|case based)/i.test(normalizedText)
     const hasEmbeddedImages = /\[image(?:[:\]])/i.test(normalizedText)
@@ -125,7 +129,11 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
         || /\b(venn|diagram|figure|formation|completion)\b/i.test(lowerFileName)
         || hasEmbeddedImages
     )
-    const hasMatchFollowing = /(match the following|match the correct pair|list i|list ii)/i.test(normalizedText)
+    // `list i|list ii` without word boundaries matched "specia*list i*dentifiable"
+    // and "following *list i*s" — both common in non-match-following papers.
+    // Require whitespace + a Roman numeral bounded by \b so only real
+    // "List I", "List II", "List III", "List IV" headings trigger.
+    const hasMatchFollowing = /(match the following|match the correct pair|\blist\s+(?:i{1,3}|iv)\b)/i.test(normalizedText)
     const hasAssertionReason = /\bassertion\b/i.test(normalizedText) && /\breason\b/i.test(normalizedText)
     const hasStrongExtractableMcqText =
         questionCount >= 3
