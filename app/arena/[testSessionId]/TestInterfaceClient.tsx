@@ -51,6 +51,44 @@ interface StartResponse {
     resumed: boolean;
 }
 
+function normalizeAnswerEntries(value: unknown): AnswerEntry[] {
+    if (!Array.isArray(value)) return [];
+
+    return value
+        .map((entry): AnswerEntry | null => {
+            if (!entry || typeof entry !== "object") return null;
+
+            const record = entry as Partial<AnswerEntry>;
+            if (!record.questionId || typeof record.questionId !== "string") return null;
+            if (record.optionId !== null && record.optionId !== undefined && typeof record.optionId !== "string") return null;
+
+            const answeredAt = typeof record.answeredAt === "string" && !Number.isNaN(Date.parse(record.answeredAt))
+                ? record.answeredAt
+                : new Date().toISOString();
+
+            return {
+                questionId: record.questionId,
+                optionId: typeof record.optionId === "string" ? record.optionId : null,
+                markedForReview: record.markedForReview === true ? true : undefined,
+                answeredAt,
+            };
+        })
+        .filter((entry): entry is AnswerEntry => entry !== null);
+}
+
+function parseStoredAnswers(raw: string | null): { answers: AnswerEntry[]; valid: boolean } {
+    if (!raw) return { answers: [], valid: false };
+
+    try {
+        return {
+            answers: normalizeAnswerEntries(JSON.parse(raw)),
+            valid: true,
+        };
+    } catch {
+        return { answers: [], valid: false };
+    }
+}
+
 // ── Component ──
 export default function TestInterfaceClient({ testId }: { testId: string }) {
     const router = useRouter();
@@ -74,6 +112,7 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
     const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const sessionIdRef = useRef<string | null>(null);
     const syncPromiseRef = useRef<Promise<boolean> | null>(null);
+    const answersRef = useRef<AnswerEntry[]>([]);
 
     // localStorage key for this session
     const storageKey = useCallback((sid: string) => `arena:answers:${sid}`, []);
@@ -96,14 +135,16 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
             // Restore answers: prefer localStorage (most recent), fall back to server
             const localRaw = localStorage.getItem(storageKey(sid));
-            const localAnswers: AnswerEntry[] = localRaw ? JSON.parse(localRaw) : null;
-            const serverAnswers = res.data.answers || [];
+            const localAnswers = parseStoredAnswers(localRaw);
+            const serverAnswers = normalizeAnswerEntries(res.data.answers || []);
 
-            if (localAnswers && localAnswers.length >= serverAnswers.length) {
-                setAnswers(localAnswers);
+            if (localAnswers.valid && localAnswers.answers.length >= serverAnswers.length) {
+                setAnswers(localAnswers.answers);
+                answersRef.current = localAnswers.answers;
                 dirtyRef.current = true; // schedule a sync to push local state to server
             } else {
                 setAnswers(serverAnswers);
+                answersRef.current = serverAnswers;
                 if (serverAnswers.length > 0) {
                     localStorage.setItem(storageKey(sid), JSON.stringify(serverAnswers));
                 }
@@ -125,6 +166,10 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [testId]);
+
+    useEffect(() => {
+        answersRef.current = answers;
+    }, [answers]);
 
     // ── Server-Authoritative Timer ──
     useEffect(() => {
@@ -152,7 +197,8 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
         if (!dirtyRef.current && !force) return true;
 
         const localRaw = localStorage.getItem(storageKey(sid));
-        const localAnswers: AnswerEntry[] = localRaw ? JSON.parse(localRaw) : [];
+        const parsedLocalAnswers = parseStoredAnswers(localRaw);
+        const localAnswers = parsedLocalAnswers.valid ? parsedLocalAnswers.answers : answersRef.current;
 
         const syncPromise = (async () => {
             try {
@@ -250,6 +296,7 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
     // ── Helper: persist answers to localStorage ──
     const persistToLocal = useCallback((updatedAnswers: AnswerEntry[]) => {
         const sid = sessionIdRef.current;
+        answersRef.current = updatedAnswers;
         if (sid) {
             localStorage.setItem(storageKey(sid), JSON.stringify(updatedAnswers));
             dirtyRef.current = true;
@@ -299,12 +346,15 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
         setAnswers(prev => {
             const existing = prev.findIndex(a => a.questionId === question.id);
+            let updated: AnswerEntry[];
             if (existing >= 0) {
-                const updated = [...prev];
+                updated = [...prev];
                 updated[existing] = { ...updated[existing], markedForReview: !updated[existing].markedForReview };
-                return updated;
+            } else {
+                updated = [...prev, { questionId: question.id, optionId: null, markedForReview: true, answeredAt: new Date().toISOString() }];
             }
-            return [...prev, { questionId: question.id, optionId: null, markedForReview: true, answeredAt: new Date().toISOString() }];
+            persistToLocal(updated);
+            return updated;
         });
 
         toast.info("Question marked for review");
@@ -326,15 +376,9 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
         setSubmitting(true);
 
-        const synced = await syncAnswersToServer(true);
-        if (!synced) {
-            toast.error("Could not sync your latest answers. Please try again.");
-            setSubmitting(false);
-            return;
-        }
-
         const localRaw = localStorage.getItem(storageKey(sessionId));
-        const latestAnswers: AnswerEntry[] = localRaw ? JSON.parse(localRaw) : answers;
+        const parsedLocalAnswers = parseStoredAnswers(localRaw);
+        const latestAnswers = parsedLocalAnswers.valid ? parsedLocalAnswers.answers : answersRef.current;
         const res = await apiClient.post(`/api/arena/${sessionId}/submit`, { answers: latestAnswers });
 
         if (res.ok) {
@@ -350,7 +394,7 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                 router.push(`/student/results/${sessionId}`);
             }, 2000);
         } else {
-            toast.error("Failed to submit test");
+            toast.error(res.message || "Failed to submit test");
             setSubmitting(false);
         }
     };

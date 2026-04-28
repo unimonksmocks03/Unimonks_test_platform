@@ -545,6 +545,10 @@ type AdminQuestionWithReferencesRecord = Prisma.QuestionGetPayload<{
     select: typeof ADMIN_QUESTION_WITH_REFERENCES_SELECT
 }>
 
+type QuestionReferenceLinkView = Prisma.QuestionReferenceLinkGetPayload<{
+    select: typeof QUESTION_REFERENCE_LINK_SELECT
+}>
+
 function mapAdminQuestionRecord(question: AdminQuestionWithReferencesRecord) {
     return {
         id: question.id,
@@ -556,6 +560,130 @@ function mapAdminQuestionRecord(question: AdminQuestionWithReferencesRecord) {
         difficulty: question.difficulty,
         topic: question.topic,
         references: mapQuestionReferences(question.referenceLinks),
+    }
+}
+
+async function detachQuestionReferenceFromQuestion(
+    tx: Prisma.TransactionClient,
+    input: {
+        questionId: string
+        referenceId: string
+    },
+) {
+    const linkCount = await tx.questionReferenceLink.count({
+        where: { referenceId: input.referenceId },
+    })
+
+    await tx.questionReferenceLink.deleteMany({
+        where: {
+            questionId: input.questionId,
+            referenceId: input.referenceId,
+        },
+    })
+
+    if (linkCount <= 1) {
+        await tx.questionReference.delete({
+            where: { id: input.referenceId },
+        })
+    }
+}
+
+async function forkImageReferenceWithoutSharedText(
+    tx: Prisma.TransactionClient,
+    input: {
+        testId: string
+        questionId: string
+        link: QuestionReferenceLinkView
+    },
+) {
+    const reference = input.link.reference
+    const createdReference = await tx.questionReference.create({
+        data: {
+            testId: input.testId,
+            kind: reference.kind,
+            mode: 'SNAPSHOT',
+            title: sanitizeReferenceTitle(reference.title),
+            textContent: null,
+            assetUrl: reference.assetUrl,
+            sourcePage: reference.sourcePage,
+            bbox: reference.bbox ?? Prisma.JsonNull,
+            confidence: reference.confidence,
+            evidence: mergeReferenceEvidence(reference.evidence as Prisma.JsonValue | null, {
+                source: 'MANUAL_SHARED_CONTEXT_EDIT',
+                forkedFrom: reference.id,
+                updatedAt: new Date().toISOString(),
+            }),
+        },
+        select: { id: true },
+    })
+
+    await tx.questionReferenceLink.create({
+        data: {
+            questionId: input.questionId,
+            referenceId: createdReference.id,
+            order: input.link.order,
+        },
+    })
+}
+
+async function reconcileQuestionReferencesAfterSharedContextEdit(
+    tx: Prisma.TransactionClient,
+    input: {
+        testId: string
+        questionId: string
+    },
+) {
+    const links = await tx.questionReferenceLink.findMany({
+        where: { questionId: input.questionId },
+        orderBy: { order: 'asc' },
+        select: QUESTION_REFERENCE_LINK_SELECT,
+    })
+
+    for (const link of links) {
+        const reference = link.reference
+
+        if (!reference.assetUrl) {
+            await detachQuestionReferenceFromQuestion(tx, {
+                questionId: input.questionId,
+                referenceId: reference.id,
+            })
+            continue
+        }
+
+        if (!sanitizeReferenceText(reference.textContent) && reference.mode === 'SNAPSHOT') {
+            continue
+        }
+
+        const linkCount = await tx.questionReferenceLink.count({
+            where: { referenceId: reference.id },
+        })
+
+        if (linkCount > 1) {
+            await tx.questionReferenceLink.deleteMany({
+                where: {
+                    questionId: input.questionId,
+                    referenceId: reference.id,
+                },
+            })
+            await forkImageReferenceWithoutSharedText(tx, {
+                testId: input.testId,
+                questionId: input.questionId,
+                link,
+            })
+            continue
+        }
+
+        await tx.questionReference.update({
+            where: { id: reference.id },
+            data: {
+                mode: 'SNAPSHOT',
+                textContent: null,
+                evidence: mergeReferenceEvidence(reference.evidence as Prisma.JsonValue | null, {
+                    source: 'MANUAL_SHARED_CONTEXT_EDIT',
+                    updatedAt: new Date().toISOString(),
+                }),
+            },
+        })
     }
 }
 
@@ -1640,6 +1768,7 @@ export async function updateAdminQuestion(
     }
 
     const updateData: Prisma.QuestionUpdateInput = {}
+    const shouldReconcileReferences = data.sharedContext !== undefined
 
     if (data.stem !== undefined) {
         updateData.stem = data.stem
@@ -1660,11 +1789,33 @@ export async function updateAdminQuestion(
         updateData.topic = data.topic
     }
 
-    const question = await prisma.question.update({
-        where: { id: questionId },
-        data: updateData,
-        select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
-    })
+    const question = shouldReconcileReferences
+        ? await prisma.$transaction(async (tx) => {
+            await tx.question.update({
+                where: { id: questionId },
+                data: updateData,
+                select: { id: true },
+            })
+
+            await reconcileQuestionReferencesAfterSharedContextEdit(tx, {
+                testId,
+                questionId,
+            })
+
+            return tx.question.findUnique({
+                where: { id: questionId },
+                select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
+            })
+        })
+        : await prisma.question.update({
+            where: { id: questionId },
+            data: updateData,
+            select: ADMIN_QUESTION_WITH_REFERENCES_SELECT,
+        })
+
+    if (!question) {
+        return serviceError('NOT_FOUND', 'Question not found after updating.')
+    }
 
     return {
         question: mapAdminQuestionRecord(question),

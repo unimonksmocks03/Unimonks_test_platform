@@ -95,6 +95,8 @@ type QuestionsResponse = {
     }>;
 };
 
+type QuestionResponseItem = QuestionsResponse["questions"][number];
+
 type BatchesResponse = {
     batches: Array<{
         id: string;
@@ -196,6 +198,20 @@ const normalizeOptions = (raw: any): QuestionOption[] => {
     }
     return emptyQuestion().options;
 };
+
+function mapQuestionResponseToState(question: QuestionResponseItem): Question {
+    return {
+        dbId: question.id,
+        stem: question.stem,
+        sharedContext: question.sharedContext || "",
+        references: question.references || [],
+        options: normalizeOptions(question.options),
+        difficulty: question.difficulty,
+        topic: question.topic || "",
+        explanation: question.explanation || "",
+        saved: true,
+    };
+}
 
 function audienceBadgeClass(audience: BatchAudience) {
     if (audience === "FREE") return "bg-sky-50 text-sky-700 border-none";
@@ -356,17 +372,7 @@ function AdminTestBuilderForm() {
 
         if (questionsResponse.ok && questionsResponse.data.questions.length > 0) {
             setQuestions(
-                questionsResponse.data.questions.map((question) => ({
-                    dbId: question.id,
-                    stem: question.stem,
-                    sharedContext: question.sharedContext || "",
-                    references: question.references || [],
-                    options: normalizeOptions(question.options),
-                    difficulty: question.difficulty,
-                    topic: question.topic || "",
-                    explanation: question.explanation || "",
-                    saved: true,
-                }))
+                questionsResponse.data.questions.map(mapQuestionResponseToState)
             );
         }
 
@@ -467,17 +473,7 @@ function AdminTestBuilderForm() {
                 return;
             }
 
-            const updatedQuestion: Question = {
-                dbId: data.question.id,
-                stem: data.question.stem,
-                sharedContext: data.question.sharedContext || "",
-                references: data.question.references || [],
-                options: normalizeOptions(data.question.options),
-                difficulty: data.question.difficulty,
-                topic: data.question.topic || "",
-                explanation: data.question.explanation || "",
-                saved: true,
-            };
+            const updatedQuestion = mapQuestionResponseToState(data.question);
 
             setQuestions((currentQuestions) => mergeQuestionReferenceState(currentQuestions, updatedQuestion));
             toast.success("Visual reference saved", {
@@ -541,17 +537,7 @@ function AdminTestBuilderForm() {
                 return;
             }
 
-            const updatedQuestion: Question = {
-                dbId: data.question.id,
-                stem: data.question.stem,
-                sharedContext: data.question.sharedContext || "",
-                references: data.question.references || [],
-                options: normalizeOptions(data.question.options),
-                difficulty: data.question.difficulty,
-                topic: data.question.topic || "",
-                explanation: data.question.explanation || "",
-                saved: true,
-            };
+            const updatedQuestion = mapQuestionResponseToState(data.question);
 
             setQuestions((currentQuestions) => mergeQuestionReferenceState(currentQuestions, updatedQuestion));
             toast.success("Visual reference removed", {
@@ -690,26 +676,25 @@ function AdminTestBuilderForm() {
                 if (question.saved || !question.stem.trim()) continue;
 
                 if (question.dbId) {
-                    const updateQuestionResponse = await apiClient.patch<{ question: { id: string } }>(
+                    const updateQuestionResponse = await apiClient.patch<{ question: QuestionResponseItem }>(
                         `/api/admin/tests/${currentTestId}/questions/${question.dbId}`,
                         buildAdminQuestionUpdatePayload(question)
                     );
 
-                    if (updateQuestionResponse.ok) {
-                        updatedQuestions[index].saved = true;
+                    if (updateQuestionResponse.ok && updateQuestionResponse.data.question) {
+                        updatedQuestions[index] = mapQuestionResponseToState(updateQuestionResponse.data.question);
                         savedCount += 1;
                     } else {
                         failedCount += 1;
                     }
                 } else {
-                    const createQuestionResponse = await apiClient.post<{ question: { id: string } }>(
+                    const createQuestionResponse = await apiClient.post<{ question: QuestionResponseItem }>(
                         `/api/admin/tests/${currentTestId}/questions`,
                         buildAdminQuestionCreatePayload(question)
                     );
 
                     if (createQuestionResponse.ok && createQuestionResponse.data.question) {
-                        updatedQuestions[index].dbId = createQuestionResponse.data.question.id;
-                        updatedQuestions[index].saved = true;
+                        updatedQuestions[index] = mapQuestionResponseToState(createQuestionResponse.data.question);
                         savedCount += 1;
                     } else {
                         failedCount += 1;
@@ -1270,14 +1255,14 @@ function AdminTestBuilderForm() {
                                 <p className="text-xs font-medium text-slate-500">
                                     Use this for data-interpretation tables, passages, or any shared prompt block that students must see before answering.
                                 </p>
-                                {activeQuestion.sharedContext.trim() || activeQuestion.references?.length ? (
+                                {activeQuestion.sharedContext.trim() ? (
                                     <div className="space-y-3">
                                         <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
                                             Structured Preview
                                         </Label>
                                         <SharedContextRenderer
                                             context={activeQuestion.sharedContext}
-                                            references={activeQuestion.references}
+                                            references={[]}
                                             title="Preview"
                                             tone="slate"
                                         />

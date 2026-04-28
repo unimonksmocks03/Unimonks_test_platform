@@ -146,12 +146,6 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
         setIsSubmitting(true)
 
         try {
-            const synced = await syncAnswers(true)
-            if (!synced && !force) {
-                toast.error('Could not sync your latest answers.')
-                return
-            }
-
             const response = await apiClient.post<{
                 score: number
                 totalMarks: number

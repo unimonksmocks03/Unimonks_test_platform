@@ -280,7 +280,7 @@ export async function saveAnswer(
 export async function saveBatchAnswers(
     studentId: string,
     sessionId: string,
-    incoming: { questionId: string; optionId: string | null; answeredAt?: string }[]
+    incoming: { questionId: string; optionId: string | null; markedForReview?: boolean; answeredAt?: string }[]
 ) {
     return prisma.$transaction(async (tx) => {
         const locked = await tx.$queryRawUnsafe<Array<{
@@ -322,7 +322,7 @@ export async function submitTest(
     studentId: string,
     sessionId: string,
     force?: boolean,
-    incomingAnswers?: { questionId: string; optionId: string | null; answeredAt?: string }[]
+    incomingAnswers?: { questionId: string; optionId: string | null; markedForReview?: boolean; answeredAt?: string }[]
 ) {
     return prisma.$transaction(async (tx) => {
         const locked = await tx.$queryRawUnsafe<Array<{
@@ -550,7 +550,7 @@ function stripCorrectAnswers(
 
 function mergeAnswerEntries(
     existing: AnswerEntry[],
-    incoming: { questionId: string; optionId: string | null; answeredAt?: string }[]
+    incoming: { questionId: string; optionId: string | null; markedForReview?: boolean; answeredAt?: string }[]
 ) {
     const merged = [...existing]
 
@@ -558,6 +558,7 @@ function mergeAnswerEntries(
         const entry: AnswerEntry = {
             questionId: item.questionId,
             optionId: item.optionId,
+            markedForReview: item.markedForReview,
             answeredAt: item.answeredAt || new Date().toISOString(),
         }
 

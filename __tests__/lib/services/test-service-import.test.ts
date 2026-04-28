@@ -30,6 +30,7 @@ const prismaMock = {
         create: vi.fn(),
         createMany: vi.fn(),
         deleteMany: vi.fn(),
+        findMany: vi.fn(),
     },
     auditLog: {
         create: vi.fn(),
@@ -227,6 +228,7 @@ beforeEach(() => {
     prismaMock.questionReferenceLink.create.mockResolvedValue({ id: 'reference-link-1' })
     prismaMock.questionReferenceLink.createMany.mockResolvedValue({ count: 1 })
     prismaMock.questionReferenceLink.deleteMany.mockResolvedValue({ count: 1 })
+    prismaMock.questionReferenceLink.findMany.mockResolvedValue([])
     prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof prismaMock) => Promise<unknown>) => callback(prismaMock))
     prismaMock.test.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'test-1',
@@ -329,6 +331,137 @@ beforeEach(() => {
         bbox: null,
     })
     getPdfPageCountMock.mockResolvedValue(12)
+})
+
+test('updateAdminQuestion removes stale text references when shared context is cleared', async () => {
+    const { updateAdminQuestion } = await servicePromise
+
+    prismaMock.question.findUnique
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+        })
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Question stem',
+            sharedContext: null,
+            importEvidence: null,
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'History',
+            referenceLinks: [],
+        })
+    prismaMock.questionReferenceLink.findMany.mockResolvedValueOnce([
+        createReferenceLink({
+            id: 'reference-text',
+            kind: 'TABLE',
+            mode: 'TEXT',
+            title: 'Preview',
+            textContent: 'Answer: C\nHint: leaked explanation',
+            assetUrl: null,
+        }),
+    ])
+
+    const result = await updateAdminQuestion('admin-1', 'test-1', 'question-1', {
+        sharedContext: null,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.question.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'question-1' },
+        data: expect.objectContaining({ sharedContext: null }),
+    }))
+    expect(prismaMock.questionReferenceLink.deleteMany).toHaveBeenCalledWith({
+        where: {
+            questionId: 'question-1',
+            referenceId: 'reference-text',
+        },
+    })
+    expect(prismaMock.questionReference.delete).toHaveBeenCalledWith({
+        where: { id: 'reference-text' },
+    })
+    expect(result.question.sharedContext).toBe('')
+    expect(result.question.references).toEqual([])
+})
+
+test('updateAdminQuestion preserves attached images but clears leaked reference text', async () => {
+    const { updateAdminQuestion } = await servicePromise
+
+    const refreshedImageLink = createReferenceLink({
+        id: 'reference-image',
+        kind: 'DIAGRAM',
+        mode: 'SNAPSHOT',
+        title: 'Number line',
+        textContent: null,
+        assetUrl: 'https://blob.vercel-storage.com/reference.png',
+    })
+    prismaMock.question.findUnique
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+        })
+        .mockResolvedValueOnce({
+            id: 'question-1',
+            testId: 'test-1',
+            order: 1,
+            stem: 'Question stem',
+            sharedContext: null,
+            importEvidence: null,
+            options: [
+                { id: 'A', text: 'Option A', isCorrect: true },
+                { id: 'B', text: 'Option B', isCorrect: false },
+                { id: 'C', text: 'Option C', isCorrect: false },
+                { id: 'D', text: 'Option D', isCorrect: false },
+            ],
+            explanation: 'Explanation',
+            difficulty: 'MEDIUM',
+            topic: 'History',
+            referenceLinks: [refreshedImageLink],
+        })
+    prismaMock.questionReferenceLink.findMany.mockResolvedValueOnce([
+        createReferenceLink({
+            id: 'reference-image',
+            kind: 'DIAGRAM',
+            mode: 'HYBRID',
+            title: 'Number line',
+            textContent: 'Answer: C\nHint: leaked explanation',
+            assetUrl: 'https://blob.vercel-storage.com/reference.png',
+        }),
+    ])
+
+    const result = await updateAdminQuestion('admin-1', 'test-1', 'question-1', {
+        sharedContext: null,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.questionReference.update).toHaveBeenCalledWith({
+        where: { id: 'reference-image' },
+        data: expect.objectContaining({
+            mode: 'SNAPSHOT',
+            textContent: null,
+        }),
+    })
+    expect(prismaMock.questionReference.delete).not.toHaveBeenCalled()
+    expect(result.question.references).toEqual([
+        expect.objectContaining({
+            id: 'reference-image',
+            assetUrl: 'https://blob.vercel-storage.com/reference.png',
+            textContent: null,
+            mode: 'SNAPSHOT',
+        }),
+    ])
 })
 
 test('generateAdminTestFromDocument persists per-question evidence and durable import diagnostics', async () => {
