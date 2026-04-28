@@ -148,6 +148,53 @@ Correct Answer: D)
     expect(result.layoutRisk).toBe('LOW')
 })
 
+test('classifyDocumentForImport does not treat graph-of-inequality MCQs as table-heavy', () => {
+    const appliedMathMcqText = `
+FULL LENGTH TEST 2
+CUET (UG) - Applied Mathematics
+Q1. A boy's speed with current = 15 km/h, stream = 2.5 km/h. Speed against current =
+(a) 9 km/h
+(b) 12.5 km/h
+(c) 8.5 km/h
+(d) 10 km/h
+Answer: (d)
+Q2. Smallest non-negative integer congruent to 2796 (mod 7)
+(a) 2
+(b) 5
+(c) 1
+(d) 3
+Answer: (d)
+Q3. Graph of inequality
+(a) Contains origin
+(b) Excludes origin & line
+(c) Whole plane
+(d) Entire plane
+Answer: (b)
+Q4. Max value of xy if x+y=8
+(a) 12
+(b) 16
+(c) 20
+(d) 24
+Answer: (b)
+Q5. Variance of Poisson
+(a) k
+(b) k+1
+(c) k-1
+(d) k+2
+Answer: (b)
+`
+
+    const result = classifyDocumentForImport({
+        fileName: 'AM-full-2.pdf',
+        text: appliedMathMcqText,
+    })
+
+    expect(result.documentType).toBe('MCQ_PAPER')
+    expect(result.hasTables).toBe(false)
+    expect(result.preferredStrategy).toBe('TEXT_EXACT')
+    expect(result.layoutRisk).toBe('LOW')
+})
+
 test('classifyDocumentForImport treats low-text PDFs as scanned-like and multimodal-first', () => {
     const result = classifyDocumentForImport({
         fileName: 'scan-heavy-paper.pdf',

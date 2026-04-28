@@ -115,7 +115,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     // or "ball goes off the table" tripped this and routed to multimodal
     // extraction, which timed out. Require a data-table context phrase; rely
     // on tableLikeRowCount for actual numeric tables.
-    const hasTables = /\b((?:answer\s+key|horizontal(?:\s+box)?|vertical(?:\s+box)?|following|data|box)\s+table|table\s+(?:below|above|shows?|showing|contains?|depicts?|displays?|displaying|presented|given|of\s+(?:values|answers?|contents|data)|illustrates?)|data interpretation|chart|graph|dataset|tabulation)\b/i.test(normalizedText)
+    const hasTables = /\b((?:answer\s+key|horizontal(?:\s+box)?|vertical(?:\s+box)?|following|data|box)\s+table|table\s+(?:below|above|shows?|showing|contains?|depicts?|displays?|displaying|presented|given|of\s+(?:values|answers?|contents|data)|illustrates?)|data interpretation|dataset|tabulation|(?:following|given|below|above|shown|provided|presented|data|bar|pie|line)\s+(?:chart|graph)|(?:chart|graph)\s+(?:below|above|shows?|showing|contains?|depicts?|displays?|displaying|presented|given|illustrates?|of\s+(?:values|answers?|contents|data)))\b/i.test(normalizedText)
         || tableLikeRowCount >= 2
     const hasPassages = /(read the passage|following passage|based on the passage|study the following passage|case study based|case-study based|case based)/i.test(normalizedText)
     const hasEmbeddedImages = /\[image(?:[:\]])/i.test(normalizedText)
