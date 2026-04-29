@@ -374,6 +374,61 @@ test('extractQuestionsFromDocumentText does not treat decimal continuation lines
     expect(analysis.questions[1]?.options.find((option) => option.isCorrect)?.id).toBe('B')
 })
 
+test('extractQuestionsFromDocumentText ignores zero-valued math continuation lines in full sequences', async () => {
+    const {
+        extractQuestionsFromDocumentText,
+        extractQuestionsFromDocumentTextPrecisely,
+    } = await aiServicePromise
+
+    const text = `
+Q1. Limit expression includes a continuation line:
+a) A
+b) B
+c) C
+d) D
+Answer: a) A
+Hint: f'(a-) = lim[h->0+] (|a-h-a| -
+0)/(-h), so the next line is math, not a question.
+Q2. Second question?
+a) A
+b) B
+c) C
+d) D
+Answer: b) B
+Q3. Third question?
+a) A
+b) B
+c) C
+d) D
+Answer: c) C
+Q4. Fourth question?
+a) A
+b) B
+c) C
+d) D
+Answer: d) D
+Q5. Fifth question?
+a) A
+b) B
+c) C
+d) D
+Answer: a) A
+`
+
+    const analysis = extractQuestionsFromDocumentText(text)
+    expect(analysis.detectedAsMcqDocument).toBe(true)
+    expect(analysis.questions).toHaveLength(5)
+    expect(analysis.expectedQuestionCount).toBe(5)
+    expect(analysis.invalidQuestionNumbers).toEqual([])
+    expect(analysis.exactMatchAchieved).toBe(true)
+
+    const precise = await extractQuestionsFromDocumentTextPrecisely(text)
+    expect(precise.detectedAsMcqDocument).toBe(true)
+    expect(precise.questions).toHaveLength(5)
+    expect(precise.expectedQuestionCount).toBe(5)
+    expect(precise.aiRepairUsed).toBe(false)
+})
+
 test('extractQuestionsFromDocumentText parses markdown heading numbered MCQs', async () => {
     const {
         extractQuestionsFromDocumentText,

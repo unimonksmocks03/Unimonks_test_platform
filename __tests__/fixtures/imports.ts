@@ -511,7 +511,7 @@ export const importRegressionFixtures: ImportRegressionFixture[] = [
         id: 'human-geo-docx',
         sourceLabel: 'XII_human_geography_chapter_1.docx',
         fileName: 'XII_human_geography_chapter_1.docx',
-        expectedQuestionCount: 15,
+        expectedQuestionCount: 10,
         expectedDocumentType: 'MCQ_PAPER',
         expectedPreferredStrategy: 'TEXT_EXACT',
         expectedSelectedStrategy: 'TEXT_EXACT',

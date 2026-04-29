@@ -48,6 +48,20 @@ function getNonEmptyLines(text: string) {
         .filter(Boolean)
 }
 
+function looksLikeQuestionStartLine(line: string) {
+    const trimmed = line.trim()
+
+    if (/^(?:question\s*|ques(?:tion)?\s*|ues\s*|q\s*)[1-9]\d*\s*(?:[.):\-]|\banswer\b)/i.test(trimmed)) {
+        return true
+    }
+
+    if (/^[1-9]\d*\s+(?:answer|correct answer)\b/i.test(trimmed)) {
+        return true
+    }
+
+    return /^[1-9]\d*\s*[.):\-]\s+\S/.test(trimmed)
+}
+
 function determineLayoutRisk(input: {
     isScannedLike: boolean
     hasTables: boolean
@@ -81,10 +95,7 @@ export function classifyDocumentForImport(input: ClassifyDocumentForImportInput)
     const nonEmptyLines = getNonEmptyLines(normalizedText)
     const oddOneOutSignature = `${normalizedText}\n${lowerFileName}`
 
-    const questionCount = countMatches(
-        normalizedText,
-        /(?:^|\n)\s*(?:question\s*|ques(?:tion)?\s*|ues\s*|q\s*)?\d+\s*(?:(?:[.):\-])(?!\d)|\banswer\b)/gi,
-    )
+    const questionCount = nonEmptyLines.filter(looksLikeQuestionStartLine).length
     const inlineOptionBurstCount = nonEmptyLines.filter((line) => {
         const optionMarkers = line.match(/\([A-Da-d1-4]\)|[A-Da-d1-4][.)\-:]/g) ?? []
         return optionMarkers.length >= 3

@@ -1945,9 +1945,10 @@ function parseQuestionBlock(
 }
 
 function buildExpectedQuestionSequence(questionNumbers: number[]) {
-    if (questionNumbers.length < 5) return null
+    const positiveQuestionNumbers = questionNumbers.filter(questionNumber => questionNumber > 0)
+    if (positiveQuestionNumbers.length < 5) return null
 
-    const uniqueQuestionNumbers = [...new Set(questionNumbers)].sort((left, right) => left - right)
+    const uniqueQuestionNumbers = [...new Set(positiveQuestionNumbers)].sort((left, right) => left - right)
     if (uniqueQuestionNumbers[0] !== 1) return null
 
     const maxQuestionNumber = uniqueQuestionNumbers.at(-1) ?? 0
@@ -2011,6 +2012,9 @@ function buildStructuredExtractionContext(text: string): StructuredExtractionCon
 
     const questionNumbers = [...questionBlocks.keys()].sort((left, right) => left - right)
     const expectedQuestionSequence = buildExpectedQuestionSequence(questionNumbers)
+    const expectedQuestionNumberSet = expectedQuestionSequence
+        ? new Set(expectedQuestionSequence)
+        : null
     const validQuestionsByNumber = new Map<number, GeneratedQuestion>()
     for (const parsedQuestion of parsedQuestions.values()) {
         if (parsedQuestion.valid && parsedQuestion.question) {
@@ -2055,7 +2059,9 @@ function buildStructuredExtractionContext(text: string): StructuredExtractionCon
             questions: orderedQuestions,
             expectedQuestionCount: expectedQuestionSequence?.length ?? null,
             exactMatchAchieved,
-            invalidQuestionNumbers: [...invalidQuestionNumbers].sort((left, right) => left - right),
+            invalidQuestionNumbers: [...invalidQuestionNumbers]
+                .filter(questionNumber => questionNumber > 0 && (!expectedQuestionNumberSet || expectedQuestionNumberSet.has(questionNumber)))
+                .sort((left, right) => left - right),
             missingQuestionNumbers,
             duplicateQuestionNumbers: [...duplicateQuestionNumbers].sort((left, right) => left - right),
         },

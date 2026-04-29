@@ -210,6 +210,55 @@ test('classifyDocumentForImport keeps text-described physics graph-choice PDFs i
     expect(result.layoutRisk).toBe('LOW')
 })
 
+test('classifyDocumentForImport ignores math continuation lines that look numeric', () => {
+    const mathMcqText = `
+Q1. Limit expression includes a continuation line:
+a) A
+b) B
+c) C
+d) D
+Answer: a) A
+Hint: f'(a-) = lim[h->0+] (|a-h-a| -
+0)/(-h), so the next line is math, not a question.
+Q2. Second question?
+a) A
+b) B
+c) C
+d) D
+Answer: b) B
+Q3. Third question?
+a) A
+b) B
+c) C
+d) D
+Answer: c) C
+Q4. Fourth question?
+a) A
+b) B
+c) C
+d) D
+Answer: d) D
+Q5. Expected value calculation ends with:
+a) 8
+b) 9
+c) 10
+d) 11
+Answer: c) 10
+Hint: 0.1 + 0.8 + 2.7 + 6.4 =
+10.
+`
+
+    const result = classifyDocumentForImport({
+        fileName: 'CUET_Math_Test1_With_Answers.pdf',
+        text: mathMcqText,
+    })
+
+    expect(result.documentType).toBe('MCQ_PAPER')
+    expect(result.detectedQuestionCount).toBe(5)
+    expect(result.preferredStrategy).toBe('TEXT_EXACT')
+    expect(result.layoutRisk).toBe('LOW')
+})
+
 test('classifyDocumentForImport treats low-text PDFs as scanned-like and multimodal-first', () => {
     const result = classifyDocumentForImport({
         fileName: 'scan-heavy-paper.pdf',
