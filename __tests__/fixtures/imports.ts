@@ -67,6 +67,46 @@ Explanation: Charge is a scalar quantity.
 Di culty: Easy
 `
 
+export const physicsGraphChoicePdfText = `
+UNIMONKS CUET
+FULL LENGTH TEST 3
+CUET (UG) - Physics
+Total questions are 50
+
+Q1. Let Ea be the electric field due to a dipole in its axial plane at distance l and Eq in the equatorial plane at distance l. The relation between Ea and Eq is:
+a) Ea = 2Eq
+b) Ea = Eq
+c) Eq = 2Ea
+d) Ea = 3Eq
+Answer: a) Ea = 2Eq
+Hint: Dipole axial field: Ea = 2kp/l^3.
+
+Q2. [FIGURE: Four graphs showing v vs V for electron accelerated from rest through potential difference V] The correct graph showing velocity v acquired by electron through potential difference V is:
+a) Curve concave upward
+b) Curve starting at origin, concave downward
+c) Straight line from origin
+d) Horizontal line
+Answer: b) Curve starting at origin, concave downward
+Hint: v = sqrt(2eV/m), so v is proportional to the square root of V.
+
+Q3. [FIGURE: Four graphs of B vs x for conductor of radius r with uniform current] Correct graph showing magnetic field B vs distance x from axis of conductor is:
+a) B increases linearly up to x=r, then decreases hyperbolically for x>r
+b) B starts high and decreases throughout
+c) B is constant for x less than r and zero after r
+d) B decreases linearly throughout
+Answer: a) B increases linearly up to x=r, then decreases hyperbolically for x>r
+Hint: Graph shows B=0 at x=0, rises linearly to peak at x=r, then falls hyperbolically.
+
+Q4. A nuclear reactor produces 20 MW power. If each fission releases 200 MeV and 1.6 neutrons are released per fission, number of neutrons produced per second is:
+a) 10^18
+b) 10^16
+c) 10^20
+d) 10^14
+Answer: a) 10^18
+Hint: Fissions/s = P/E = 20x10^6/(3.2x10^-11) =
+6.25x10^17. Neutrons/s = 1.6 x 6.25x10^17 = 10^18.
+`
+
 export const sportsPhysEdPdfText = `
 CUET (UG) – Physical Education
 UNIT – III: Theoretical Aspects of Games, Sports & Yogic Practice
@@ -438,6 +478,20 @@ export const importRegressionFixtures: ImportRegressionFixture[] = [
         acceptableDecision: 'EXACT_ACCEPTED',
         tags: ['pdf', 'born-digital', 'mcq-paper', 'clean-layout'],
         text: physicsPdfLikeMcqText,
+    },
+    {
+        id: 'physics-graph-choice-pdf',
+        sourceLabel: 'CUET_Physics_Test3_With_Answers.pdf',
+        fileName: 'CUET_Physics_Test3_With_Answers.pdf',
+        expectedQuestionCount: 4,
+        expectedDocumentType: 'MCQ_PAPER',
+        expectedPreferredStrategy: 'TEXT_EXACT',
+        expectedSelectedStrategy: 'TEXT_EXACT',
+        expectedLane: 'STABLE',
+        requiresVisualSnapshot: false,
+        acceptableDecision: 'EXACT_ACCEPTED',
+        tags: ['pdf', 'born-digital', 'mcq-paper', 'graph-choice', 'false-positive-guard'],
+        text: physicsGraphChoicePdfText,
     },
     {
         id: 'physed-sports-pdf',

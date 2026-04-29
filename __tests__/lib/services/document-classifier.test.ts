@@ -6,6 +6,7 @@ import {
     humanGeoDocxLikeMcqText,
     lowTextScannedPdfText,
     oddOneOutPdfText,
+    physicsGraphChoicePdfText,
     physicsPdfLikeMcqText,
     studyMaterialNotesText,
     tableHeavyQuantPdfText,
@@ -191,6 +192,20 @@ Answer: (b)
 
     expect(result.documentType).toBe('MCQ_PAPER')
     expect(result.hasTables).toBe(false)
+    expect(result.preferredStrategy).toBe('TEXT_EXACT')
+    expect(result.layoutRisk).toBe('LOW')
+})
+
+test('classifyDocumentForImport keeps text-described physics graph-choice PDFs in text-exact mode', () => {
+    const result = classifyDocumentForImport({
+        fileName: 'CUET_Physics_Test3_With_Answers.pdf',
+        text: physicsGraphChoicePdfText,
+    })
+
+    expect(result.documentType).toBe('MCQ_PAPER')
+    expect(result.detectedQuestionCount).toBe(4)
+    expect(result.hasTables).toBe(false)
+    expect(result.hasVisualReferences).toBe(false)
     expect(result.preferredStrategy).toBe('TEXT_EXACT')
     expect(result.layoutRisk).toBe('LOW')
 })
