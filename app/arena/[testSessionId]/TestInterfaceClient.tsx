@@ -471,18 +471,19 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
     // ── Navigator Grid ──
     const NavigatorGrid = () => (
         <>
-            <div className="grid grid-cols-5 gap-3">
+            <div className="grid grid-cols-5 gap-2.5 sm:grid-cols-8 sm:gap-3 lg:grid-cols-5">
                 {questions.map((_, idx) => (
-                    <div
+                    <button
                         key={idx}
+                        type="button"
                         onClick={() => goToQuestion(idx)}
-                        className={`aspect-square flex items-center justify-center rounded-xl text-sm transition-all ${navCellClass(getQuestionState(idx))}`}
+                        className={`aspect-square min-h-10 flex items-center justify-center rounded-xl text-sm transition-all ${navCellClass(getQuestionState(idx))}`}
                     >
                         {idx + 1}
-                    </div>
+                    </button>
                 ))}
             </div>
-            <div className="mt-8 pt-6 border-t border-slate-100 grid grid-cols-2 gap-y-4 gap-x-2 text-xs font-bold uppercase tracking-wider text-slate-500">
+            <div className="mt-5 border-t border-slate-100 pt-4 grid grid-cols-2 gap-x-2 gap-y-3 text-[11px] font-bold uppercase tracking-wide text-slate-500 sm:grid-cols-4 lg:mt-8 lg:grid-cols-2 lg:gap-y-4 lg:pt-6 lg:text-xs lg:tracking-wider">
                 <div className="flex items-center gap-2">
                     <div className="w-4 h-4 rounded-md bg-emerald-100 border border-emerald-200"></div> <span>Answered ({answeredCount})</span>
                 </div>
@@ -499,25 +500,64 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
         </>
     );
 
+    const StatusSummary = ({ showFinish = false }: { showFinish?: boolean }) => (
+        <div className="space-y-4">
+            <div className="flex items-center justify-between rounded-2xl bg-surface-2 px-4 py-3">
+                <span className="text-sm font-semibold text-slate-600">Time Remaining</span>
+                <span className={`font-mono font-bold text-lg tracking-widest ${timeLeft <= 300 ? "text-rose-600" : "text-slate-900"}`}>
+                    {formatTime(timeLeft)}
+                </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-600 font-bold">Answered</div>
+                    <div className="text-xl font-bold text-emerald-700">{answeredCount}</div>
+                </div>
+                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-amber-600 font-bold">Marked</div>
+                    <div className="text-xl font-bold text-amber-700">{markedCount}</div>
+                </div>
+                <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-indigo-600 font-bold">Progress</div>
+                    <div className="text-xl font-bold text-indigo-700">{answeredCount}/{questions.length}</div>
+                </div>
+                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Remaining</div>
+                    <div className="text-xl font-bold text-slate-700">{remaining}</div>
+                </div>
+            </div>
+            {showFinish ? (
+                <Button
+                    onClick={() => handleSubmit(false)}
+                    disabled={submitting}
+                    className="w-full bg-slate-900 hover:bg-black text-white font-bold rounded-xl h-12 shadow-sm"
+                >
+                    {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Finish Test
+                </Button>
+            ) : null}
+        </div>
+    );
+
     return (
-        <div className="min-h-screen bg-surface flex flex-col font-sans">
+        <div className="min-h-svh bg-surface flex flex-col overflow-x-hidden font-sans">
             {/* Top Bar */}
-            <div className="h-20 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-50">
-                <div className="flex items-center gap-4">
-                    <div className="bg-indigo-600 text-white font-serif font-bold h-10 w-10 flex items-center justify-center rounded-xl shadow-inner">
+            <div className="h-16 sm:h-20 bg-white border-b border-slate-200 px-3 sm:px-6 flex items-center justify-between sticky top-0 z-50">
+                <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+                    <div className="bg-indigo-600 text-white font-serif font-bold h-9 w-9 sm:h-10 sm:w-10 flex shrink-0 items-center justify-center rounded-xl shadow-inner">
                         UM
                     </div>
-                    <div>
-                        <h1 className="text-lg font-serif font-bold text-slate-900 leading-tight">Test Arena</h1>
-                        <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">
+                    <div className="min-w-0">
+                        <h1 className="truncate text-base sm:text-lg font-serif font-bold text-slate-900 leading-tight">Test Arena</h1>
+                        <p className="max-w-[145px] truncate text-[10px] sm:max-w-none sm:text-xs text-slate-500 font-semibold uppercase tracking-wide sm:tracking-wider">
                             {questions.length} Questions · {formatTime(timeLeft)} remaining
                         </p>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-4 sm:gap-6">
+                <div className="flex shrink-0 items-center gap-2 sm:gap-6">
                     {/* Timer Badge */}
-                    <div className={`font-mono font-bold text-lg tracking-widest px-4 py-2 rounded-xl ${timeLeft <= 300 ? "bg-rose-100 text-rose-700 animate-pulse" : "bg-slate-100 text-slate-800"}`}>
+                    <div className={`font-mono font-bold text-base sm:text-lg tracking-widest px-3 sm:px-4 py-2 rounded-xl ${timeLeft <= 300 ? "bg-rose-100 text-rose-700 animate-pulse" : "bg-slate-100 text-slate-800"}`}>
                         {formatTime(timeLeft)}
                     </div>
 
@@ -534,12 +574,15 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                                     <Grid3X3 className="h-5 w-5" />
                                 </Button>
                             </SheetTrigger>
-                            <SheetContent side="bottom" className="h-[80vh] rounded-t-[2rem] border-slate-200 shadow-clay-outer p-6">
-                                <SheetHeader className="mb-6 border-b border-slate-100 pb-4">
-                                    <SheetTitle className="font-serif font-bold text-slate-800 text-left text-xl flex items-center gap-2">
+                            <SheetContent side="bottom" className="h-[85svh] overflow-y-auto rounded-t-[2rem] border-slate-200 shadow-clay-outer p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-6">
+                                <SheetHeader className="mb-4 border-b border-slate-100 pb-4 sm:mb-6">
+                                    <SheetTitle className="font-serif font-bold text-slate-800 text-left text-lg sm:text-xl flex items-center gap-2">
                                         <Grid3X3 className="w-5 h-5 text-indigo-500" /> Question Navigator
                                     </SheetTitle>
                                 </SheetHeader>
+                                <div className="mb-5">
+                                    <StatusSummary showFinish />
+                                </div>
                                 <NavigatorGrid />
                             </SheetContent>
                         </Sheet>
@@ -548,17 +591,17 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
             </div>
 
             {/* Test Arena Body */}
-            <div className={`p-6 md:p-10 flex-1 grid ${navigatorOpen ? "grid-cols-1 lg:grid-cols-12" : "grid-cols-1"} gap-8 mx-auto w-full max-w-[1600px] transition-all`}>
+            <div className={`p-3 sm:p-5 md:p-8 lg:p-10 flex-1 grid ${navigatorOpen ? "grid-cols-1 lg:grid-cols-12" : "grid-cols-1"} gap-4 sm:gap-6 lg:gap-8 mx-auto w-full max-w-[1600px] transition-all`}>
                 {/* Left: Question */}
-                <div className={`${navigatorOpen ? "lg:col-span-8 xl:col-span-9" : "col-span-1 max-w-4xl mx-auto w-full"} flex flex-col bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden h-[calc(100vh-160px)] transition-all`}>
+                <div className={`${navigatorOpen ? "lg:col-span-8 xl:col-span-9" : "col-span-1 max-w-4xl mx-auto w-full"} flex min-h-[calc(100svh-5.5rem)] flex-col bg-white rounded-[1.5rem] sm:rounded-3xl border border-slate-200 shadow-sm overflow-visible lg:h-[calc(100svh-160px)] lg:overflow-hidden transition-all`}>
                     {/* Question Header */}
-                    <div className="px-10 py-6 border-b border-slate-100 flex items-center justify-between bg-surface/50">
-                        <div className="flex items-center gap-3">
-                            <span className="font-bold text-slate-400 uppercase tracking-widest text-sm">Question</span>
-                            <div className="bg-indigo-100 text-indigo-800 font-bold px-3 py-1 rounded-lg text-lg">{currentIndex + 1}</div>
-                            <span className="font-bold text-slate-400 uppercase tracking-widest text-sm">Of {questions.length}</span>
+                    <div className="px-4 py-4 sm:px-6 sm:py-5 lg:px-10 lg:py-6 border-b border-slate-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-surface/50">
+                        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+                            <span className="font-bold text-slate-400 uppercase tracking-[0.2em] text-xs sm:text-sm">Question</span>
+                            <div className="bg-indigo-100 text-indigo-800 font-bold px-2.5 sm:px-3 py-1 rounded-lg text-base sm:text-lg">{currentIndex + 1}</div>
+                            <span className="font-bold text-slate-400 uppercase tracking-[0.2em] text-xs sm:text-sm">Of {questions.length}</span>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                             {currentAnswer?.markedForReview && (
                                 <span className="bg-amber-100 text-amber-800 px-3 py-1 rounded-md font-bold text-[10px] uppercase tracking-wider">Marked for Review</span>
                             )}
@@ -571,9 +614,9 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                     </div>
 
                     {/* Question Content */}
-                    <div className="p-10 flex-1 overflow-auto">
+                    <div className="p-4 pb-28 sm:p-6 sm:pb-28 lg:p-10 lg:flex-1 lg:overflow-auto">
                         {currentQuestion.sharedContext || currentQuestion.references?.length ? (
-                            <div className="mb-6">
+                            <div className="mb-5 sm:mb-6">
                                 <SharedContextRenderer
                                     context={currentQuestion.sharedContext}
                                     references={currentQuestion.references}
@@ -581,56 +624,61 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                                 />
                             </div>
                         ) : null}
-                        <h3 className="text-2xl font-serif font-bold text-slate-900 mb-10 leading-snug">
+                        <h3 className="text-xl sm:text-2xl font-serif font-bold text-slate-900 mb-6 sm:mb-10 leading-snug break-words">
                             {currentQuestion.stem}
                         </h3>
 
-                        <RadioGroup value={selectedOption} onValueChange={handleSelectAnswer} className="flex flex-col space-y-4 max-w-3xl">
+                        <RadioGroup value={selectedOption} onValueChange={handleSelectAnswer} className="flex flex-col space-y-3 sm:space-y-4 max-w-3xl">
                             {currentQuestion.options.map((opt) => (
                                 <Label
                                     key={opt.id}
                                     htmlFor={`option-${opt.id}`}
-                                    className="flex items-center p-5 rounded-2xl border-2 border-slate-100 bg-white hover:border-indigo-300 hover:bg-indigo-50/50 cursor-pointer transition-all focus-within:ring-2 focus-within:ring-indigo-500/20 group has-[[data-state=checked]]:border-indigo-500 has-[[data-state=checked]]:bg-indigo-50/50"
+                                    className="flex items-start sm:items-center p-4 sm:p-5 rounded-2xl border-2 border-slate-100 bg-white hover:border-indigo-300 hover:bg-indigo-50/50 cursor-pointer transition-all focus-within:ring-2 focus-within:ring-indigo-500/20 group has-[[data-state=checked]]:border-indigo-500 has-[[data-state=checked]]:bg-indigo-50/50"
                                 >
-                                    <div className="flex items-center justify-center w-8 h-8 rounded-full border border-slate-300 group-has-[[data-state=checked]]:border-indigo-500 group-has-[[data-state=checked]]:bg-indigo-500 mr-4 transition-colors">
+                                    <div className="flex items-center justify-center w-8 h-8 rounded-full border border-slate-300 group-has-[[data-state=checked]]:border-indigo-500 group-has-[[data-state=checked]]:bg-indigo-500 mr-3 mt-0.5 shrink-0 transition-colors sm:mr-4 sm:mt-0">
                                         <RadioGroupItem value={opt.id} id={`option-${opt.id}`} className="sr-only" />
                                         <span className="text-sm font-bold text-slate-500 group-has-[[data-state=checked]]:text-white uppercase">{opt.id}</span>
                                     </div>
-                                    <span className="text-lg font-medium text-slate-700 group-has-[[data-state=checked]]:text-indigo-950 flex-1">{opt.text}</span>
+                                    <span className="min-w-0 flex-1 break-words text-base sm:text-lg font-medium leading-7 text-slate-700 group-has-[[data-state=checked]]:text-indigo-950">{opt.text}</span>
                                 </Label>
                             ))}
                         </RadioGroup>
                     </div>
 
                     {/* Footer Actions */}
-                    <div className="px-10 py-6 border-t border-slate-100 bg-surface/50 flex items-center justify-between">
-                        <div className="flex gap-2">
+                    <div className="sticky bottom-0 z-20 border-t border-slate-100 bg-surface/95 px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur sm:px-6 lg:static lg:px-10 lg:py-6 lg:backdrop-blur-none flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
                             <Button
                                 variant="ghost"
                                 disabled={currentIndex === 0}
                                 onClick={() => goToQuestion(currentIndex - 1)}
-                                className="font-bold text-slate-500 hover:text-slate-800 rounded-xl px-6 h-12"
+                                className="w-full font-bold text-slate-500 hover:text-slate-800 rounded-xl px-3 sm:px-6 h-11 sm:h-12"
                             >
-                                <ArrowLeft className="w-4 h-4 mr-2" /> Previous
+                                <ArrowLeft className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Previous</span><span className="sm:hidden">Prev</span>
                             </Button>
                             <Button
                                 variant="ghost"
                                 onClick={handleMarkForReview}
-                                className={`font-bold rounded-xl px-6 h-12 ${currentAnswer?.markedForReview ? "text-amber-600 bg-amber-50" : "text-slate-500 hover:text-amber-600 hover:bg-amber-50"}`}
+                                className={`w-full font-bold rounded-xl px-3 sm:px-6 h-11 sm:h-12 ${currentAnswer?.markedForReview ? "text-amber-600 bg-amber-50" : "text-slate-500 hover:text-amber-600 hover:bg-amber-50"}`}
                             >
-                                {currentAnswer?.markedForReview ? "✓ Marked" : "Mark for Review"}
+                                {currentAnswer?.markedForReview ? "Marked" : (
+                                    <>
+                                        <span className="sm:hidden">Review</span>
+                                        <span className="hidden sm:inline">Mark for Review</span>
+                                    </>
+                                )}
                             </Button>
                         </div>
-                        <div className="flex gap-4">
-                            <Button variant="outline" onClick={handleClear} className="font-bold border-slate-200 text-slate-600 rounded-xl px-6 h-12">
+                        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:gap-4">
+                            <Button variant="outline" onClick={handleClear} className="w-full font-bold border-slate-200 text-slate-600 rounded-xl px-3 sm:px-6 h-11 sm:h-12">
                                 Clear
                             </Button>
                             {currentIndex < questions.length - 1 ? (
-                                <Button onClick={() => goToQuestion(currentIndex + 1)} className="font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 h-12 shadow-sm text-base flex items-center">
-                                    Save & Next <ArrowRight className="ml-2 w-5 h-5" />
+                                <Button onClick={() => goToQuestion(currentIndex + 1)} className="w-full font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-3 sm:px-8 h-11 sm:h-12 shadow-sm text-sm sm:text-base flex items-center">
+                                    <span className="sm:hidden">Next</span><span className="hidden sm:inline">Save & Next</span> <ArrowRight className="ml-1 sm:ml-2 w-5 h-5" />
                                 </Button>
                             ) : (
-                                <Button onClick={() => handleSubmit(false)} disabled={submitting} className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-8 h-12 shadow-sm text-base flex items-center">
+                                <Button onClick={() => handleSubmit(false)} disabled={submitting} className="w-full font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-3 sm:px-8 h-11 sm:h-12 shadow-sm text-sm sm:text-base flex items-center">
                                     {submitting ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null}
                                     Finish Test
                                 </Button>
@@ -641,7 +689,7 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
 
                 {/* Right: Stats + Navigator */}
                 {navigatorOpen && (
-                    <div className="lg:col-span-4 xl:col-span-3 flex flex-col gap-6">
+                    <div className="hidden lg:col-span-4 xl:col-span-3 lg:flex flex-col gap-6">
                         {/* Status Card */}
                         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                             <div className="px-6 py-5 border-b border-slate-100 bg-surface flex items-center justify-between">
@@ -654,39 +702,8 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                                     </span>
                                 )}
                             </div>
-                            <div className="p-6 space-y-4">
-                                <div className="flex items-center justify-between rounded-2xl bg-surface-2 px-4 py-3">
-                                    <span className="text-sm font-semibold text-slate-600">Time Remaining</span>
-                                    <span className={`font-mono font-bold text-lg tracking-widest ${timeLeft <= 300 ? "text-rose-600" : "text-slate-900"}`}>
-                                        {formatTime(timeLeft)}
-                                    </span>
-                                </div>
-                                <div className="grid grid-cols-2 gap-3 text-sm">
-                                    <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3">
-                                        <div className="text-[10px] uppercase tracking-wider text-emerald-600 font-bold">Answered</div>
-                                        <div className="text-xl font-bold text-emerald-700">{answeredCount}</div>
-                                    </div>
-                                    <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3">
-                                        <div className="text-[10px] uppercase tracking-wider text-amber-600 font-bold">Marked</div>
-                                        <div className="text-xl font-bold text-amber-700">{markedCount}</div>
-                                    </div>
-                                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3">
-                                        <div className="text-[10px] uppercase tracking-wider text-indigo-600 font-bold">Answered</div>
-                                        <div className="text-xl font-bold text-indigo-700">{answeredCount}/{questions.length}</div>
-                                    </div>
-                                    <div className="bg-slate-100 border border-slate-200 rounded-2xl p-3">
-                                        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Remaining</div>
-                                        <div className="text-xl font-bold text-slate-700">{remaining}</div>
-                                    </div>
-                                </div>
-                                <Button
-                                    onClick={() => handleSubmit(false)}
-                                    disabled={submitting}
-                                    className="w-full bg-slate-900 hover:bg-black text-white font-bold rounded-xl h-12 shadow-sm"
-                                >
-                                    {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                                    Finish Test
-                                </Button>
+                            <div className="p-6">
+                                <StatusSummary showFinish />
                             </div>
                         </div>
 

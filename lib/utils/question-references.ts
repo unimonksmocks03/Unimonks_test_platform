@@ -1,7 +1,7 @@
 import { Prisma, QuestionReferenceKind, QuestionReferenceMode } from '@prisma/client'
 
 import {
-    sanitizeReferenceText,
+    sanitizePersistedReferenceText,
     sanitizeReferenceTitle,
     shouldRenderReferencePayload,
 } from '@/lib/utils/reference-sanitizer'
@@ -49,7 +49,9 @@ export function mapQuestionReferences(
         .sort((left, right) => left.order - right.order)
         .map((link) => {
             const title = sanitizeReferenceTitle(link.reference.title)
-            const textContent = sanitizeReferenceText(link.reference.textContent)
+            const textContent = sanitizePersistedReferenceText(link.reference.textContent, {
+                assetUrl: link.reference.assetUrl,
+            })
 
             if (!shouldRenderReferencePayload({
                 mode: link.reference.mode,

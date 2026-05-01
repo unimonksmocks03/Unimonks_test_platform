@@ -11,7 +11,7 @@ import {
     mapQuestionReferences,
     QUESTION_REFERENCE_LINK_SELECT,
 } from '@/lib/utils/question-references'
-import { sanitizeReferenceText } from '@/lib/utils/reference-sanitizer'
+import { sanitizePersistedSharedContext } from '@/lib/utils/reference-sanitizer'
 import { calculateQuestionAttemptSummary, calculateTotalMarks } from '@/lib/utils/test-settings'
 
 /**
@@ -537,7 +537,7 @@ function stripCorrectAnswers(
             id: question.id,
             order: question.order,
             stem: question.stem,
-            sharedContext: sanitizeReferenceText(question.sharedContext),
+            sharedContext: sanitizePersistedSharedContext(question.sharedContext),
             references: question.references ?? mapQuestionReferences(question.referenceLinks),
             options: safeOptions,
             difficulty: question.difficulty,

@@ -199,7 +199,7 @@ function FeedbackLoadingCard({ sessionId, onFeedbackReady }: { sessionId: string
     // Timed out state — show retry button
     if (timedOut) {
         return (
-            <div className="col-span-3 bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-3xl p-10 text-center">
+            <div className="md:col-span-3 bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-3xl p-6 sm:p-10 text-center">
                 <AlertTriangle className="h-10 w-10 text-amber-500 mx-auto mb-4" />
                 <p className="text-amber-900 font-serif font-bold text-lg">AI feedback is taking longer than expected</p>
                 <p className="text-amber-600 text-sm mt-2 font-medium">The analysis might still be processing. You can retry or check back later.</p>
@@ -211,7 +211,7 @@ function FeedbackLoadingCard({ sessionId, onFeedbackReady }: { sessionId: string
     }
 
     return (
-        <div className="col-span-3 bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-3xl p-10 text-center relative overflow-hidden">
+        <div className="md:col-span-3 bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-3xl p-6 sm:p-10 text-center relative overflow-hidden">
             <div className="absolute inset-0 opacity-5 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-400 to-transparent"></div>
             <div className="relative z-10">
                 <Loader2 className="h-10 w-10 text-indigo-500 animate-spin mx-auto mb-4" />
@@ -271,8 +271,8 @@ export default function ResultsPage() {
     // Loading skeleton
     if (isLoading) {
         return (
-            <div className="flex flex-col gap-8 w-full max-w-5xl mx-auto pb-16">
-                <div className="flex items-center justify-between border-b pb-6" style={{ borderColor: "var(--border-soft)" }}>
+            <div className="flex flex-col gap-5 sm:gap-8 w-full max-w-5xl mx-auto pb-16">
+                <div className="flex items-center justify-between border-b pb-5 sm:pb-6" style={{ borderColor: "var(--border-soft)" }}>
                     <Skeleton className="h-9 w-64" />
                 </div>
                 <Skeleton className="h-32 rounded-[2rem]" />
@@ -327,25 +327,25 @@ export default function ResultsPage() {
             : "bg-rose-100 text-rose-800";
 
     return (
-        <div className="flex flex-col gap-8 w-full max-w-5xl mx-auto pb-16">
+        <div className="flex flex-col gap-5 sm:gap-8 w-full max-w-5xl mx-auto pb-16">
             {/* Header */}
-            <div className="flex items-center justify-between border-b pb-6" style={{ borderColor: "var(--border-soft)" }}>
-                <div>
-                    <h1 className="text-3xl font-serif font-bold text-slate-900 tracking-tight">{test.title} — Results</h1>
+            <div className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-center sm:justify-between sm:pb-6" style={{ borderColor: "var(--border-soft)" }}>
+                <div className="min-w-0">
+                    <h1 className="text-2xl sm:text-3xl font-serif font-bold text-slate-900 tracking-tight break-words">{test.title} — Results</h1>
                     <p className="text-sm text-slate-500 mt-1">
                         Attempt {session.attemptNumber} of {PLATFORM_POLICY.maxPaidTotalAttempts} · Submitted {timeTakenLabel}
                     </p>
                 </div>
-                <Button asChild variant="outline" className="rounded-xl">
+                <Button asChild variant="outline" className="w-full rounded-xl sm:w-auto">
                     <Link href="/student/dashboard"><ArrowLeft className="h-4 w-4 mr-2" /> Dashboard</Link>
                 </Button>
             </div>
 
             {/* Score Banner */}
             <Card className="bg-white rounded-[2rem] border-0 overflow-hidden shadow-sm">
-                <CardContent className="p-8 md:p-10 flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white to-slate-50">
-                    <div className="flex items-center gap-8 border-b md:border-b-0 md:border-r border-slate-200 pb-8 md:pb-0 md:pr-12">
-                        <span className="text-6xl md:text-7xl font-extrabold text-slate-900 tracking-tighter">
+                <CardContent className="p-5 sm:p-8 md:p-10 flex flex-col md:flex-row md:items-center justify-between gap-6 sm:gap-8 bg-gradient-to-br from-white to-slate-50">
+                    <div className="flex w-full flex-col items-start gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-center sm:gap-6 md:w-auto md:border-b-0 md:border-r md:pb-0 md:pr-12">
+                        <span className="text-5xl sm:text-6xl md:text-7xl font-extrabold text-slate-900 tracking-tighter">
                             {Math.round(pct)}<span className="text-4xl text-slate-400">%</span>
                         </span>
                         <div className="flex flex-col items-start gap-2">
@@ -356,7 +356,7 @@ export default function ResultsPage() {
                             <span className="text-sm font-semibold text-slate-500">Overall Accuracy</span>
                         </div>
                     </div>
-                    <div className="flex-1 flex flex-row items-center justify-around gap-6 md:justify-end md:gap-16">
+                    <div className="w-full flex-1 grid grid-cols-2 gap-4 md:flex md:flex-row md:items-center md:justify-end md:gap-16">
                         <div className="flex flex-col gap-1 items-center md:items-start">
                             <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Score</span>
                             <span className="text-2xl font-serif font-bold text-slate-900">
@@ -375,7 +375,7 @@ export default function ResultsPage() {
             </Card>
 
             <Card className="bg-white rounded-3xl border-0 overflow-hidden shadow-sm">
-                <CardContent className="p-6 md:p-8">
+                <CardContent className="p-5 sm:p-6 md:p-8">
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Current Attempt</div>
@@ -416,12 +416,12 @@ export default function ResultsPage() {
                         </div>
                     </div>
 
-                    <div className="mt-5 flex flex-wrap items-center gap-3">
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                         <Badge className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${attemptStatusBadgeClass(session.status as AttemptSummary["status"])}`}>
                             {attemptStatusLabel(session.status as AttemptSummary["status"])}
                         </Badge>
                         {nextActionLabel ? (
-                            <Button asChild className="rounded-xl bg-slate-900 text-white hover:bg-black">
+                            <Button asChild className="w-full rounded-xl bg-slate-900 text-white hover:bg-black sm:w-auto">
                                 <Link href={`/arena/${test.id}`}>
                                     {latestInProgressAttempt ? <Repeat className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
                                     {nextActionLabel}
@@ -437,10 +437,10 @@ export default function ResultsPage() {
             </Card>
 
             <Card className="bg-white rounded-3xl border-0 overflow-hidden shadow-sm">
-                <CardHeader className="border-b bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
+                <CardHeader className="border-b bg-surface p-5 sm:p-6" style={{ borderColor: "var(--border-soft)" }}>
                     <CardTitle className="font-serif text-xl text-slate-900">Attempt History</CardTitle>
                 </CardHeader>
-                <CardContent className="p-6">
+                <CardContent className="p-5 sm:p-6">
                     <div className="flex flex-col gap-3">
                         {attemptSummary.attemptHistory.map((attempt) => {
                             const isCurrentAttempt = attempt.id === session.id;
@@ -500,8 +500,8 @@ export default function ResultsPage() {
             </Card>
 
             {/* AI Insights */}
-            <h2 className="text-2xl font-serif font-bold text-slate-900 tracking-tight mt-4">Performance Insights</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <h2 className="text-xl sm:text-2xl font-serif font-bold text-slate-900 tracking-tight mt-4">Performance Insights</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
                 {feedbackLoading || !feedback ? (
                     <FeedbackLoadingCard sessionId={sessionId} onFeedbackReady={fetchResults} />
                 ) : (
@@ -574,7 +574,7 @@ export default function ResultsPage() {
 
             {/* Question Breakdown */}
             <div className="flex flex-col mt-6 gap-6">
-                <h2 className="text-2xl font-serif font-bold text-slate-900 tracking-tight border-b pb-4" style={{ borderColor: "var(--border-soft)" }}>Question Breakdown</h2>
+                <h2 className="text-xl sm:text-2xl font-serif font-bold text-slate-900 tracking-tight border-b pb-4" style={{ borderColor: "var(--border-soft)" }}>Question Breakdown</h2>
 
                 <Accordion type="multiple" className="w-full space-y-4">
                     {questions.map((question, index) => {
@@ -587,10 +587,10 @@ export default function ResultsPage() {
                         const aiExplanation = feedback?.questionExplanations?.[String(index)] || feedback?.questionExplanations?.[question.id];
 
                         return (
-                            <AccordionItem value={`item-${index}`} key={question.id} className="border-0 bg-white rounded-3xl shadow-sm overflow-hidden" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
-                                <AccordionTrigger className="px-6 py-6 hover:no-underline hover:bg-slate-50 transition-colors [&[data-state=open]]:bg-slate-50">
-                                    <div className="flex items-center gap-6 text-left w-full justify-between pr-4">
-                                        <div className="flex items-center gap-4">
+                            <AccordionItem value={`item-${index}`} key={question.id} className="border-0 bg-white rounded-2xl sm:rounded-3xl shadow-sm overflow-hidden" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
+                                <AccordionTrigger className="px-4 py-5 sm:px-6 sm:py-6 hover:no-underline hover:bg-slate-50 transition-colors [&[data-state=open]]:bg-slate-50">
+                                    <div className="flex w-full flex-col gap-3 pr-3 text-left sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:pr-4">
+                                        <div className="flex min-w-0 items-start gap-3 sm:items-center sm:gap-4">
                                             {!wasAnswered ? (
                                                 <div className="bg-slate-100 text-slate-400 p-2 rounded-xl shrink-0">
                                                     <XCircle className="h-6 w-6" />
@@ -600,9 +600,9 @@ export default function ResultsPage() {
                                             ) : (
                                                 <div className="bg-rose-100 text-rose-600 p-2 rounded-xl shrink-0"><XCircle className="h-6 w-6" /></div>
                                             )}
-                                            <div className="font-serif font-semibold text-lg text-slate-900">Q{index + 1}. {question.stem}</div>
+                                            <div className="min-w-0 break-words font-serif font-semibold text-base sm:text-lg text-slate-900">Q{index + 1}. {question.stem}</div>
                                         </div>
-                                        <div className="flex items-center gap-2 shrink-0">
+                                        <div className="flex flex-wrap items-center gap-2 shrink-0">
                                             {question.difficulty && (
                                                 <Badge variant="outline" className={`text-[10px] uppercase ${question.difficulty === 'HARD' ? 'border-rose-300 text-rose-600' : question.difficulty === 'EASY' ? 'border-emerald-300 text-emerald-600' : 'border-amber-300 text-amber-600'}`}>
                                                     {question.difficulty}
@@ -614,7 +614,7 @@ export default function ResultsPage() {
                                         </div>
                                     </div>
                                 </AccordionTrigger>
-                                <AccordionContent className="px-6 pb-6 pt-0 bg-slate-50 border-t border-slate-100">
+                                <AccordionContent className="px-4 pb-5 pt-0 sm:px-6 sm:pb-6 bg-slate-50 border-t border-slate-100">
                                     {question.sharedContext || question.references?.length ? (
                                         <div className="mt-6">
                                             <SharedContextRenderer
@@ -628,9 +628,9 @@ export default function ResultsPage() {
                                         <div className="flex-1 flex flex-col gap-4">
                                             <div className="font-bold text-xs uppercase tracking-wider text-slate-400 mb-1">Your response:</div>
                                             {wasAnswered ? (
-                                                <div className={`p-4 rounded-xl border flex items-center justify-between ${isCorrect ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
-                                                    <span className="font-semibold text-base">{selectedOpt?.id}. {selectedOpt?.text}</span>
-                                                    {isCorrect ? <CheckCircle2 className="h-5 w-5 opacity-70" /> : <XCircle className="h-5 w-5 opacity-70" />}
+                                                <div className={`p-4 rounded-xl border flex items-start justify-between gap-3 ${isCorrect ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
+                                                    <span className="min-w-0 break-words font-semibold text-base">{selectedOpt?.id}. {selectedOpt?.text}</span>
+                                                    {isCorrect ? <CheckCircle2 className="h-5 w-5 shrink-0 opacity-70" /> : <XCircle className="h-5 w-5 shrink-0 opacity-70" />}
                                                 </div>
                                             ) : (
                                                 <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 text-slate-500">
@@ -641,9 +641,9 @@ export default function ResultsPage() {
                                             {!isCorrect && correct && (
                                                 <>
                                                     <div className="font-bold text-xs uppercase tracking-wider text-slate-400 mt-2">Correct Answer:</div>
-                                                    <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 flex items-center justify-between">
-                                                        <span className="font-semibold text-base">{correct.id}. {correct.text}</span>
-                                                        <CheckCircle2 className="h-5 w-5 opacity-70" />
+                                                    <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 flex items-start justify-between gap-3">
+                                                        <span className="min-w-0 break-words font-semibold text-base">{correct.id}. {correct.text}</span>
+                                                        <CheckCircle2 className="h-5 w-5 shrink-0 opacity-70" />
                                                     </div>
                                                 </>
                                             )}

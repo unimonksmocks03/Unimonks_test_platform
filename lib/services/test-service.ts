@@ -52,6 +52,8 @@ import {
 import { getPreferredVisualReference as selectPreferredVisualReference } from '@/lib/utils/question-reference-selection'
 import {
     sanitizeReferenceText,
+    sanitizePersistedReferenceText,
+    sanitizePersistedSharedContext,
     sanitizeReferenceTitle,
     shouldRenderReferencePayload,
 } from '@/lib/utils/reference-sanitizer'
@@ -259,6 +261,52 @@ function shouldAllowOneShotFallbackAfterChunkedExtraction(input: PdfMultimodalPr
     )
 }
 
+function shouldAttemptPdfReferenceEnrichment(input: {
+    isPdfUpload: boolean
+    classification: DocumentClassificationResult
+    plan: ReturnType<typeof resolveDocumentImportPlan>
+}) {
+    if (!input.isPdfUpload) {
+        return false
+    }
+
+    return (
+        input.classification.hasTables
+        || input.classification.hasPassages
+        || input.classification.hasMatchFollowing
+        || input.classification.hasVisualReferences
+        || input.classification.hasDiagramReasoning
+        || input.classification.isMixedLayout
+        || input.classification.isScannedLike
+        || input.plan.visualReferenceOverlay
+        || input.plan.manualVisualReferenceCapture === true
+    )
+}
+
+const REVIEW_STATUS_CONTENT_FREEZE = new Set([
+    'REVIEWED',
+    'CLEARED',
+    'CLEARED_FOR_PUBLISH',
+    'APPROVED',
+    'READY_TO_PUBLISH',
+])
+
+function getReferenceEnrichmentFreezeReason(test: {
+    status: TestStatus
+    reviewStatus: string | null
+}) {
+    if (test.status === 'PUBLISHED' || test.status === 'ARCHIVED') {
+        return `test is ${test.status.toLowerCase()}`
+    }
+
+    const reviewStatus = test.reviewStatus?.trim().toUpperCase() ?? null
+    if (reviewStatus && REVIEW_STATUS_CONTENT_FREEZE.has(reviewStatus)) {
+        return `review status is ${reviewStatus}`
+    }
+
+    return null
+}
+
 type GeneratedTextQuestionsResult = Awaited<ReturnType<typeof generateQuestionsFromText>>
 
 type DocumentGenerationResult =
@@ -403,7 +451,10 @@ function buildPersistedQuestionReferencePayload(question: {
 }): PersistedQuestionReferencePayload | null {
     const kind = (question.referenceKind ?? 'NONE') as QuestionReferenceKind
     const mode = (question.referenceMode ?? 'TEXT') as QuestionReferenceMode
-    const textContent = sanitizeReferenceText(question.sharedContext)
+    const textContent = sanitizePersistedReferenceText(question.sharedContext, {
+        assetUrl: question.referenceAssetUrl,
+        requireAllowedAutoContext: true,
+    })
     const title = sanitizeReferenceTitle(question.referenceTitle)
     const evidence = buildQuestionReferenceEvidence(question)
 
@@ -468,6 +519,7 @@ async function persistImportedQuestionReferences(input: {
             mode: payload.mode,
             title: payload.title,
             textContent: payload.textContent,
+            assetUrl: payload.assetUrl,
             sourcePage: payload.sourcePage,
         })
         const existing = groupedReferences.get(referenceKey)
@@ -825,6 +877,8 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
         select: {
             id: true,
             createdById: true,
+            status: true,
+            reviewStatus: true,
             questions: {
                 orderBy: { order: 'asc' },
                 select: {
@@ -850,11 +904,24 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
         return serviceError('FORBIDDEN', 'You can only enrich references for your own generated drafts.')
     }
 
+    const initialFreezeReason = getReferenceEnrichmentFreezeReason(existingTest)
+    if (initialFreezeReason) {
+        return {
+            testId: existingTest.id,
+            updatedQuestionCount: 0,
+            enrichedReferenceCount: 0,
+            skipped: true,
+            reason: 'Reference enrichment skipped because ' + initialFreezeReason + '.',
+        }
+    }
+
     const baseQuestions: GeneratedQuestion[] = existingTest.questions.map((question) => {
         const evidence = parseQuestionImportEvidence(question.importEvidence)
         return {
             stem: question.stem,
-            sharedContext: sanitizeReferenceText(question.sharedContext) ?? null,
+            sharedContext: sanitizePersistedSharedContext(question.sharedContext, {
+                requireAllowedAutoContext: true,
+            }) ?? null,
             options: Array.isArray(question.options)
                 ? question.options as GeneratedQuestion['options']
                 : [],
@@ -928,7 +995,30 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
         console.warn('[AI-DOC][ADMIN] Deferred snapshot upload failed:', error)
     }
 
-    await prisma.$transaction(async (tx) => {
+    const transactionResult = await prisma.$transaction(async (tx) => {
+        const currentTest = await tx.test.findUnique({
+            where: { id: existingTest.id },
+            select: {
+                id: true,
+                status: true,
+                reviewStatus: true,
+            },
+        })
+        if (!currentTest) {
+            return {
+                skipped: true,
+                reason: 'Reference enrichment skipped because the draft no longer exists.',
+            }
+        }
+
+        const freezeReason = getReferenceEnrichmentFreezeReason(currentTest)
+        if (freezeReason) {
+            return {
+                skipped: true,
+                reason: 'Reference enrichment skipped because ' + freezeReason + '.',
+            }
+        }
+
         for (const question of existingTest.questions) {
             const enriched = enrichedQuestions[question.order - 1]
             if (!enriched) {
@@ -938,7 +1028,9 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
             await tx.question.update({
                 where: { id: question.id },
                 data: {
-                    sharedContext: sanitizeReferenceText(enriched.sharedContext) ?? null,
+                    sharedContext: sanitizePersistedSharedContext(enriched.sharedContext, {
+                        requireAllowedAutoContext: true,
+                    }) ?? null,
                     importEvidence: buildQuestionImportEvidence(enriched),
                 },
             })
@@ -960,7 +1052,22 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
             })),
             tx,
         })
+
+        return {
+            skipped: false,
+            reason: null,
+        }
     })
+
+    if (transactionResult.skipped) {
+        return {
+            testId: existingTest.id,
+            updatedQuestionCount: 0,
+            enrichedReferenceCount: 0,
+            skipped: true,
+            reason: transactionResult.reason,
+        }
+    }
 
     return {
         testId: existingTest.id,
@@ -968,6 +1075,111 @@ export async function enrichImportedTestReferencesAfterDraft(input: {
         enrichedReferenceCount: enrichedQuestions.filter((question) =>
             Boolean(question.sharedContext || question.referenceKind && question.referenceKind !== 'NONE'),
         ).length,
+    }
+}
+
+export async function cleanupLeakedTestReferences(adminId: string, testId: string) {
+    const admin = await ensureActiveAdmin(adminId)
+    if ('error' in admin) {
+        return admin
+    }
+
+    const existingTest = await prisma.test.findUnique({
+        where: { id: testId },
+        select: {
+            id: true,
+            createdById: true,
+            questions: {
+                select: {
+                    id: true,
+                    sharedContext: true,
+                },
+            },
+            questionReferences: {
+                select: {
+                    id: true,
+                    title: true,
+                    textContent: true,
+                    assetUrl: true,
+                },
+            },
+        },
+    })
+
+    if (!existingTest) {
+        return serviceError('NOT_FOUND', 'Test not found')
+    }
+
+    if (existingTest.createdById !== admin.id && admin.role !== Role.ADMIN) {
+        return serviceError('FORBIDDEN', 'You can only clean references for your own tests.')
+    }
+
+    let clearedQuestionSharedContextCount = 0
+    let sanitizedQuestionSharedContextCount = 0
+    let clearedReferenceTextCount = 0
+    let sanitizedReferenceTextCount = 0
+    let sanitizedReferenceTitleCount = 0
+
+    await prisma.$transaction(async (tx) => {
+        for (const question of existingTest.questions) {
+            const sanitizedSharedContext = sanitizePersistedSharedContext(question.sharedContext)
+            if (sanitizedSharedContext === question.sharedContext) {
+                continue
+            }
+
+            await tx.question.update({
+                where: { id: question.id },
+                data: { sharedContext: sanitizedSharedContext },
+            })
+
+            if (sanitizedSharedContext) {
+                sanitizedQuestionSharedContextCount += 1
+            } else {
+                clearedQuestionSharedContextCount += 1
+            }
+        }
+
+        for (const reference of existingTest.questionReferences) {
+            const sanitizedTitle = sanitizeReferenceTitle(reference.title)
+            const sanitizedTextContent = sanitizePersistedReferenceText(reference.textContent, {
+                assetUrl: reference.assetUrl,
+            })
+
+            if (
+                sanitizedTitle === reference.title
+                && sanitizedTextContent === reference.textContent
+            ) {
+                continue
+            }
+
+            await tx.questionReference.update({
+                where: { id: reference.id },
+                data: {
+                    title: sanitizedTitle,
+                    textContent: sanitizedTextContent,
+                },
+            })
+
+            if (sanitizedTitle !== reference.title) {
+                sanitizedReferenceTitleCount += 1
+            }
+            if (sanitizedTextContent !== reference.textContent) {
+                if (sanitizedTextContent) {
+                    sanitizedReferenceTextCount += 1
+                } else {
+                    clearedReferenceTextCount += 1
+                }
+            }
+        }
+    })
+
+    return {
+        testId: existingTest.id,
+        clearedQuestionSharedContextCount,
+        sanitizedQuestionSharedContextCount,
+        clearedReferenceTextCount,
+        sanitizedReferenceTextCount,
+        sanitizedReferenceTitleCount,
     }
 }
 
@@ -1719,7 +1931,7 @@ export async function addAdminQuestion(adminId: string, testId: string, data: Cr
             testId,
             order: (lastQuestion?.order ?? 0) + 1,
             stem: data.stem,
-            sharedContext: sanitizeReferenceText(data.sharedContext) ?? null,
+            sharedContext: sanitizePersistedSharedContext(data.sharedContext) ?? null,
             options: data.options as unknown as Prisma.InputJsonValue,
             explanation: data.explanation,
             difficulty: (data.difficulty ?? 'MEDIUM') as Difficulty,
@@ -1774,7 +1986,7 @@ export async function updateAdminQuestion(
         updateData.stem = data.stem
     }
     if (data.sharedContext !== undefined) {
-        updateData.sharedContext = sanitizeReferenceText(data.sharedContext) ?? null
+        updateData.sharedContext = sanitizePersistedSharedContext(data.sharedContext) ?? null
     }
     if (data.options !== undefined) {
         updateData.options = data.options as unknown as Prisma.InputJsonValue
@@ -1880,16 +2092,9 @@ export async function upsertAdminQuestionReferenceImage(
             ? importEvidence.referenceKind as QuestionReferenceKind
             : 'DIAGRAM')
 
-    const nextMode = (() => {
-        const existingMode = existingVisualReference?.mode ?? (importEvidence.referenceMode as QuestionReferenceMode | null) ?? null
-        if (existingMode === 'HYBRID' || existingMode === 'SNAPSHOT') {
-            return existingMode
-        }
+    const nextMode: QuestionReferenceMode = 'SNAPSHOT'
 
-        return existingQuestion.sharedContext?.trim() ? 'HYBRID' : 'SNAPSHOT'
-    })()
-
-        const nextTitle = sanitizeReferenceTitle(existingVisualReference?.title)
+    const nextTitle = sanitizeReferenceTitle(existingVisualReference?.title)
         ?? sanitizeReferenceTitle(importEvidence.referenceTitle)
         ?? null
 
@@ -1918,10 +2123,7 @@ export async function upsertAdminQuestionReferenceImage(
                         kind: nextKind,
                         mode: nextMode,
                         title: nextTitle,
-                        textContent:
-                            sanitizeReferenceText(existingVisualReference.textContent)
-                            ?? sanitizeReferenceText(existingQuestion.sharedContext)
-                            ?? null,
+                        textContent: null,
                         assetUrl: uploadedSnapshot.assetUrl,
                         sourcePage: existingVisualReference.sourcePage,
                         bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
@@ -1949,10 +2151,7 @@ export async function upsertAdminQuestionReferenceImage(
                         kind: nextKind,
                         mode: nextMode,
                         title: nextTitle,
-                        textContent:
-                            sanitizeReferenceText(existingVisualReference.textContent)
-                            ?? sanitizeReferenceText(existingQuestion.sharedContext)
-                            ?? null,
+                        textContent: null,
                         assetUrl: uploadedSnapshot.assetUrl,
                         bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
                         evidence: mergeReferenceEvidence(existingVisualReference.evidence as Prisma.JsonValue | null, {
@@ -1969,7 +2168,7 @@ export async function upsertAdminQuestionReferenceImage(
                     kind: nextKind,
                     mode: nextMode,
                     title: nextTitle,
-                    textContent: sanitizeReferenceText(existingQuestion.sharedContext) ?? null,
+                    textContent: null,
                     assetUrl: uploadedSnapshot.assetUrl,
                     sourcePage: importEvidence.sourcePage ?? null,
                     bbox: uploadedSnapshot.bbox ?? Prisma.JsonNull,
@@ -2337,12 +2536,19 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
         message: undefined as string | undefined,
     }
 
-    const shouldDeferReferenceEnrichment = Boolean(input.deferReferenceEnrichment && isPdfUpload)
     const importPlan = resolveDocumentImportPlan({
         classifierRoutingEnabled: isClassifierRoutingEnabled(),
         classification: importDiagnostics.classification,
         isPdfUpload,
     })
+    const shouldAttemptReferenceEnrichment = shouldAttemptPdfReferenceEnrichment({
+        isPdfUpload,
+        classification: importDiagnostics.classification,
+        plan: importPlan,
+    })
+    const shouldDeferReferenceEnrichment = Boolean(
+        input.deferReferenceEnrichment && shouldAttemptReferenceEnrichment,
+    )
     importDiagnostics.lane = importPlan.lane
     const preferChunkedPdfExtraction = shouldPreferChunkedPdfExtraction({
         isPdfUpload,
@@ -2838,7 +3044,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
 
     const baseTitle = uploadValidation.sanitizedFileName.replace(/\.(docx|pdf)$/i, '')
     let questionsWithSharedContext = result.questions
-    if (isPdfUpload && !shouldDeferReferenceEnrichment) {
+    if (shouldAttemptReferenceEnrichment && !shouldDeferReferenceEnrichment) {
         try {
             questionsWithSharedContext = annotateQuestionsWithReferencePolicy(
                 await attachSharedContextsFromPdf(buffer, result.questions),
@@ -2944,7 +3150,9 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
                     explanation: question.explanation || null,
                     difficulty: (question.difficulty as Difficulty | undefined) || 'MEDIUM',
                     topic: question.topic || null,
-                    sharedContext: sanitizeReferenceText(question.sharedContext) ?? null,
+                    sharedContext: sanitizePersistedSharedContext(question.sharedContext, {
+                        requireAllowedAutoContext: true,
+                    }) ?? null,
                     importEvidence: buildQuestionImportEvidence(question),
                 })),
             },
@@ -2963,7 +3171,7 @@ export async function generateAdminTestFromDocument(input: AdminDocumentGenerati
     })
 
     let finalQuestionsWithAssets = finalQuestions
-    if (isPdfUpload && !shouldDeferReferenceEnrichment) {
+    if (shouldAttemptReferenceEnrichment && !shouldDeferReferenceEnrichment) {
         try {
             const uploadedSnapshots = await uploadPdfReferenceSnapshots({
                 buffer,

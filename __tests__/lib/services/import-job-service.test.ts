@@ -491,6 +491,70 @@ test('processDocumentImportJob creates PDF drafts first and queues deferred refe
     )
 })
 
+test('processDocumentImportJob does not queue clean PDF imports when reference enrichment was not deferred', async () => {
+    prismaMock.documentImportJob.findUnique.mockResolvedValueOnce({
+        ...createJobSummary({
+            id: 'job-clean-pdf',
+            adminId: 'admin-1',
+            status: 'QUEUED',
+            stage: 'QUEUED',
+            fileName: 'clean.pdf',
+            mimeType: 'application/pdf',
+            fileSize: 11,
+            fileData: Buffer.from('Mock upload'),
+            requestedTitle: 'AI Test - Clean',
+            requestedCount: 50,
+        }),
+    })
+    prismaMock.documentImportJob.update
+        .mockResolvedValueOnce(createJobSummary({
+            id: 'job-clean-pdf',
+            status: 'PROCESSING',
+            stage: 'PROCESSING_EXACT',
+            fileName: 'clean.pdf',
+        }))
+        .mockResolvedValueOnce(createJobSummary({
+            id: 'job-clean-pdf',
+            status: 'SUCCEEDED',
+            stage: 'SUCCEEDED',
+            fileName: 'clean.pdf',
+            testId: 'test-clean-pdf',
+            result: { test: { id: 'test-clean-pdf' }, questionsGenerated: 50 },
+        }))
+
+    generateAdminTestFromDocumentMock.mockResolvedValue({
+        test: { id: 'test-clean-pdf', title: 'AI Test - Clean', reviewStatus: null },
+        strategy: 'EXTRACTED',
+        extractedQuestions: 50,
+        generationTarget: null,
+        questionsGenerated: 50,
+        failedCount: 0,
+        cost: null,
+        importDiagnostics: {
+            warning: null,
+            referenceEnrichmentDeferred: false,
+        },
+    })
+
+    const { processDocumentImportJob } = await servicePromise
+    const result = await processDocumentImportJob('job-clean-pdf')
+
+    expect(result.kind).toBe('succeeded')
+    expect(generateAdminTestFromDocumentMock).toHaveBeenCalledWith(expect.objectContaining({
+        deferReferenceEnrichment: true,
+    }))
+    expect(enqueueDocumentImportReferenceEnrichmentMock).not.toHaveBeenCalled()
+    expect(prismaMock.documentImportJob.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+            where: { id: 'job-clean-pdf' },
+            data: expect.objectContaining({
+                stage: 'SUCCEEDED',
+                fileData: null,
+            }),
+        }),
+    )
+})
+
 test('processDocumentImportJob completes deferred reference enrichment and clears file bytes', async () => {
     prismaMock.documentImportJob.findUnique.mockResolvedValueOnce({
         ...createJobSummary({
@@ -556,6 +620,69 @@ test('processDocumentImportJob completes deferred reference enrichment and clear
             where: { id: 'job-enrich' },
             data: expect.objectContaining({
                 stage: 'SUCCEEDED',
+                fileData: null,
+            }),
+        }),
+    )
+})
+
+test('processDocumentImportJob records intentionally skipped deferred enrichment and clears file bytes', async () => {
+    prismaMock.documentImportJob.findUnique.mockResolvedValueOnce({
+        ...createJobSummary({
+            id: 'job-enrich-skipped',
+            adminId: 'admin-1',
+            status: 'SUCCEEDED',
+            stage: 'ENRICHING_REFERENCES',
+            fileName: 'figure.pdf',
+            mimeType: 'application/pdf',
+            fileSize: 11,
+            fileData: Buffer.from('Mock upload'),
+            requestedTitle: 'AI Test - Figure',
+            requestedCount: 50,
+            testId: 'test-pdf',
+            result: { test: { id: 'test-pdf' }, questionsGenerated: 50 },
+            startedAt: new Date('2026-04-13T10:00:01.000Z'),
+            completedAt: new Date('2026-04-13T10:00:04.000Z'),
+        }),
+    })
+    prismaMock.documentImportJob.update
+        .mockResolvedValueOnce(createJobSummary({
+            id: 'job-enrich-skipped',
+            status: 'SUCCEEDED',
+            stage: 'ENRICHING_REFERENCES',
+            fileName: 'figure.pdf',
+            message: 'Draft created. Reference enrichment is running in the background.',
+            progressMessage: 'Enriching shared references, tables, and diagram context.',
+            testId: 'test-pdf',
+        }))
+        .mockResolvedValueOnce(createJobSummary({
+            id: 'job-enrich-skipped',
+            status: 'SUCCEEDED',
+            stage: 'SUCCEEDED',
+            fileName: 'figure.pdf',
+            message: 'Import completed successfully. Reference enrichment was skipped.',
+            progressMessage: 'Reference enrichment skipped because test is published.',
+            testId: 'test-pdf',
+        }))
+    enrichImportedTestReferencesAfterDraftMock.mockResolvedValue({
+        testId: 'test-pdf',
+        updatedQuestionCount: 0,
+        enrichedReferenceCount: 0,
+        skipped: true,
+        reason: 'Reference enrichment skipped because test is published.',
+    })
+
+    const { processDocumentImportJob } = await servicePromise
+    const result = await processDocumentImportJob('job-enrich-skipped', 'REFERENCE_ENRICHMENT')
+
+    expect(result.kind).toBe('succeeded')
+    expect(prismaMock.documentImportJob.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+            where: { id: 'job-enrich-skipped' },
+            data: expect.objectContaining({
+                stage: 'SUCCEEDED',
+                message: 'Import completed successfully. Reference enrichment was skipped.',
+                progressMessage: 'Reference enrichment skipped because test is published.',
                 fileData: null,
             }),
         }),

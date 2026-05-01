@@ -4,7 +4,12 @@ import {
     mapQuestionReferences,
     type QuestionReferenceView,
 } from '@/lib/utils/question-references'
-import { sanitizeReferenceText } from '@/lib/utils/reference-sanitizer'
+import {
+    sanitizePersistedReferenceText,
+    sanitizePersistedSharedContext,
+    sanitizeReferenceTitle,
+    shouldRenderReferencePayload,
+} from '@/lib/utils/reference-sanitizer'
 
 export type SessionQuestionSnapshot = {
     id: string
@@ -51,6 +56,55 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function sanitizeSnapshotReferences(value: unknown): QuestionReferenceView[] {
+    if (!Array.isArray(value)) {
+        return []
+    }
+
+    return value
+        .map((reference, index): QuestionReferenceView | null => {
+            if (!isObjectRecord(reference)) {
+                return null
+            }
+
+            const id = typeof reference.id === 'string' ? reference.id : null
+            const kind = typeof reference.kind === 'string' ? reference.kind : null
+            const mode = typeof reference.mode === 'string' ? reference.mode : null
+            if (!id || !kind || !mode) {
+                return null
+            }
+
+            const assetUrl = typeof reference.assetUrl === 'string' ? reference.assetUrl : null
+            const title = sanitizeReferenceTitle(
+                typeof reference.title === 'string' ? reference.title : null,
+            )
+            const textContent = sanitizePersistedReferenceText(
+                typeof reference.textContent === 'string' ? reference.textContent : null,
+                { assetUrl },
+            )
+
+            if (!shouldRenderReferencePayload({ mode, title, textContent, assetUrl })) {
+                return null
+            }
+
+            return {
+                id,
+                order: Number.isInteger(reference.order) ? Number(reference.order) : index + 1,
+                kind: kind as QuestionReferenceView['kind'],
+                mode: mode as QuestionReferenceView['mode'],
+                title,
+                textContent,
+                assetUrl,
+                sourcePage: Number.isInteger(reference.sourcePage) ? Number(reference.sourcePage) : null,
+                bbox: (reference.bbox ?? null) as Prisma.JsonValue | null,
+                confidence: typeof reference.confidence === 'number' ? reference.confidence : null,
+                evidence: (reference.evidence ?? null) as Prisma.JsonValue | null,
+            }
+        })
+        .filter((reference): reference is QuestionReferenceView => reference !== null)
+        .sort((left, right) => left.order - right.order)
+}
+
 function parseSnapshotQuestion(value: unknown): SessionQuestionSnapshot | null {
     if (!isObjectRecord(value)) {
         return null
@@ -70,15 +124,13 @@ function parseSnapshotQuestion(value: unknown): SessionQuestionSnapshot | null {
         order: Number(value.order),
         stem: value.stem,
         sharedContext: typeof value.sharedContext === 'string'
-            ? sanitizeReferenceText(value.sharedContext)
+            ? sanitizePersistedSharedContext(value.sharedContext)
             : null,
         options: (value.options ?? null) as Prisma.JsonValue,
         difficulty: value.difficulty,
         topic: typeof value.topic === 'string' ? value.topic : null,
         explanation: typeof value.explanation === 'string' ? value.explanation : null,
-        references: Array.isArray(value.references)
-            ? value.references as QuestionReferenceView[]
-            : [],
+        references: sanitizeSnapshotReferences(value.references),
     }
 }
 
@@ -92,12 +144,14 @@ export function buildSessionTestSnapshot(source: SnapshotTestSource): SessionTes
             id: question.id,
             order: question.order,
             stem: question.stem,
-            sharedContext: sanitizeReferenceText(question.sharedContext),
+            sharedContext: sanitizePersistedSharedContext(question.sharedContext),
             options: question.options,
             difficulty: question.difficulty,
             topic: question.topic,
             explanation: question.explanation ?? null,
-            references: question.references ?? mapQuestionReferences(question.referenceLinks),
+            references: question.references
+                ? sanitizeSnapshotReferences(question.references)
+                : mapQuestionReferences(question.referenceLinks),
         })),
     }
 }

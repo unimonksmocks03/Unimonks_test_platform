@@ -115,4 +115,33 @@ describe('mapQuestionReferences', () => {
             }),
         ])
     })
+
+    it('treats image references as image-first and drops fallback text', () => {
+        const mapped = mapQuestionReferences([
+            {
+                order: 1,
+                reference: {
+                    id: 'ref-image',
+                    kind: 'DIAGRAM',
+                    mode: 'SNAPSHOT',
+                    title: 'Manual snapshot',
+                    textContent: 'c) hypothesis\nd) parameter\nAnswer: c\nHint: sample data',
+                    assetUrl: 'https://example.com/snapshot.png',
+                    sourcePage: 4,
+                    bbox: null,
+                    confidence: 0.9,
+                    evidence: null,
+                },
+            },
+        ])
+
+        expect(mapped).toEqual([
+            expect.objectContaining({
+                id: 'ref-image',
+                title: 'Manual snapshot',
+                textContent: null,
+                assetUrl: 'https://example.com/snapshot.png',
+            }),
+        ])
+    })
 })

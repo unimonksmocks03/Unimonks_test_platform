@@ -81,18 +81,18 @@ const MAX_ATTEMPTS = PLATFORM_POLICY.maxPaidTotalAttempts;
 
 function DashboardSkeleton() {
     return (
-        <div className="flex flex-col gap-8 w-full max-w-6xl mx-auto pb-10">
+        <div className="flex flex-col gap-5 sm:gap-8 w-full max-w-6xl mx-auto pb-10">
             <div className="border-b pb-6" style={{ borderColor: "var(--border-soft)" }}>
                 <Skeleton className="h-9 w-64 mb-2" />
                 <Skeleton className="h-4 w-80" />
             </div>
             <Skeleton className="h-56 rounded-[2rem]" />
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
                 {[1, 2, 3, 4].map((index) => (
                     <Skeleton key={index} className="h-28 rounded-3xl" />
                 ))}
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] gap-5 sm:gap-8">
                 <Skeleton className="h-[560px] rounded-3xl" />
                 <Skeleton className="h-[560px] rounded-3xl" />
             </div>
@@ -176,19 +176,19 @@ export default function StudentDashboard() {
     const selectedBatchLabel = batchCards.find((batch) => batch.id === selectedBatchId)?.name ?? "All Tests";
 
     return (
-        <div className="flex flex-col gap-8 w-full max-w-6xl mx-auto pb-10">
-            <div className="flex items-center justify-between border-b pb-6" style={{ borderColor: "var(--border-soft)" }}>
+        <div className="flex flex-col gap-5 sm:gap-8 w-full max-w-6xl mx-auto pb-10">
+            <div className="flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-center sm:justify-between sm:pb-6" style={{ borderColor: "var(--border-soft)" }}>
                 <div>
-                    <h1 className="text-3xl font-serif font-bold text-slate-900 tracking-tight">Student Dashboard</h1>
-                    <p className="text-slate-500 mt-1">Track every paid attempt, resume in-progress mocks, and jump straight into tests by batch or by name.</p>
+                    <h1 className="text-2xl sm:text-3xl font-serif font-bold text-slate-900 tracking-tight">Student Dashboard</h1>
+                    <p className="text-sm sm:text-base text-slate-500 mt-1">Track every paid attempt, resume in-progress mocks, and jump straight into tests by batch or by name.</p>
                 </div>
             </div>
 
             <Card className="rounded-3xl border-0 bg-white" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
-                <CardHeader className="border-b bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
+                <CardHeader className="border-b bg-surface p-5 sm:p-6" style={{ borderColor: "var(--border-soft)" }}>
                     <CardTitle className="font-serif text-xl text-slate-800">Find Tests Faster</CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-5 p-6">
+                <CardContent className="flex flex-col gap-4 sm:gap-5 p-4 sm:p-6">
                     <div className="relative">
                         <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <Input
@@ -233,14 +233,14 @@ export default function StudentDashboard() {
             </Card>
 
             {featuredTest ? (
-                <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-indigo-500 via-indigo-600 to-indigo-800 p-8 md:p-10" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
-                    <div className="relative z-10 flex flex-col gap-8 md:flex-row md:items-end md:justify-between">
-                        <div className="max-w-3xl space-y-4">
+                <div className="relative overflow-hidden rounded-[1.5rem] sm:rounded-[2rem] bg-gradient-to-br from-indigo-500 via-indigo-600 to-indigo-800 p-5 sm:p-8 md:p-10" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
+                    <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-end md:justify-between md:gap-8">
+                        <div className="max-w-3xl space-y-4 min-w-0">
                             <Badge className="bg-white/20 hover:bg-white/20 text-white border-0 font-bold uppercase tracking-wider text-[10px] px-3 py-1">
                                 {featuredTest.hasInProgressSession ? "Resume Available" : featuredTest.canStartAttempt ? "Next Paid Mock" : "Attempt Summary"}
                             </Badge>
                             <div>
-                                <h2 className="text-2xl md:text-3xl font-serif font-bold text-white leading-tight">{featuredTest.title}</h2>
+                                <h2 className="text-2xl md:text-3xl font-serif font-bold text-white leading-tight break-words">{featuredTest.title}</h2>
                                 {featuredTest.description && (
                                     <p className="mt-2 text-sm text-indigo-100/90 leading-relaxed">{featuredTest.description}</p>
                                 )}
@@ -269,15 +269,15 @@ export default function StudentDashboard() {
                             </div>
                         </div>
 
-                        <div className="flex flex-col items-start gap-4 md:items-end">
+                        <div className="flex w-full flex-col items-start gap-4 md:w-auto md:items-end">
                             {featuredAction ? (
-                                <Button asChild className="rounded-2xl bg-emerald-400 px-8 py-6 text-base font-bold text-slate-950 shadow-clay-inner hover:bg-emerald-300">
+                                <Button asChild className="w-full rounded-2xl bg-emerald-400 px-8 py-6 text-base font-bold text-slate-950 shadow-clay-inner hover:bg-emerald-300 md:w-auto">
                                     <Link href={featuredAction.href}>
                                         {featuredAction.label} <ArrowRight className="ml-2 h-5 w-5" />
                                     </Link>
                                 </Button>
                             ) : (
-                                <Button disabled className="rounded-2xl bg-white/20 px-8 py-6 text-base font-bold text-white">
+                                <Button disabled className="w-full rounded-2xl bg-white/20 px-8 py-6 text-base font-bold text-white md:w-auto">
                                     Attempt limit reached
                                 </Button>
                             )}
@@ -292,7 +292,7 @@ export default function StudentDashboard() {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-6 md:grid-cols-4">
                 {[
                     { label: "Assigned Tests", value: data.tests.length },
                     { label: "Completed Attempts", value: data.stats.completedAttempts },
@@ -300,17 +300,17 @@ export default function StudentDashboard() {
                     { label: "Best Score", value: `${data.stats.bestScore}%` },
                 ].map((metric) => (
                     <Card key={metric.label} className="rounded-2xl border-0 bg-white" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
-                        <CardContent className="p-5 text-center">
-                            <div className="text-2xl font-serif font-bold text-slate-900">{metric.value}</div>
+                        <CardContent className="p-4 sm:p-5 text-center">
+                            <div className="text-xl sm:text-2xl font-serif font-bold text-slate-900">{metric.value}</div>
                             <div className="mt-1 text-xs font-medium text-slate-500">{metric.label}</div>
                         </CardContent>
                     </Card>
                 ))}
             </div>
 
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] items-start">
+            <div className="grid grid-cols-1 gap-5 sm:gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] items-start">
                 <Card className="rounded-3xl border-0 bg-white" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
-                    <CardHeader className="border-b bg-surface p-8" style={{ borderColor: "var(--border-soft)" }}>
+                    <CardHeader className="border-b bg-surface p-5 sm:p-8" style={{ borderColor: "var(--border-soft)" }}>
                         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                             <CardTitle className="font-serif text-xl text-slate-800">Assigned Mock Tests</CardTitle>
                             <div className="text-sm font-medium text-slate-500">
@@ -320,7 +320,7 @@ export default function StudentDashboard() {
                             </div>
                         </div>
                     </CardHeader>
-                    <CardContent className="flex flex-col gap-6 p-8">
+                    <CardContent className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6 lg:p-8">
                         {visibleTests.length === 0 ? (
                             <div className="py-10 text-center text-slate-400">
                                 {data.tests.length === 0
@@ -332,11 +332,11 @@ export default function StudentDashboard() {
                                 const action = getPrimaryAction(test);
 
                                 return (
-                                    <div key={test.id} className="rounded-3xl border border-slate-200 bg-slate-50/70 p-6">
-                                        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-                                            <div className="space-y-4">
+                                    <div key={test.id} className="rounded-2xl sm:rounded-3xl border border-slate-200 bg-slate-50/70 p-4 sm:p-6">
+                                        <div className="flex flex-col gap-5 sm:gap-6 lg:flex-row lg:items-start lg:justify-between">
+                                            <div className="min-w-0 space-y-4">
                                                 <div>
-                                                    <h3 className="font-serif text-2xl font-bold text-slate-900">{test.title}</h3>
+                                                    <h3 className="font-serif text-xl sm:text-2xl font-bold text-slate-900 break-words">{test.title}</h3>
                                                     {test.description && (
                                                         <p className="mt-2 text-sm leading-relaxed text-slate-500">{test.description}</p>
                                                     )}
@@ -394,13 +394,13 @@ export default function StudentDashboard() {
                                                 </div>
                                             </div>
 
-                                            <div className="flex flex-col items-start gap-3 lg:items-end">
+                                            <div className="flex w-full flex-col items-start gap-3 lg:w-auto lg:items-end">
                                                 {action ? (
-                                                    <Button asChild className="rounded-xl bg-slate-900 px-6 font-bold text-white hover:bg-black">
+                                                    <Button asChild className="w-full rounded-xl bg-slate-900 px-6 font-bold text-white hover:bg-black lg:w-auto">
                                                         <Link href={action.href}>{action.label}</Link>
                                                     </Button>
                                                 ) : (
-                                                    <Button disabled className="rounded-xl px-6 font-bold">
+                                                    <Button disabled className="w-full rounded-xl px-6 font-bold lg:w-auto">
                                                         Attempt limit reached
                                                     </Button>
                                                 )}
@@ -449,10 +449,10 @@ export default function StudentDashboard() {
 
                 <div className="flex flex-col gap-8">
                     <Card className="rounded-3xl border-0 bg-white" style={{ boxShadow: "var(--shadow-clay-outer)" }}>
-                        <CardHeader className="border-b bg-surface p-6" style={{ borderColor: "var(--border-soft)" }}>
+                        <CardHeader className="border-b bg-surface p-5 sm:p-6" style={{ borderColor: "var(--border-soft)" }}>
                             <CardTitle className="font-serif text-xl text-slate-800">Recent Attempts</CardTitle>
                         </CardHeader>
-                        <CardContent className="flex flex-col gap-6 p-6">
+                        <CardContent className="flex flex-col gap-5 sm:gap-6 p-5 sm:p-6">
                             {data.recentAttempts.length === 0 ? (
                                 <div className="py-8 text-center text-slate-400">No completed attempts yet.</div>
                             ) : (
@@ -462,8 +462,8 @@ export default function StudentDashboard() {
                                     return (
                                         <div key={attempt.sessionId} className="flex flex-col gap-3">
                                             <div className="flex items-start justify-between gap-3">
-                                                <div>
-                                                    <h4 className="font-serif text-lg font-bold text-slate-900">{attempt.testTitle}</h4>
+                                                <div className="min-w-0">
+                                                    <h4 className="font-serif text-lg font-bold text-slate-900 break-words">{attempt.testTitle}</h4>
                                                     <p className="mt-1 text-sm text-slate-500">
                                                         Attempt {attempt.attemptNumber} · {statusLabel(attempt.status)}
                                                     </p>

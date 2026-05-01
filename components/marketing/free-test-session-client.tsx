@@ -362,16 +362,16 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
     }
 
     return (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-6">
+        <div className="grid gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="space-y-4 sm:space-y-6">
                 <Card className="border-0 bg-white">
-                    <CardContent className="space-y-5 p-6">
+                    <CardContent className="space-y-5 p-4 sm:p-6">
                         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                            <div className="space-y-2">
+                            <div className="min-w-0 space-y-2">
                                 <Badge className="w-fit rounded-full border-0 bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-800">
                                     Free Mock Session
                                 </Badge>
-                                <h1 className="font-serif text-3xl font-bold text-slate-950">{testTitle}</h1>
+                                <h1 className="break-words font-serif text-2xl font-bold text-slate-950 sm:text-3xl">{testTitle}</h1>
                             </div>
                             <div className={`inline-flex items-center gap-3 rounded-[24px] px-5 py-3 font-semibold ${
                                 timeLeft <= 300 ? 'bg-rose-50 text-rose-700' : 'bg-slate-900 text-white'
@@ -387,11 +387,39 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                             </div>
                             <Progress value={completion} className="h-3 bg-slate-200" indicatorClassName="bg-emerald-600" />
                         </div>
+                        <div className="xl:hidden">
+                            <div className="overflow-x-auto pb-1">
+                                <div className="flex min-w-max gap-2">
+                                    {questions.map((question, index) => {
+                                        const state = questionState(question)
+
+                                        return (
+                                            <button
+                                                key={question.id}
+                                                type="button"
+                                                onClick={() => setCurrentIndex(index)}
+                                                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-semibold transition-colors ${
+                                                    state === 'current'
+                                                        ? 'bg-slate-900 text-white'
+                                                        : state === 'answered'
+                                                            ? 'bg-emerald-100 text-emerald-800'
+                                                            : state === 'marked'
+                                                                ? 'bg-amber-100 text-amber-800'
+                                                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                }`}
+                                            >
+                                                {index + 1}
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        </div>
                     </CardContent>
                 </Card>
 
                 <Card className="border-0 bg-white">
-                    <CardHeader className="gap-4 border-b border-slate-200 pb-6">
+                    <CardHeader className="gap-4 border-b border-slate-200 px-4 pb-5 sm:px-6 sm:pb-6">
                         <div className="flex items-center justify-between gap-4">
                             <Badge className="rounded-full border-0 bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-600">
                                 Question {currentIndex + 1} of {questions.length}
@@ -400,11 +428,11 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                                 <span className="text-sm font-medium text-slate-500">{currentQuestion.topic}</span>
                             ) : null}
                         </div>
-                        <CardTitle className="text-2xl font-semibold leading-9 text-slate-950">
+                        <CardTitle className="break-words text-xl font-semibold leading-8 text-slate-950 sm:text-2xl sm:leading-9">
                             {currentQuestion.stem}
                         </CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-6 pt-6">
+                    <CardContent className="space-y-5 px-4 pt-5 sm:space-y-6 sm:px-6 sm:pt-6">
                         {currentQuestion.sharedContext || currentQuestion.references?.length ? (
                             <SharedContextRenderer
                                 context={currentQuestion.sharedContext}
@@ -421,7 +449,7 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                                 <Label
                                     key={option.id}
                                     htmlFor={`${currentQuestion.id}-${option.id}`}
-                                    className={`flex cursor-pointer items-start gap-4 rounded-[24px] border p-4 transition-colors ${
+                                    className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition-colors sm:gap-4 sm:rounded-[24px] ${
                                         selectedOption === option.id
                                             ? 'border-emerald-600 bg-emerald-50'
                                             : 'border-slate-200 bg-white hover:border-slate-300'
@@ -430,13 +458,13 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                                     <RadioGroupItem
                                         id={`${currentQuestion.id}-${option.id}`}
                                         value={option.id}
-                                        className="mt-1"
+                                        className="mt-1 shrink-0"
                                     />
-                                    <div className="space-y-1">
+                                    <div className="min-w-0 space-y-1">
                                         <div className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">
                                             Option {option.id}
                                         </div>
-                                        <div className="text-base leading-7 text-slate-800">{option.text}</div>
+                                        <div className="break-words text-base leading-7 text-slate-800">{option.text}</div>
                                     </div>
                                 </Label>
                             ))}
@@ -463,32 +491,33 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                     </CardContent>
                 </Card>
 
-                <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="sticky bottom-0 z-20 -mx-4 flex flex-col gap-3 border-t border-slate-200 bg-surface/95 px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 xl:static xl:mx-0 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between xl:border-0 xl:bg-transparent xl:p-0 xl:backdrop-blur-none">
                     <Button
                         type="button"
                         variant="ghost"
                         onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))}
                         disabled={currentIndex === 0}
-                        className="rounded-2xl bg-white px-5 hover:bg-slate-100"
+                        className="w-full rounded-2xl bg-white px-5 hover:bg-slate-100 xl:w-auto"
                     >
                         <ArrowLeft className="h-4 w-4" />
                         Previous
                     </Button>
-                    <div className="flex flex-wrap gap-3">
+                    <div className="grid grid-cols-2 gap-2 sm:gap-3 xl:flex xl:flex-wrap">
                         <Button
                             type="button"
                             variant="ghost"
                             onClick={() => void syncAnswers(true)}
-                            className="rounded-2xl bg-white px-5 hover:bg-slate-100"
+                            className="w-full rounded-2xl bg-white px-3 hover:bg-slate-100 sm:px-5 xl:w-auto"
                         >
                             <RefreshCcw className="h-4 w-4" />
-                            Save Progress
+                            <span className="hidden sm:inline">Save Progress</span>
+                            <span className="sm:hidden">Save</span>
                         </Button>
                         {currentIndex < questions.length - 1 ? (
                             <Button
                                 type="button"
                                 onClick={() => setCurrentIndex((index) => Math.min(questions.length - 1, index + 1))}
-                                className="rounded-2xl bg-slate-900 px-5 text-white hover:bg-slate-800"
+                                className="w-full rounded-2xl bg-slate-900 px-3 text-white hover:bg-slate-800 sm:px-5 xl:w-auto"
                             >
                                 Next
                                 <ArrowRight className="h-4 w-4" />
@@ -498,17 +527,17 @@ export function FreeTestSessionClient({ sessionId }: { sessionId: string }) {
                                 type="button"
                                 onClick={() => void handleSubmit(false)}
                                 disabled={isSubmitting}
-                                className="rounded-2xl bg-emerald-600 px-5 text-white hover:bg-emerald-500"
+                                className="w-full rounded-2xl bg-emerald-600 px-3 text-white hover:bg-emerald-500 sm:px-5 xl:w-auto"
                             >
                                 <SendHorizontal className="h-4 w-4" />
-                                {isSubmitting ? 'Submitting...' : 'Submit Free Mock'}
+                                {isSubmitting ? 'Submitting...' : <><span className="hidden sm:inline">Submit Free Mock</span><span className="sm:hidden">Submit</span></>}
                             </Button>
                         )}
                     </div>
                 </div>
             </div>
 
-            <Card className="h-fit border-0 bg-white xl:sticky xl:top-28">
+            <Card className="hidden h-fit border-0 bg-white xl:sticky xl:top-28 xl:flex">
                 <CardHeader className="gap-3 border-b border-slate-200 pb-6">
                     <div className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">
                         Question Navigator

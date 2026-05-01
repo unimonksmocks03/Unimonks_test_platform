@@ -427,6 +427,8 @@ Answer: a) A
     expect(precise.questions).toHaveLength(5)
     expect(precise.expectedQuestionCount).toBe(5)
     expect(precise.aiRepairUsed).toBe(false)
+    expect(precise.questions[0]?.explanation).toContain("f'(a-)")
+    expect(precise.questions.every((question) => question.sharedContext === null)).toBe(true)
 })
 
 test('extractQuestionsFromDocumentText parses markdown heading numbered MCQs', async () => {
@@ -848,6 +850,45 @@ Answer: (B)`,
 
     expect(enriched).toHaveLength(1)
     expect(enriched[0]?.sharedContext ?? null).toBeNull()
+})
+
+test('attachSharedContextsFromPageText does not carry option answer or hint leftovers as shared context', async () => {
+    const { attachSharedContextsFromPageText } = await aiServicePromise
+
+    const questions = [
+        {
+            stem: 'Which statistic estimates a population characteristic?',
+            options: [
+                { id: 'A', text: 'Sample', isCorrect: false },
+                { id: 'B', text: 'Parameter', isCorrect: true },
+                { id: 'C', text: 'Hypothesis', isCorrect: false },
+                { id: 'D', text: 'Variable', isCorrect: false },
+            ],
+            explanation: 'A parameter describes the population.',
+            difficulty: 'MEDIUM',
+            topic: 'Statistics',
+            sharedContext: null,
+        },
+    ]
+
+    const pages = [
+        `c) hypothesis
+d) parameter
+Answer: d
+Hint: sample data can estimate a parameter
+
+Q1. Which statistic estimates a population characteristic?
+(A) Sample
+(B) Parameter
+(C) Hypothesis
+(D) Variable
+Answer: (B)`,
+    ]
+
+    const enriched = attachSharedContextsFromPageText(questions, pages)
+
+    expect(enriched[0]?.sharedContext ?? null).toBeNull()
+    expect(enriched[0]?.explanation).toBe('A parameter describes the population.')
 })
 
 test('attachSharedContextsFromPageText prefers sourcePage matches before question-order propagation', async () => {

@@ -677,12 +677,17 @@ export async function processDocumentImportJob(
                 return { kind: 'succeeded', job: mapJob(finalized) }
             }
 
+            const referenceEnrichmentSkipped = 'skipped' in enrichment && enrichment.skipped
             const finalized = await updateDocumentImportJobStage({
                 jobId: job.id,
                 status: DOCUMENT_IMPORT_JOB_STATUS.SUCCEEDED,
                 stage: DOCUMENT_IMPORT_JOB_STAGE.SUCCEEDED,
-                message: 'Import completed successfully.',
-                progressMessage: 'Reference enrichment completed successfully.',
+                message: referenceEnrichmentSkipped
+                    ? 'Import completed successfully. Reference enrichment was skipped.'
+                    : 'Import completed successfully.',
+                progressMessage: referenceEnrichmentSkipped
+                    ? enrichment.reason
+                    : 'Reference enrichment completed successfully.',
                 errorCode: null,
                 errorMessage: null,
                 clearFileData: true,
@@ -775,7 +780,7 @@ export async function processDocumentImportJob(
         }
 
         let queuedReferenceEnrichment = false
-        if (deferReferenceEnrichment && result.test?.id) {
+        if (result.importDiagnostics.referenceEnrichmentDeferred && result.test?.id) {
             try {
                 await enqueueDocumentImportReferenceEnrichment(job.id)
                 queuedReferenceEnrichment = true

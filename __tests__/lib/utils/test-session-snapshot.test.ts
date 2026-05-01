@@ -98,3 +98,49 @@ test('parseSessionTestSnapshot rejects malformed payloads and parses valid ones'
         ],
     })
 })
+
+test('session snapshots sanitize leaked shared context while preserving explanation and image references', () => {
+    const snapshot = parseSessionTestSnapshot({
+        title: 'Snapshot title',
+        description: null,
+        durationMinutes: 45,
+        settings: null,
+        questions: [
+            {
+                id: 'q-1',
+                order: 1,
+                stem: 'Question',
+                sharedContext: 'c) hypothesis\nd) parameter\nAnswer: c\nHint: sample data',
+                options: [],
+                difficulty: 'MEDIUM',
+                topic: null,
+                explanation: 'The hint belongs in results only.',
+                references: [
+                    {
+                        id: 'ref-image',
+                        order: 1,
+                        kind: 'DIAGRAM',
+                        mode: 'SNAPSHOT',
+                        title: 'Manual snapshot',
+                        textContent: 'Answer: c\nHint: sample data',
+                        assetUrl: 'https://example.com/snapshot.png',
+                        sourcePage: 2,
+                        bbox: null,
+                        confidence: 0.88,
+                        evidence: null,
+                    },
+                ],
+            },
+        ],
+    })
+
+    expect(snapshot?.questions[0]?.sharedContext).toBeNull()
+    expect(snapshot?.questions[0]?.explanation).toBe('The hint belongs in results only.')
+    expect(snapshot?.questions[0]?.references).toEqual([
+        expect.objectContaining({
+            id: 'ref-image',
+            textContent: null,
+            assetUrl: 'https://example.com/snapshot.png',
+        }),
+    ])
+})

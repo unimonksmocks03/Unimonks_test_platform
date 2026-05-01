@@ -30,6 +30,7 @@ import type {
     VisualReferenceExtractionResult,
 } from '@/lib/services/ai-service.types'
 import {
+    isAllowedAutoSharedContext,
     isPotentialReferenceMetadataNoiseLine,
     sanitizeReferenceText,
 } from '@/lib/utils/reference-sanitizer'
@@ -456,6 +457,10 @@ function looksMeaningfulSharedContext(text: string | null | undefined) {
         return false
     }
 
+    if (!isAllowedAutoSharedContext(normalized)) {
+        return false
+    }
+
     const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean)
     const hasStructuralCue = /(following|table|data|chart|graph|passage|case study|based on|study the|read the|set\s+\d+|list i|list ii|ratio|percentage|production|population|sales|profit|income)/i.test(normalized)
     const numericLineCount = lines.filter(line => /\d/.test(line)).length
@@ -637,10 +642,11 @@ function extractPageSharedContext(pageText: string) {
         .slice(0, firstQuestionLineIndex)
         .filter(line => !isLikelyPageHeaderNoise(line))
     const sharedContext = sanitizeReferenceText(normalizeSharedContextText(candidateLines.join('\n')))
+    const allowedSharedContext = isAllowedAutoSharedContext(sharedContext) ? sharedContext : null
 
     return {
         questionNumbers: questionStarts.map(entry => entry.questionNumber),
-        sharedContext: looksMeaningfulSharedContext(sharedContext) ? sharedContext : null,
+        sharedContext: looksMeaningfulSharedContext(allowedSharedContext) ? allowedSharedContext : null,
     }
 }
 
@@ -797,7 +803,9 @@ export function attachSharedContextsFromPageText(
 
     return hydratedQuestions.map(question => ({
         ...question,
-        sharedContext: normalizeSharedContextText(question.sharedContext),
+        sharedContext: isAllowedAutoSharedContext(question.sharedContext)
+            ? sanitizeReferenceText(normalizeSharedContextText(question.sharedContext))
+            : null,
     }))
 }
 
@@ -822,7 +830,7 @@ const OPTION_NUMBER_REGEX = /^\(?([1-4])\)?(?:\s*[.)\-:]\s*|\s+)(.+)$/i
 // e.g. "4 Correct Answer: C) ...". Tolerate that OCR artifact.
 const ANSWER_LINE_REGEX =
     /^(?:\d+\s+)?(?:[^A-Za-z0-9]+\s*)*(?:revised\s+)?(?:answer|ans(?:wer)?|correct\s*answer|correct\s*option|right\s*answer)\s*(?:\d+\s*)?(?:is\s*)?[:.\-]?\s*(?:option\s*)?\(?([A-Da-d1-4])\)?(?:[.)]+)?(?=\s|$)/i
-const EXPLANATION_LINE_REGEX = /^(?:explanation|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
+const EXPLANATION_LINE_REGEX = /^(?:explanation|hint|reason(?!\s*\([rR]\)))\s*[:\-]?\s*(.+)$/i
 const DIFFICULTY_LINE_REGEX = /^difficulty\s*[:\-]?\s*(easy|medium|hard)\b/i
 const TOPIC_LINE_REGEX = /^topic\s*[:\-]?\s*(.+)$/i
 const INLINE_QUESTION_PREFIX_REGEX = /^question\s*:\s*(.+)$/i

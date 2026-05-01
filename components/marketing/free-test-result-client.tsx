@@ -129,14 +129,14 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
         : 'bg-amber-100 text-amber-800'
 
     return (
-        <div className="space-y-8">
+        <div className="space-y-5 sm:space-y-8">
             <Card className="overflow-hidden border-0 bg-[linear-gradient(135deg,#0f172a_0%,#134e4a_100%)] text-white">
-                <CardContent className="grid gap-8 p-8 lg:grid-cols-[minmax(0,1fr)_300px]">
-                    <div className="space-y-4">
+                <CardContent className="grid gap-6 p-5 sm:p-8 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-8">
+                    <div className="min-w-0 space-y-4">
                         <Badge className="w-fit rounded-full border-0 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white">
                             Free Mock Result
                         </Badge>
-                        <h1 className="font-serif text-4xl font-bold">{result.test.title}</h1>
+                        <h1 className="break-words font-serif text-3xl font-bold sm:text-4xl">{result.test.title}</h1>
                         <p className="max-w-2xl text-base leading-7 text-white/78">
                             Your public attempt is complete. Use the score summary to decide whether you should keep sampling free mocks or move into the premium batch lane.
                         </p>
@@ -150,11 +150,11 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                         </div>
                     </div>
 
-                    <div className="rounded-[28px] bg-white p-6 text-slate-950">
+                    <div className="rounded-2xl bg-white p-5 text-slate-950 sm:rounded-[28px] sm:p-6">
                         <div className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">
                             Score summary
                         </div>
-                        <div className="mt-4 font-serif text-6xl font-bold">{Math.round(result.session.percentage)}%</div>
+                        <div className="mt-4 font-serif text-5xl font-bold sm:text-6xl">{Math.round(result.session.percentage)}%</div>
                         <div className="mt-2 text-base font-medium text-slate-600">
                             {result.session.score}/{result.session.totalMarks} correct
                         </div>
@@ -165,7 +165,7 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                 </CardContent>
             </Card>
 
-            <div className="grid gap-6 lg:grid-cols-3">
+            <div className="grid gap-4 sm:gap-6 lg:grid-cols-3">
                 {[
                     {
                         label: 'Correct',
@@ -187,7 +187,7 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                     },
                 ].map((item) => (
                     <Card key={item.label} className="border-0 bg-white">
-                        <CardContent className="space-y-4 p-6">
+                        <CardContent className="space-y-4 p-5 sm:p-6">
                             <item.icon className="h-6 w-6 text-slate-900" />
                             <div className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">
                                 {item.label}
@@ -202,15 +202,15 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
             </div>
 
             <Card className="border-0 bg-white">
-                <CardHeader className="gap-3 border-b border-slate-200 pb-6">
+                <CardHeader className="gap-3 border-b border-slate-200 px-4 pb-5 sm:px-6 sm:pb-6">
                     <div className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-700">
                         Conversion CTA
                     </div>
-                    <CardTitle className="font-serif text-3xl font-bold text-slate-950">
+                    <CardTitle className="font-serif text-2xl font-bold text-slate-950 sm:text-3xl">
                         Ready to unlock the premium mock lane?
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="grid gap-4 pt-6 lg:grid-cols-3">
+                <CardContent className="grid gap-3 px-4 pt-5 sm:gap-4 sm:px-6 sm:pt-6 lg:grid-cols-3">
                     <Button asChild className="h-12 rounded-2xl bg-slate-900 text-white hover:bg-slate-800">
                         <Link href="/#premium">
                             Unlock Premium Mocks
@@ -233,24 +233,24 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
             </Card>
 
             <Card className="border-0 bg-white">
-                <CardHeader className="gap-3 border-b border-slate-200 pb-6">
+                <CardHeader className="gap-3 border-b border-slate-200 px-4 pb-5 sm:px-6 sm:pb-6">
                     <div className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">
                         Question review
                     </div>
-                    <CardTitle className="font-serif text-3xl font-bold text-slate-950">
+                    <CardTitle className="font-serif text-2xl font-bold text-slate-950 sm:text-3xl">
                         Review what moved the score.
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="pt-6">
+                <CardContent className="px-4 pt-5 sm:px-6 sm:pt-6">
                     <Accordion type="multiple" className="space-y-4">
                         {result.questionReview.map((question) => (
                             <AccordionItem
                                 key={question.id}
                                 value={question.id}
-                                className="overflow-hidden rounded-[24px] border border-slate-200 px-5"
+                                className="overflow-hidden rounded-2xl border border-slate-200 px-4 sm:rounded-[24px] sm:px-5"
                             >
                                 <AccordionTrigger className="text-left text-base font-semibold text-slate-900 hover:no-underline">
-                                    <div className="space-y-2">
+                                    <div className="min-w-0 space-y-2 pr-2">
                                         <div className="flex flex-wrap items-center gap-2">
                                             <Badge className="rounded-full border-0 bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-700">
                                                 Q{question.order}
@@ -263,7 +263,7 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                                                 {question.isCorrect ? 'Correct' : question.selectedOptionId ? 'Incorrect' : 'Unanswered'}
                                             </Badge>
                                         </div>
-                                        <div>{question.stem}</div>
+                                        <div className="break-words">{question.stem}</div>
                                     </div>
                                 </AccordionTrigger>
                                 <AccordionContent className="space-y-4 pb-5">
@@ -282,10 +282,10 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                                             return (
                                                 <div
                                                     key={option.id}
-                                                    className={`rounded-[20px] border px-4 py-3 text-sm leading-7 ${
-                                                        isCorrect
-                                                            ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                                                            : isSelected
+                                                className={`break-words rounded-2xl border px-4 py-3 text-sm leading-7 sm:rounded-[20px] ${
+                                                    isCorrect
+                                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                                                        : isSelected
                                                                 ? 'border-rose-200 bg-rose-50 text-rose-900'
                                                                 : 'border-slate-200 bg-slate-50 text-slate-700'
                                                     }`}
@@ -298,7 +298,7 @@ export function FreeTestResultClient({ sessionId }: { sessionId: string }) {
                                     </div>
 
                                     {question.explanation ? (
-                                        <div className="rounded-[20px] bg-[#f8f4ed] px-4 py-3 text-sm leading-7 text-slate-700">
+                                        <div className="break-words rounded-2xl bg-[#f8f4ed] px-4 py-3 text-sm leading-7 text-slate-700 sm:rounded-[20px]">
                                             {question.explanation}
                                         </div>
                                     ) : null}

@@ -628,6 +628,11 @@ test('generateAdminTestFromDocument persists normalized question references when
 
 test('generateAdminTestFromDocument persists snapshot asset urls for visual references when uploads succeed', async () => {
     const { generateAdminTestFromDocument } = await servicePromise
+    classifyDocumentForImportMock.mockReturnValueOnce({
+        ...createClassification(),
+        hasVisualReferences: true,
+        preferredStrategy: 'HYBRID_RECONCILE',
+    })
     const referencedQuestion = createQuestion('Find the missing figure.', {
         sharedContext: 'Original diagram on page 2',
         sharedContextEvidence: 'Diagram visible on page 2',
@@ -700,7 +705,7 @@ test('generateAdminTestFromDocument persists snapshot asset urls for visual refe
                 kind: 'DIAGRAM',
                 mode: 'SNAPSHOT',
                 title: 'Figure completion diagram',
-                textContent: 'Original diagram on page 2',
+                textContent: null,
                 sourcePage: 2,
                 assetUrl: 'https://blob.vercel-storage.com/reference.png',
             }),
@@ -744,7 +749,7 @@ test('upsertAdminQuestionReferenceImage creates a new visual reference when none
                 confidence: null,
                 extractionMode: null,
                 referenceKind: 'DIAGRAM',
-                referenceMode: 'HYBRID',
+                referenceMode: 'SNAPSHOT',
                 referenceTitle: 'Visual reference',
                 referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
             },
@@ -760,8 +765,8 @@ test('upsertAdminQuestionReferenceImage creates a new visual reference when none
             referenceLinks: [
                 createReferenceLink({
                     assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
-                    mode: 'HYBRID',
-                    textContent: 'Original diagram context',
+                    mode: 'SNAPSHOT',
+                    textContent: null,
                     title: 'Visual reference',
                 }),
             ],
@@ -788,9 +793,9 @@ test('upsertAdminQuestionReferenceImage creates a new visual reference when none
             data: expect.objectContaining({
                 testId: 'test-1',
                 kind: 'DIAGRAM',
-                mode: 'HYBRID',
+                mode: 'SNAPSHOT',
                 title: null,
-                textContent: 'Original diagram context',
+                textContent: null,
                 assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
             }),
         }),
@@ -810,7 +815,7 @@ test('upsertAdminQuestionReferenceImage creates a new visual reference when none
             data: expect.objectContaining({
                 importEvidence: expect.objectContaining({
                     referenceKind: 'DIAGRAM',
-                    referenceMode: 'HYBRID',
+                    referenceMode: 'SNAPSHOT',
                     referenceTitle: null,
                     referenceAssetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
                 }),
@@ -821,7 +826,7 @@ test('upsertAdminQuestionReferenceImage creates a new visual reference when none
         expect.objectContaining({
             id: 'reference-1',
             kind: 'DIAGRAM',
-            mode: 'HYBRID',
+            mode: 'SNAPSHOT',
             assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
         }),
     ])
@@ -891,7 +896,7 @@ test('upsertAdminQuestionReferenceImage updates an existing visual reference in 
                     id: 'reference-existing',
                     assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
                     title: 'Existing figure',
-                    textContent: 'Existing visual explanation',
+                    textContent: null,
                 }),
             ],
         })
@@ -913,7 +918,7 @@ test('upsertAdminQuestionReferenceImage updates an existing visual reference in 
                 kind: 'DIAGRAM',
                 mode: 'SNAPSHOT',
                 title: 'Existing figure',
-                textContent: 'Existing visual explanation',
+                textContent: null,
                 assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
             }),
         }),
@@ -1221,6 +1226,8 @@ test('enrichImportedTestReferencesAfterDraft sanitizes leaked shared context bef
     prismaMock.test.findUnique.mockResolvedValueOnce({
         id: 'test-1',
         createdById: 'admin-1',
+        status: 'DRAFT',
+        reviewStatus: null,
         questions: [
             {
                 id: 'question-1',
@@ -1283,6 +1290,116 @@ test('enrichImportedTestReferencesAfterDraft sanitizes leaked shared context bef
     )
     expect(prismaMock.questionReference.create).not.toHaveBeenCalled()
     expect(prismaMock.questionReferenceLink.createMany).not.toHaveBeenCalled()
+})
+
+test('enrichImportedTestReferencesAfterDraft skips content writes for published tests', async () => {
+    const { enrichImportedTestReferencesAfterDraft } = await servicePromise
+
+    prismaMock.test.findUnique.mockResolvedValueOnce({
+        id: 'test-1',
+        createdById: 'admin-1',
+        status: 'PUBLISHED',
+        reviewStatus: null,
+        questions: [
+            {
+                id: 'question-1',
+                order: 1,
+                stem: 'Published question',
+                sharedContext: null,
+                importEvidence: null,
+                options: [],
+                explanation: 'Explanation',
+                difficulty: 'MEDIUM',
+                topic: 'Accountancy',
+            },
+        ],
+    })
+
+    const result = await enrichImportedTestReferencesAfterDraft({
+        adminId: 'admin-1',
+        testId: 'test-1',
+        file: createFile('published.pdf', 'application/pdf'),
+        fileName: 'published.pdf',
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(result).toMatchObject({
+        testId: 'test-1',
+        updatedQuestionCount: 0,
+        enrichedReferenceCount: 0,
+        skipped: true,
+    })
+    expect(result.reason).toContain('published')
+    expect(attachSharedContextsFromPdfMock).not.toHaveBeenCalled()
+    expect(extractVisualReferencesFromPdfImagesMock).not.toHaveBeenCalled()
+    expect(uploadPdfReferenceSnapshotsMock).not.toHaveBeenCalled()
+    expect(prismaMock.question.update).not.toHaveBeenCalled()
+    expect(prismaMock.questionReference.deleteMany).not.toHaveBeenCalled()
+})
+
+test('cleanupLeakedTestReferences clears leaked shared text while preserving image references', async () => {
+    const { cleanupLeakedTestReferences } = await servicePromise
+
+    prismaMock.test.findUnique.mockResolvedValueOnce({
+        id: 'test-1',
+        createdById: 'admin-1',
+        questions: [
+            {
+                id: 'question-leaked',
+                sharedContext: 'c) hypothesis\nd) parameter\nAnswer: c\nHint: sample data',
+            },
+            {
+                id: 'question-table',
+                sharedContext: 'Table 1: Sales data\n2021 100 25\n2022 120 30',
+            },
+        ],
+        questionReferences: [
+            {
+                id: 'reference-leaked',
+                title: 'Reference',
+                textContent: 'Answer: c\nHint: sample data',
+                assetUrl: null,
+            },
+            {
+                id: 'reference-image',
+                title: 'Figure 1',
+                textContent: 'Answer: c\nHint: sample data',
+                assetUrl: 'https://blob.vercel-storage.com/manual-reference.png',
+            },
+        ],
+    })
+
+    const result = await cleanupLeakedTestReferences('admin-1', 'test-1')
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(prismaMock.question.update).toHaveBeenCalledWith({
+        where: { id: 'question-leaked' },
+        data: { sharedContext: null },
+    })
+    expect(prismaMock.questionReference.update).toHaveBeenCalledWith({
+        where: { id: 'reference-leaked' },
+        data: {
+            title: null,
+            textContent: null,
+        },
+    })
+    expect(prismaMock.questionReference.update).toHaveBeenCalledWith({
+        where: { id: 'reference-image' },
+        data: {
+            title: 'Figure 1',
+            textContent: null,
+        },
+    })
+    expect(result).toMatchObject({
+        testId: 'test-1',
+        clearedQuestionSharedContextCount: 1,
+        clearedReferenceTextCount: 2,
+        sanitizedReferenceTitleCount: 1,
+    })
 })
 
 test('generateAdminTestFromDocument persists review-required diagnostics to the draft and audit log', async () => {
@@ -1569,6 +1686,11 @@ test('generateAdminTestFromDocument runs inline AI verification and metadata enr
 test('generateAdminTestFromDocument defers PDF reference enrichment out of the critical path when requested', async () => {
     const { generateAdminTestFromDocument } = await servicePromise
 
+    classifyDocumentForImportMock.mockReturnValueOnce({
+        ...createClassification(),
+        hasVisualReferences: true,
+        preferredStrategy: 'HYBRID_RECONCILE',
+    })
     const pdfQuestions = [
         createQuestion('Recovered PDF question stem', {
             referenceKind: 'DIAGRAM',
@@ -1644,6 +1766,81 @@ test('generateAdminTestFromDocument defers PDF reference enrichment out of the c
     const createCall = prismaMock.test.create.mock.calls.at(-1)?.[0]
     expect(createCall?.data.importDiagnostics).toMatchObject({
         referenceEnrichmentDeferred: true,
+    })
+})
+
+test('generateAdminTestFromDocument keeps clean exact MCQ PDF hints in explanations without shared context enrichment', async () => {
+    const { generateAdminTestFromDocument } = await servicePromise
+
+    const hintedQuestion = createQuestion('Clean hinted question', {
+        explanation: 'Hint: use the sample mean formula.',
+        sharedContext: null,
+    })
+
+    executeDocumentImportPlanMock.mockResolvedValueOnce({
+        useLegacyFlow: false,
+        strategy: 'EXTRACTED',
+        result: {
+            error: false,
+            message: undefined,
+            questions: [hintedQuestion],
+            failedCount: 0,
+            cost: undefined,
+        },
+        extracted: {
+            detectedAsMcqDocument: true,
+            answerHintCount: 1,
+            candidateBlockCount: 1,
+            questions: [hintedQuestion],
+            expectedQuestionCount: 1,
+            exactMatchAchieved: true,
+            invalidQuestionNumbers: [],
+            missingQuestionNumbers: [],
+            duplicateQuestionNumbers: [],
+            aiRepairUsed: false,
+            cost: undefined,
+            error: false,
+            message: undefined,
+        },
+        parserStatus: 'OK',
+        aiFallbackUsed: false,
+        reportParserIssue: false,
+        warning: null,
+        needsAdminReview: false,
+        reviewIssueCount: 0,
+    })
+    enrichGeneratedQuestionsMetadataMock.mockResolvedValueOnce({
+        questions: [hintedQuestion],
+        description: 'Recovered PDF description',
+        aiUsed: false,
+        cost: undefined,
+        warning: undefined,
+    })
+
+    const result = await generateAdminTestFromDocument({
+        adminId: 'admin-1',
+        file: createFile('clean.pdf', 'application/pdf'),
+        ipAddress: '127.0.0.1',
+        deferReferenceEnrichment: true,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+
+    expect(executeDocumentImportPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+            deferReferenceEnrichment: false,
+            isPdfUpload: true,
+        }),
+        expect.any(Object),
+    )
+    expect(attachSharedContextsFromPdfMock).not.toHaveBeenCalled()
+    expect(uploadPdfReferenceSnapshotsMock).not.toHaveBeenCalled()
+    expect(result.importDiagnostics.referenceEnrichmentDeferred).toBe(false)
+    const createCall = prismaMock.test.create.mock.calls.at(-1)?.[0]
+    expect(createCall?.data.questions.create[0]).toMatchObject({
+        sharedContext: null,
+        explanation: 'Hint: use the sample mean formula.',
     })
 })
 

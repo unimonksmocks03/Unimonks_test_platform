@@ -72,7 +72,7 @@ function renderParsedBlocks(
             return (
                 <div
                     key={`${keyPrefix}-paragraph-${blockIndex}`}
-                    className={`whitespace-pre-line text-sm leading-7 ${styles.text}`}
+                    className={`whitespace-pre-line break-words text-sm leading-7 ${styles.text}`}
                 >
                     {block.text}
                 </div>
@@ -83,9 +83,9 @@ function renderParsedBlocks(
             return (
                 <div
                     key={`${keyPrefix}-preformatted-${blockIndex}`}
-                    className={`overflow-x-auto rounded-[20px] border ${styles.tableWrap}`}
+                    className={`overflow-x-auto rounded-2xl sm:rounded-[20px] border ${styles.tableWrap}`}
                 >
-                    <pre className="whitespace-pre-wrap px-4 py-4 font-mono text-xs leading-6 text-slate-700">
+                    <pre className="min-w-max whitespace-pre-wrap px-3 py-3 sm:px-4 sm:py-4 font-mono text-xs leading-6 text-slate-700">
                         {block.text}
                     </pre>
                 </div>
@@ -100,9 +100,9 @@ function renderParsedBlocks(
             return (
                 <div
                     key={`${keyPrefix}-table-${blockIndex}`}
-                    className={`overflow-hidden rounded-[20px] border ${styles.tableWrap}`}
+                    className={`overflow-x-auto rounded-2xl sm:rounded-[20px] border ${styles.tableWrap}`}
                 >
-                    <Table className="text-sm">
+                    <Table className="min-w-full text-sm">
                         {header ? (
                             <TableHeader>
                                 <TableRow className="hover:bg-transparent">
@@ -141,16 +141,16 @@ function renderParsedBlocks(
         return (
             <div
                 key={`${keyPrefix}-paired-list-${blockIndex}`}
-                className={`grid gap-4 ${
-                    block.sections.length >= 3 ? "lg:grid-cols-3" : "md:grid-cols-2"
-                }`}
-            >
+                    className={`grid gap-3 sm:gap-4 ${
+                        block.sections.length >= 3 ? "lg:grid-cols-3" : "md:grid-cols-2"
+                    }`}
+                >
                 {block.sections.map((section) => (
                     <div
                         key={`${keyPrefix}-${section.title}`}
-                        className={`rounded-[20px] border p-4 ${styles.section}`}
+                        className={`rounded-2xl sm:rounded-[20px] border p-3 sm:p-4 ${styles.section}`}
                     >
-                        <div className={`mb-3 text-xs font-semibold uppercase tracking-[0.22em] ${styles.sectionTitle}`}>
+                        <div className={`mb-3 text-[11px] sm:text-xs font-semibold uppercase tracking-[0.18em] sm:tracking-[0.22em] ${styles.sectionTitle}`}>
                             {section.title}
                         </div>
                         <div className="space-y-2">
@@ -159,7 +159,7 @@ function renderParsedBlocks(
                                     <div className="min-w-6 font-semibold uppercase text-slate-500">
                                         {item.label}
                                     </div>
-                                    <div>{item.text}</div>
+                                    <div className="min-w-0 break-words">{item.text}</div>
                                 </div>
                             ))}
                         </div>
@@ -200,8 +200,8 @@ export function SharedContextRenderer({
     }
 
     return (
-        <div className={`rounded-[24px] border px-5 py-4 ${styles.container}`}>
-            <div className={`mb-3 text-[11px] font-semibold uppercase tracking-[0.24em] ${styles.label}`}>
+        <div className={`rounded-2xl sm:rounded-[24px] border px-4 py-4 sm:px-5 ${styles.container}`}>
+            <div className={`mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] sm:tracking-[0.24em] ${styles.label}`}>
                 {title}
             </div>
 
@@ -217,14 +217,14 @@ export function SharedContextRenderer({
                     return (
                         <div key={reference.id} className="space-y-3">
                             {referenceTitle ? (
-                                <div className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${styles.sectionTitle}`}>
+                                <div className={`text-[11px] font-semibold uppercase tracking-[0.18em] sm:tracking-[0.24em] ${styles.sectionTitle}`}>
                                     {referenceTitle}
                                 </div>
                             ) : null}
 
                             {shouldShowImage ? (
                                 hasImage ? (
-                                    <div className={`overflow-hidden rounded-[20px] border ${styles.tableWrap}`}>
+                                    <div className={`overflow-hidden rounded-2xl sm:rounded-[20px] border ${styles.tableWrap}`}>
                                         <Image
                                             src={reference.assetUrl as string}
                                             alt={reference.title || "Question reference snapshot"}
@@ -232,12 +232,12 @@ export function SharedContextRenderer({
                                             height={900}
                                             sizes="(max-width: 768px) 100vw, 720px"
                                             unoptimized
-                                            className="h-auto max-h-[420px] w-full object-contain bg-white"
+                                            className="h-auto max-h-[280px] w-full object-contain bg-white sm:max-h-[420px]"
                                             loading="lazy"
                                         />
                                     </div>
                                 ) : shouldShowMissingImagePlaceholder ? (
-                                    <div className={`rounded-[20px] border border-dashed px-4 py-4 text-sm ${styles.text}`}>
+                                    <div className={`rounded-2xl sm:rounded-[20px] border border-dashed px-4 py-4 text-sm ${styles.text}`}>
                                         Snapshot reference is expected for this question, but no image asset is available yet.
                                     </div>
                                 ) : null
@@ -255,7 +255,7 @@ export function SharedContextRenderer({
                 {shouldRenderFallbackContext ? (
                     <div className="space-y-3">
                         {hasRenderableReferences ? (
-                            <div className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${styles.sectionTitle}`}>
+                            <div className={`text-[11px] font-semibold uppercase tracking-[0.18em] sm:tracking-[0.24em] ${styles.sectionTitle}`}>
                                 Shared Context
                             </div>
                         ) : null}
