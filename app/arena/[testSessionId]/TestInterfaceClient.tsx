@@ -652,14 +652,14 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                                 variant="ghost"
                                 disabled={currentIndex === 0}
                                 onClick={() => goToQuestion(currentIndex - 1)}
-                                className="w-full font-bold text-slate-500 hover:text-slate-800 rounded-xl px-3 sm:px-6 h-11 sm:h-12"
+                                className="w-full font-bold text-slate-500 hover:text-slate-800 rounded-xl px-3 sm:w-auto sm:px-6 h-11 sm:h-12"
                             >
                                 <ArrowLeft className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Previous</span><span className="sm:hidden">Prev</span>
                             </Button>
                             <Button
                                 variant="ghost"
                                 onClick={handleMarkForReview}
-                                className={`w-full font-bold rounded-xl px-3 sm:px-6 h-11 sm:h-12 ${currentAnswer?.markedForReview ? "text-amber-600 bg-amber-50" : "text-slate-500 hover:text-amber-600 hover:bg-amber-50"}`}
+                                className={`w-full font-bold rounded-xl px-3 sm:w-auto sm:px-6 h-11 sm:h-12 ${currentAnswer?.markedForReview ? "text-amber-600 bg-amber-50" : "text-slate-500 hover:text-amber-600 hover:bg-amber-50"}`}
                             >
                                 {currentAnswer?.markedForReview ? "Marked" : (
                                     <>
@@ -670,15 +670,15 @@ export default function TestInterfaceClient({ testId }: { testId: string }) {
                             </Button>
                         </div>
                         <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:gap-4">
-                            <Button variant="outline" onClick={handleClear} className="w-full font-bold border-slate-200 text-slate-600 rounded-xl px-3 sm:px-6 h-11 sm:h-12">
+                            <Button variant="outline" onClick={handleClear} className="w-full font-bold border-slate-200 text-slate-600 rounded-xl px-3 sm:w-auto sm:px-6 h-11 sm:h-12">
                                 Clear
                             </Button>
                             {currentIndex < questions.length - 1 ? (
-                                <Button onClick={() => goToQuestion(currentIndex + 1)} className="w-full font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-3 sm:px-8 h-11 sm:h-12 shadow-sm text-sm sm:text-base flex items-center">
+                                <Button onClick={() => goToQuestion(currentIndex + 1)} className="w-full font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-3 sm:w-auto sm:px-8 h-11 sm:h-12 shadow-sm text-sm sm:text-base flex items-center">
                                     <span className="sm:hidden">Next</span><span className="hidden sm:inline">Save & Next</span> <ArrowRight className="ml-1 sm:ml-2 w-5 h-5" />
                                 </Button>
                             ) : (
-                                <Button onClick={() => handleSubmit(false)} disabled={submitting} className="w-full font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-3 sm:px-8 h-11 sm:h-12 shadow-sm text-sm sm:text-base flex items-center">
+                                <Button onClick={() => handleSubmit(false)} disabled={submitting} className="w-full font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-3 sm:w-auto sm:px-8 h-11 sm:h-12 shadow-sm text-sm sm:text-base flex items-center">
                                     {submitting ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null}
                                     Finish Test
                                 </Button>
